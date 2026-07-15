@@ -440,6 +440,14 @@ export default {
       noCamera: 'Kameraları görüntüleme izniniz yok',
     },
     // Ekle/Düzenle modali
+    klipperActions: {
+      homing: 'Tüm eksenler sıfırlanıyor…',
+      levelling: 'Portal seviyeleniyor…',
+      eStopSent: 'Acil durdurma gönderildi',
+      homeAll: 'Tüm eksenleri sıfırla',
+      quadGantryLevel: 'Quad Gantry seviyeleme',
+      emergencyStop: 'Acil durdurma',
+    },
     modal: {
       addTitle: 'Yazıcı Ekle',
       editTitle: 'Yazıcıyı Düzenle',
@@ -450,6 +458,14 @@ export default {
       autoArchiveLabel: 'Tamamlanan baskıları otomatik arşivle',
       fromPrinterSettings: 'Yazıcı ayarlarından',
       modelOptional: 'Model (isteğe bağlı)',
+      connectionType: 'Bağlantı türü',
+      typeBambu: 'Bambu Lab (MQTT)',
+      typeKlipper: 'Voron / Klipper (Moonraker)',
+      moonrakerPort: 'Moonraker bağlantı noktası',
+      moonrakerApiKey: 'Moonraker API anahtarı (isteğe bağlı)',
+      moonrakerApiKeyPlaceholder: 'Açık LAN için boş bırakın',
+      moonrakerApiKeyHelp: 'Yalnızca Moonraker kimlik doğrulama gerektiriyorsa gereklidir. Açık LAN kurulumlarında boş bırakılabilir.',
+      klipperProfile: 'Yazıcı profili',
       saveChanges: 'Değişiklikleri Kaydet',
     },
     // Nesneleri atla

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.api.routes._printer_guards import reject_klipper_feature
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
@@ -48,6 +49,7 @@ async def get_kprofiles(
         raise HTTPException(404, "Printer not found")
 
     # Get MQTT client for printer
+    reject_klipper_feature(printer, "K-profiles")
     client = printer_manager.get_client(printer_id)
     if not client or not client.state.connected:
         raise HTTPException(400, "Printer not connected")
@@ -109,6 +111,7 @@ async def set_kprofile(
         raise HTTPException(404, "Printer not found")
 
     # Get MQTT client for printer
+    reject_klipper_feature(printer, "K-profiles")
     client = printer_manager.get_client(printer_id)
     if not client or not client.state.connected:
         raise HTTPException(400, "Printer not connected")
@@ -213,6 +216,7 @@ async def set_kprofiles_batch(
         raise HTTPException(404, "Printer not found")
 
     # Get MQTT client for printer
+    reject_klipper_feature(printer, "K-profiles")
     client = printer_manager.get_client(printer_id)
     if not client or not client.state.connected:
         raise HTTPException(400, "Printer not connected")
@@ -262,6 +266,7 @@ async def delete_kprofile(
         raise HTTPException(404, "Printer not found")
 
     # Get MQTT client for printer
+    reject_klipper_feature(printer, "K-profiles")
     client = printer_manager.get_client(printer_id)
     if not client or not client.state.connected:
         raise HTTPException(400, "Printer not connected")

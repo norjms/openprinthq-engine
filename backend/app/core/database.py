@@ -711,6 +711,14 @@ async def run_migrations(conn):
     # Migration: Add location column to printers for grouping
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN location VARCHAR(100)")
 
+    # Migration: Klipper/Moonraker printer support. connection_type
+    # distinguishes Bambu (MQTT) from Klipper (Moonraker) rows; the moonraker_*
+    # columns hold connection details for the latter. Existing rows default to
+    # "bambu" so behaviour is unchanged.
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN connection_type VARCHAR(20) DEFAULT 'bambu'")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN moonraker_port INTEGER DEFAULT 7125")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN moonraker_api_key VARCHAR(255)")
+
     # Migration: Add interval_type column to maintenance_types
     await _safe_execute(conn, "ALTER TABLE maintenance_types ADD COLUMN interval_type VARCHAR(20) DEFAULT 'hours'")
 

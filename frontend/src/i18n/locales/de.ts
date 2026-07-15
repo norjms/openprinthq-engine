@@ -440,6 +440,14 @@ export default {
       noCamera: 'Sie haben keine Berechtigung, Kameras anzuzeigen',
     },
     // Add/Edit modal
+    klipperActions: {
+      homing: 'Alle Achsen werden referenziert…',
+      levelling: 'Portal wird nivelliert…',
+      eStopSent: 'Not-Aus gesendet',
+      homeAll: 'Alle Achsen referenzieren',
+      quadGantryLevel: 'Quad-Gantry-Nivellierung',
+      emergencyStop: 'Not-Aus',
+    },
     modal: {
       addTitle: 'Drucker hinzufügen',
       editTitle: 'Drucker bearbeiten',
@@ -450,6 +458,14 @@ export default {
       autoArchiveLabel: 'Abgeschlossene Drucke automatisch archivieren',
       fromPrinterSettings: 'Aus Druckereinstellungen',
       modelOptional: 'Modell (optional)',
+      connectionType: 'Verbindungstyp',
+      typeBambu: 'Bambu Lab (MQTT)',
+      typeKlipper: 'Voron / Klipper (Moonraker)',
+      moonrakerPort: 'Moonraker-Port',
+      moonrakerApiKey: 'Moonraker-API-Schlüssel (optional)',
+      moonrakerApiKeyPlaceholder: 'Für offenes LAN leer lassen',
+      moonrakerApiKeyHelp: 'Nur nötig, wenn Moonraker eine Authentifizierung verlangt. Bei offenem LAN leer lassen.',
+      klipperProfile: 'Druckerprofil',
       saveChanges: 'Änderungen speichern',
     },
     // Skip objects

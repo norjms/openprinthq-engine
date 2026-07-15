@@ -111,6 +111,9 @@ async def apply_spool_to_slot_via_mqtt(
     client = printer_manager.get_client(printer_id)
     if client is None:
         return False
+    # AMS is Bambu-only; Klipper (Moonraker) clients have no AMS commands.
+    if not hasattr(client, "ams_set_filament_setting"):
+        return False
 
     state = printer_manager.get_status(printer_id)
 

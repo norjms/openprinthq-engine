@@ -4025,6 +4025,54 @@ async def on_print_complete(printer_id: int, data: dict):
     if _final_status in ("completed", "failed", "aborted", "cancelled"):
         printer_manager.set_awaiting_plate_clear(printer_id, True)
 
+    # Klipper / Moonraker printers are live-only (no 3MF archive pipeline).
+    # Record a lightweight Print Log entry and stop here — everything below is
+    # Bambu 3MF/archive handling that doesn't apply. See KLIPPER_SUPPORT_PLAN.md.
+    _is_klipper_print = False
+    try:
+        from datetime import timedelta
+
+        from backend.app.models.printer import Printer
+        from backend.app.services.printer_capabilities import is_klipper
+
+        async with async_session() as _klip_session:
+            _klip_printer = await _klip_session.get(Printer, printer_id)
+            if _klip_printer is not None and is_klipper(_klip_printer):
+                _is_klipper_print = True
+                from backend.app.services.print_log import write_log_entry
+
+                _status_map = {
+                    "completed": "completed",
+                    "failed": "failed",
+                    "cancelled": "cancelled",
+                    "aborted": "cancelled",
+                }
+                _log_status = _status_map.get(data.get("status", "completed"), "completed")
+                _completed_at = datetime.now(timezone.utc)
+                _started_at = None
+                _dur = data.get("print_duration")
+                if isinstance(_dur, (int, float)) and _dur > 0:
+                    _started_at = _completed_at - timedelta(seconds=float(_dur))
+                _user = _print_user_info or {}
+                await write_log_entry(
+                    _klip_session,
+                    status=_log_status,
+                    print_name=(data.get("filename") or data.get("subtask_name")),
+                    printer_name=_klip_printer.name,
+                    printer_id=printer_id,
+                    started_at=_started_at,
+                    completed_at=_completed_at,
+                    created_by_id=_user.get("user_id"),
+                    created_by_username=_user.get("username"),
+                )
+                await _klip_session.commit()
+                logger.info("[CALLBACK] Klipper print logged (live-only, no archive) for printer %s", printer_id)
+    except Exception:
+        logger.exception("[CALLBACK] Klipper print-complete logging failed for printer %s", printer_id)
+        _is_klipper_print = True  # still skip the Bambu pipeline; it can't apply
+    if _is_klipper_print:
+        return
+
     # MQTT relay - publish print complete
     try:
         printer_info = printer_manager.get_printer(printer_id)

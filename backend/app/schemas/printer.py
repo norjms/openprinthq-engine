@@ -1,16 +1,22 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class PrinterBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    serial_number: str = Field(..., min_length=1, max_length=50)
+    # "bambu" (MQTT) or "klipper" (Moonraker). Defaults to bambu so existing
+    # clients and payloads are unaffected.
+    connection_type: str = "bambu"
+    # Optional at the schema level: Bambu printers require a serial, but Klipper
+    # printers get a synthetic serial assigned server-side. Per-type
+    # requirements are enforced in PrinterCreate.
+    serial_number: str | None = Field(default=None, max_length=50)
 
     @field_validator("serial_number")
     @classmethod
-    def _normalize_serial_number(cls, v: str) -> str:
-        """Uppercase and trim the serial number.
+    def _normalize_serial_number(cls, v: str | None) -> str | None:
+        """Uppercase and trim Bambu serial numbers.
 
         Bambu serial numbers are uppercase alphanumeric, and the MQTT report
         topic ``device/<serial>/report`` is case-sensitive. A serial entered
@@ -18,20 +24,28 @@ class PrinterBase(BaseModel):
         without error but never receives a message — the printer publishes to
         the correctly-cased topic, so every status field stays unknown (#1465).
         Normalising on input makes the subscribed topic always match.
+
+        ``None`` (Klipper, serial assigned later) and synthetic Klipper serials
+        (which contain a ``:``) pass through untouched.
         """
-        normalized = v.strip().upper()
-        if not normalized:
-            raise ValueError("serial_number must not be blank")
-        return normalized
+        if v is None:
+            return None
+        if ":" in v:  # synthetic Klipper serial, e.g. "klipper:<uuid>"
+            return v.strip()
+        return v.strip().upper() or None
 
     ip_address: str = Field(
         ...,
         max_length=253,
         pattern=r"^(\d{1,3}(\.\d{1,3}){3}|[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*)$",
     )
-    model: str | None = None
+    model: str | None = None  # Bambu model string, or KlipperProfile key for Klipper rows
     location: str | None = None  # Group/location name
     auto_archive: bool = True
+    # Klipper/Moonraker connection detail (ignored for Bambu rows). The API key
+    # is NOT here — it's a secret and must never be serialised in
+    # PrinterResponse. It lives on PrinterCreate / PrinterUpdate only.
+    moonraker_port: int = Field(default=7125, ge=1, le=65535)
     external_camera_url: str | None = None
     external_camera_type: str | None = None  # "mjpeg", "rtsp", "snapshot", "usb"
     external_camera_enabled: bool = False
@@ -42,8 +56,26 @@ class PrinterBase(BaseModel):
 class PrinterCreate(PrinterBase):
     # access_code lives on the input shapes only — never on the default
     # PrinterResponse. Direct exposure on PRINTERS_READ would let a Viewer
-    # connect to the printer's MQTT and bypass Bambuddy's RBAC.
-    access_code: str = Field(..., min_length=1, max_length=20)
+    # connect to the printer's MQTT and bypass Bambuddy's RBAC. Optional because
+    # Klipper printers run open on the LAN (no access code).
+    access_code: str | None = Field(default=None, max_length=20)
+    # Secret — only accepted on input, never returned. Optional (open-LAN
+    # Moonraker needs no key).
+    moonraker_api_key: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def _check_per_type_requirements(self) -> "PrinterCreate":
+        """Bambu printers need serial + access code; Klipper printers don't."""
+        if self.connection_type == "bambu":
+            if not self.serial_number:
+                raise ValueError("serial_number is required for Bambu printers")
+            if not self.access_code:
+                raise ValueError("access_code is required for Bambu printers")
+        elif self.connection_type == "klipper":
+            pass  # serial assigned later; access_code/api_key optional (open LAN)
+        else:
+            raise ValueError(f"unknown connection_type: {self.connection_type!r}")
+        return self
 
 
 class PlateDetectionROI(BaseModel):
@@ -68,6 +100,8 @@ class PrinterUpdate(BaseModel):
     is_active: bool | None = None
     auto_archive: bool | None = None
     print_hours_offset: float | None = None
+    moonraker_port: int | None = Field(default=None, ge=1, le=65535)
+    moonraker_api_key: str | None = None
     external_camera_url: str | None = None
     external_camera_type: str | None = None
     external_camera_enabled: bool | None = None
@@ -80,6 +114,7 @@ class PrinterUpdate(BaseModel):
 class PrinterResponse(PrinterBase):
     id: int
     is_active: bool
+    has_moonraker_api_key: bool = False  # whether a key is stored (never the key itself)
     nozzle_count: int = 1  # 1 or 2, auto-detected from MQTT
     print_hours_offset: float = 0.0
     external_camera_url: str | None = None
@@ -101,11 +136,14 @@ class PrinterResponse(PrinterBase):
         data = {
             "id": printer.id,
             "name": printer.name,
+            "connection_type": getattr(printer, "connection_type", None) or "bambu",
             "serial_number": printer.serial_number,
             "ip_address": printer.ip_address,
             "model": printer.model,
             "location": printer.location,
             "auto_archive": printer.auto_archive,
+            "moonraker_port": getattr(printer, "moonraker_port", None) or 7125,
+            "has_moonraker_api_key": bool(getattr(printer, "moonraker_api_key", None)),
             "external_camera_url": printer.external_camera_url,
             "external_camera_type": printer.external_camera_type,
             "external_camera_enabled": printer.external_camera_enabled,
