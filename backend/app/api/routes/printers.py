@@ -63,6 +63,24 @@ from backend.app.utils.http import build_content_disposition
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/printers", tags=["printers"])
 
+
+def _ensure_client_supports(client, method: str, feature: str) -> None:
+    """Block Bambu-only control actions on non-Bambu clients.
+
+    Defense-in-depth: the frontend already hides these controls for Klipper
+    printers, but the endpoints must fail cleanly (400) rather than 500 with an
+    AttributeError if something calls them anyway. The Moonraker client simply
+    doesn't implement these Bambu-specific methods.
+    """
+    if not hasattr(client, method):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "unsupported_for_printer_type",
+                "message": f"{feature} is not supported for this printer type.",
+            },
+        )
+
 # Seconds the /hms/execute-action route waits for a printer status push
 # confirming the command landed before reporting 502 to the UI. Module-level
 # so tests can monkeypatch a near-zero value instead of mocking asyncio.sleep.
@@ -129,32 +147,46 @@ async def create_printer(
     were turning into support tickets that all traced back to a mistyped
     access code.
     """
-    # Check if serial number already exists
-    result = await db.execute(select(Printer).where(Printer.serial_number == printer_data.serial_number))
-    if result.scalar_one_or_none():
-        raise HTTPException(400, "Printer with this serial number already exists")
+    if printer_data.connection_type == "klipper":
+        # Klipper / Moonraker: open LAN, no MQTT pre-flight. Synthesize a stable,
+        # unique serial now (Moonraker has no serial concept).
+        import uuid
 
-    test_result = await printer_manager.test_connection(
-        ip_address=printer_data.ip_address,
-        serial_number=printer_data.serial_number,
-        access_code=printer_data.access_code,
-    )
-    if not test_result.get("success"):
-        # The frontend renders the user-facing message via i18n on `code`;
-        # `message` is an English fallback for non-UI clients (curl / scripts).
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "printer_connection_failed",
-                "message": (
-                    "Could not connect to the printer. Verify IP address, serial number, "
-                    "and access code, and confirm LAN-only mode is enabled. "
-                    "The printer was not added."
-                ),
-            },
+        data = printer_data.model_dump()
+        if not data.get("serial_number"):
+            data["serial_number"] = f"klipper:{uuid.uuid4().hex[:18]}"
+        # Store "" not NULL: legacy SQLite made access_code NOT NULL and can't
+        # drop that via ALTER. Moonraker ignores access_code anyway.
+        data["access_code"] = data.get("access_code") or ""
+        printer = Printer(**data)
+    else:
+        # Check if serial number already exists
+        result = await db.execute(select(Printer).where(Printer.serial_number == printer_data.serial_number))
+        if result.scalar_one_or_none():
+            raise HTTPException(400, "Printer with this serial number already exists")
+
+        test_result = await printer_manager.test_connection(
+            ip_address=printer_data.ip_address,
+            serial_number=printer_data.serial_number,
+            access_code=printer_data.access_code,
         )
+        if not test_result.get("success"):
+            # The frontend renders the user-facing message via i18n on `code`;
+            # `message` is an English fallback for non-UI clients (curl / scripts).
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "printer_connection_failed",
+                    "message": (
+                        "Could not connect to the printer. Verify IP address, serial number, "
+                        "and access code, and confirm LAN-only mode is enabled. "
+                        "The printer was not added."
+                    ),
+                },
+            )
 
-    printer = Printer(**printer_data.model_dump())
+        printer = Printer(**printer_data.model_dump())
+
     db.add(printer)
     await db.commit()
     await db.refresh(printer)
@@ -162,6 +194,29 @@ async def create_printer(
     # Connect to the printer
     if printer.is_active:
         await printer_manager.connect_printer(printer)
+
+    # Klipper: best-effort camera auto-detect from Moonraker's webcam list, so a
+    # freshly-added Voron shows its stream without manual URL entry. Never fatal.
+    if printer.connection_type == "klipper" and not printer.external_camera_url:
+        try:
+            from backend.app.services.klipper import moonraker_files
+
+            webcams = await moonraker_files.get_webcams(
+                printer.ip_address, printer.moonraker_port or 7125, api_key=printer.moonraker_api_key
+            )
+            if webcams:
+                cam = webcams[0]
+                stream = moonraker_files.absolutise_webcam_url(printer.ip_address, cam.get("stream_url"))
+                snap = moonraker_files.absolutise_webcam_url(printer.ip_address, cam.get("snapshot_url"))
+                if stream:
+                    printer.external_camera_url = stream
+                    printer.external_camera_snapshot_url = snap
+                    printer.external_camera_type = "mjpeg"
+                    printer.external_camera_enabled = True
+                    await db.commit()
+                    await db.refresh(printer)
+        except Exception:
+            logger.info("Moonraker webcam auto-detect skipped for printer %s", printer.id, exc_info=True)
 
     return printer
 
@@ -1907,6 +1962,7 @@ async def set_print_option(
     if sensitivity not in valid_sensitivities:
         raise HTTPException(400, f"Invalid sensitivity. Must be one of: {valid_sensitivities}")
 
+    _ensure_client_supports(client, "set_xcam_option", "Print options")
     success = client.set_xcam_option(
         module_name=module_name,
         enabled=enabled,
@@ -2016,6 +2072,7 @@ async def start_calibration(
     if not any([bed_leveling, vibration, motor_noise, nozzle_offset, high_temp_heatbed]):
         raise HTTPException(400, "At least one calibration option must be selected")
 
+    _ensure_client_supports(client, "start_calibration", "Calibration")
     success = client.start_calibration(
         bed_leveling=bed_leveling,
         vibration=vibration,
@@ -2358,6 +2415,7 @@ async def configure_ams_slot(
     # RFID-tagged slots to preserve the slicer eye icon, but printers cache
     # stale tag_uid/tray_uuid after a BL spool is removed, causing the check
     # to false-positive on non-RFID slots and silently drop the command.
+    _ensure_client_supports(client, "ams_set_filament_setting", "AMS slot configuration")
     success = client.ams_set_filament_setting(
         ams_id=ams_id,
         tray_id=tray_id,
@@ -2577,6 +2635,7 @@ async def reset_ams_slot(
         raise HTTPException(status_code=400, detail="Printer not connected")
 
     # Reset the slot
+    _ensure_client_supports(client, "reset_ams_slot", "AMS slot reset")
     success = client.reset_ams_slot(ams_id=ams_id, tray_id=tray_id)
 
     if not success:
@@ -2902,6 +2961,7 @@ async def set_print_speed(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "set_print_speed", "Print speed")
     success = client.set_print_speed(mode)
     if not success:
         raise HTTPException(500, "Failed to set print speed")
@@ -3068,6 +3128,7 @@ async def set_airduct_mode(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "set_airduct_mode", "Airduct mode")
     success = client.set_airduct_mode(mode)
     if not success:
         raise HTTPException(500, "Failed to set airduct mode")
@@ -3097,6 +3158,60 @@ async def set_chamber_light(
         raise HTTPException(500, "Failed to control chamber light")
 
     return {"success": True, "message": f"Chamber light {'on' if on else 'off'}"}
+
+
+# ---------------------------------------------------------------------------
+# Klipper / Moonraker control actions. These exist only on the Moonraker client
+# (gated via hasattr); calling them on a Bambu printer returns a clean 400.
+# ---------------------------------------------------------------------------
+@router.post("/{printer_id}/klipper/level")
+async def klipper_level(
+    printer_id: int,
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+):
+    """Run the gantry/bed levelling macro (QUAD_GANTRY_LEVEL on Voron 2.4)."""
+    client = printer_manager.get_client(printer_id)
+    if not client or not client.state.connected:
+        raise HTTPException(400, "Printer not connected")
+    _ensure_client_supports(client, "level", "Gantry levelling")
+    if not client.level():
+        raise HTTPException(500, "Failed to start levelling (macro may be unavailable)")
+    return {"success": True}
+
+
+@router.post("/{printer_id}/klipper/emergency-stop")
+async def klipper_emergency_stop(
+    printer_id: int,
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+):
+    """Trigger Klipper's emergency stop (M112 / firmware halt)."""
+    client = printer_manager.get_client(printer_id)
+    if not client or not client.state.connected:
+        raise HTTPException(400, "Printer not connected")
+    _ensure_client_supports(client, "emergency_stop", "Emergency stop")
+    if not client.emergency_stop():
+        raise HTTPException(500, "Failed to send emergency stop")
+    return {"success": True}
+
+
+@router.post("/{printer_id}/klipper/set-temp")
+async def klipper_set_temp(
+    printer_id: int,
+    heater: str = Query(..., description="'nozzle' or 'bed'"),
+    temp: float = Query(..., ge=0, le=500, description="Target temperature in °C (0 = off)"),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+):
+    """Set nozzle or bed target temperature on a Klipper printer."""
+    if heater not in ("nozzle", "bed"):
+        raise HTTPException(400, "heater must be 'nozzle' or 'bed'")
+    client = printer_manager.get_client(printer_id)
+    if not client or not client.state.connected:
+        raise HTTPException(400, "Printer not connected")
+    _ensure_client_supports(client, "set_nozzle_temp", "Set temperature")
+    ok = client.set_nozzle_temp(temp) if heater == "nozzle" else client.set_bed_temp(temp)
+    if not ok:
+        raise HTTPException(500, "Failed to set temperature")
+    return {"success": True}
 
 
 @router.post("/{printer_id}/bed-jog")
@@ -3433,6 +3548,7 @@ async def skip_objects(
     if invalid_ids:
         raise HTTPException(400, f"Invalid object IDs: {invalid_ids}")
 
+    _ensure_client_supports(client, "skip_objects", "Skip objects")
     success = client.skip_objects(object_ids)
     if not success:
         raise HTTPException(500, "Failed to skip objects")

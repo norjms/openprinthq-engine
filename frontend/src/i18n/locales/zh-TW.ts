@@ -440,6 +440,14 @@ export default {
       noCamera: '您沒有檢視攝影機的權限',
     },
     // Add/Edit modal
+    klipperActions: {
+      homing: '正在歸零所有軸…',
+      levelling: '正在調平龍門…',
+      eStopSent: '已傳送緊急停止',
+      homeAll: '所有軸歸零',
+      quadGantryLevel: '四軸龍門調平',
+      emergencyStop: '緊急停止',
+    },
     modal: {
       addTitle: '新增印表機',
       editTitle: '編輯印表機',
@@ -450,6 +458,14 @@ export default {
       autoArchiveLabel: '自動歸檔已完成的列印',
       fromPrinterSettings: '來自印表機設定',
       modelOptional: '型號（可選）',
+      connectionType: '連線類型',
+      typeBambu: 'Bambu Lab (MQTT)',
+      typeKlipper: 'Voron / Klipper (Moonraker)',
+      moonrakerPort: 'Moonraker 連接埠',
+      moonrakerApiKey: 'Moonraker API 金鑰（選用）',
+      moonrakerApiKeyPlaceholder: '開放區域網路請留空',
+      moonrakerApiKeyHelp: '僅當 Moonraker 需要驗證時才需填寫。開放區域網路可留空。',
+      klipperProfile: '印表機設定檔',
       saveChanges: '儲存更改',
     },
     // Skip objects

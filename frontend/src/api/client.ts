@@ -306,12 +306,18 @@ export interface LongLivedCameraToken {
 export interface Printer {
   id: number;
   name: string;
+  connection_type: 'bambu' | 'klipper';  // protocol/transport; defaults to bambu
+  // For Klipper this is a synthetic serial; access_code is unused (open LAN).
+  // Kept non-null in the type because all consumers are Bambu/AMS paths that
+  // never execute for Klipper printers.
   serial_number: string;
   ip_address: string;
   // Optional because the backend only returns access_code when the caller has
   // PRINTERS_UPDATE — Admin / Operator JWTs or auth-disabled mode. Viewers and
   // API keys receive a Printer without this field.
   access_code?: string;
+  moonraker_port?: number;  // Klipper only
+  has_moonraker_api_key?: boolean;  // whether a key is stored (never the key itself)
   model: string | null;
   location: string | null;  // Group/location name
   nozzle_count: number;  // 1 or 2, auto-detected from MQTT
@@ -531,10 +537,13 @@ export interface PrinterStatus {
 
 export interface PrinterCreate {
   name: string;
-  serial_number: string;
+  connection_type?: 'bambu' | 'klipper';  // defaults to 'bambu' on the backend
+  serial_number?: string;  // required for Bambu; omitted for Klipper
   ip_address: string;
-  access_code: string;
-  model?: string;
+  access_code?: string;  // required for Bambu; omitted for Klipper (open LAN)
+  model?: string;  // Bambu model, or KlipperProfile key for Klipper
+  moonraker_port?: number;  // Klipper only (default 7125)
+  moonraker_api_key?: string;  // Klipper only, optional
   location?: string;
   auto_archive?: boolean;
   // Maintenance Mode flag (#1476). Backend already gates MQTT, queue dispatch,
@@ -3818,6 +3827,17 @@ export const api = {
   homeAxes: (printerId: number, axes: 'z' | 'xy' | 'all' = 'z') =>
     request<{ success: boolean; message: string }>(
       `/printers/${printerId}/home-axes?axes=${axes}`,
+      { method: 'POST' }
+    ),
+
+  // Klipper / Moonraker control actions (no-op on Bambu printers — server 400s).
+  klipperLevel: (printerId: number) =>
+    request<{ success: boolean }>(`/printers/${printerId}/klipper/level`, { method: 'POST' }),
+  klipperEmergencyStop: (printerId: number) =>
+    request<{ success: boolean }>(`/printers/${printerId}/klipper/emergency-stop`, { method: 'POST' }),
+  klipperSetTemp: (printerId: number, heater: 'nozzle' | 'bed', temp: number) =>
+    request<{ success: boolean }>(
+      `/printers/${printerId}/klipper/set-temp?heater=${heater}&temp=${temp}`,
       { method: 'POST' }
     ),
 

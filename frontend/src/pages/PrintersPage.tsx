@@ -66,6 +66,8 @@ import {
   XCircle,
   User,
   Home,
+  Grid2x2,
+  OctagonAlert,
   Printer as PrinterIcon,
   Info,
   Cable,
@@ -1801,6 +1803,10 @@ function PrinterCard({
   const navigate = useNavigate();
   const { showToast } = useToast();
   const { hasPermission } = useAuth();
+  // Klipper / Moonraker printers expose only the transport-agnostic controls
+  // (status, pause/resume/stop, light, home). AMS / drying / k-profiles /
+  // print-speed / airduct / calibration are Bambu-only and hidden below.
+  const isKlipper = printer.connection_type === 'klipper';
   const [showMenu, setShowMenu] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteArchives, setDeleteArchives] = useState(true);
@@ -2414,6 +2420,25 @@ function PrinterCard({
       }
       showToast(error.message || t('printers.toast.failedToControlChamberLight'), 'error');
     },
+  });
+
+  // Klipper / Moonraker one-click actions (Voron etc.). Home reuses the
+  // existing /home-axes endpoint (G28 via gcode); QGL and E-stop use the
+  // dedicated Klipper endpoints.
+  const klipperHomeMutation = useMutation({
+    mutationFn: () => api.homeAxes(printer.id, 'all'),
+    onSuccess: () => showToast(t('printers.klipperActions.homing')),
+    onError: (e: Error) => showToast(e.message, 'error'),
+  });
+  const klipperLevelMutation = useMutation({
+    mutationFn: () => api.klipperLevel(printer.id),
+    onSuccess: () => showToast(t('printers.klipperActions.levelling')),
+    onError: (e: Error) => showToast(e.message, 'error'),
+  });
+  const klipperEStopMutation = useMutation({
+    mutationFn: () => api.klipperEmergencyStop(printer.id),
+    onSuccess: () => showToast(t('printers.klipperActions.eStopSent')),
+    onError: (e: Error) => showToast(e.message, 'error'),
   });
 
   // Print speed mutation with optimistic update
@@ -3066,6 +3091,46 @@ function PrinterCard({
             <RotateCw className={`w-4 h-4 ${forceRefreshMutation.isPending ? 'animate-spin' : ''}`} />
             {t('printers.forceRefresh')}
           </button>
+          {isKlipper && hasPermission('printers:control') && (
+            <>
+              <div className="my-1 border-t border-bambu-dark-tertiary" />
+              <button
+                className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2 disabled:opacity-50"
+                disabled={!status?.connected || klipperHomeMutation.isPending}
+                onClick={() => {
+                  klipperHomeMutation.mutate();
+                  setShowMenu(false);
+                }}
+              >
+                <Home className="w-4 h-4" />
+                {t('printers.klipperActions.homeAll')}
+              </button>
+              <button
+                className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2 disabled:opacity-50"
+                disabled={!status?.connected || klipperLevelMutation.isPending}
+                onClick={() => {
+                  klipperLevelMutation.mutate();
+                  setShowMenu(false);
+                }}
+              >
+                <Grid2x2 className="w-4 h-4" />
+                {t('printers.klipperActions.quadGantryLevel')}
+              </button>
+              <button
+                className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-500/10 flex items-center gap-2 disabled:opacity-50"
+                disabled={!status?.connected || klipperEStopMutation.isPending}
+                onClick={() => {
+                  klipperEStopMutation.mutate();
+                  setShowMenu(false);
+                }}
+              >
+                <OctagonAlert className="w-4 h-4" />
+                {t('printers.klipperActions.emergencyStop')}
+              </button>
+              <div className="my-1 border-t border-bambu-dark-tertiary" />
+            </>
+          )}
+          {!isKlipper && (
           <button
             className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2"
             onClick={() => {
@@ -3076,6 +3141,7 @@ function PrinterCard({
             <Terminal className="w-4 h-4" />
             {t('printers.mqttDebug')}
           </button>
+          )}
           <button
             className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2"
             onClick={() => {
@@ -4297,8 +4363,8 @@ function PrinterCard({
                         </button>
                       </div>
 
-                      {/* Print Speed */}
-                      {(() => (
+                      {/* Print Speed (Bambu only — Klipper has no fixed speed levels) */}
+                      {!isKlipper && (() => (
                         <div className="relative">
                           <button
                             data-testid="speed-control"
@@ -6479,6 +6545,7 @@ export function AddPrinterModal({
   const { t } = useTranslation();
   const [form, setForm] = useState<PrinterCreate>({
     name: '',
+    connection_type: 'bambu',
     serial_number: '',
     ip_address: '',
     access_code: '',
@@ -6486,6 +6553,7 @@ export function AddPrinterModal({
     location: '',
     auto_archive: true,
   });
+  const isKlipper = form.connection_type === 'klipper';
 
   // Discovery state
   const [discovering, setDiscovering] = useState(false);
@@ -6537,11 +6605,17 @@ export function AddPrinterModal({
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Klipper printers use Moonraker (HTTP/WS), not the Bambu MQTT diagnostic.
+    // Skip the pre-flight and add directly; ensure the profile key is set.
+    if (isKlipper) {
+      onAdd({ ...form, model: form.model || 'voron_2.4_350', serial_number: undefined, access_code: undefined });
+      return;
+    }
     setCheckingSave(true);
     try {
       const result = await api.diagnoseConnection({
         ip_address: form.ip_address.trim(),
-        serial_number: form.serial_number.trim() || undefined,
+        serial_number: (form.serial_number || '').trim() || undefined,
         access_code: form.access_code || undefined,
       });
       if (result.checks.some((c) => c.status === 'fail')) {
@@ -6812,6 +6886,25 @@ export function AddPrinterModal({
           </div>
           <form onSubmit={handleAddSubmit} className="space-y-4">
             <div>
+              <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.connectionType')}</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, connection_type: 'bambu' })}
+                  className={`flex-1 px-3 py-2 rounded-lg border text-sm transition-colors ${!isKlipper ? 'border-bambu-green text-white bg-bambu-green/10' : 'border-bambu-dark-tertiary text-bambu-gray hover:text-white'}`}
+                >
+                  {t('printers.modal.typeBambu')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, connection_type: 'klipper', model: 'voron_2.4_350' })}
+                  className={`flex-1 px-3 py-2 rounded-lg border text-sm transition-colors ${isKlipper ? 'border-bambu-green text-white bg-bambu-green/10' : 'border-bambu-dark-tertiary text-bambu-gray hover:text-white'}`}
+                >
+                  {t('printers.modal.typeKlipper')}
+                </button>
+              </div>
+            </div>
+            <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.name')}</label>
               <input
                 type="text"
@@ -6834,28 +6927,70 @@ export function AddPrinterModal({
                 placeholder="192.168.1.100 or printer.local"
               />
             </div>
+            {!isKlipper && (
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.serialNumber')}</label>
               <input
                 type="text"
-                required
+                required={!isKlipper}
                 className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                 value={form.serial_number}
                 onChange={(e) => setForm({ ...form, serial_number: e.target.value })}
                 placeholder="01P00A000000000"
               />
             </div>
+            )}
+            {!isKlipper && (
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.accessCode')}</label>
               <input
                 type="password"
-                required
+                required={!isKlipper}
                 className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                 value={form.access_code}
                 onChange={(e) => setForm({ ...form, access_code: e.target.value })}
                 placeholder={t('printers.modal.fromPrinterSettings')}
               />
             </div>
+            )}
+            {isKlipper && (
+              <>
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.moonrakerPort')}</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={65535}
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    value={form.moonraker_port ?? 7125}
+                    onChange={(e) => setForm({ ...form, moonraker_port: Number(e.target.value) || 7125 })}
+                    placeholder="7125"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.moonrakerApiKey')}</label>
+                  <input
+                    type="password"
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    value={form.moonraker_api_key || ''}
+                    onChange={(e) => setForm({ ...form, moonraker_api_key: e.target.value })}
+                    placeholder={t('printers.modal.moonrakerApiKeyPlaceholder')}
+                  />
+                  <p className="text-xs text-bambu-gray mt-1">{t('printers.modal.moonrakerApiKeyHelp')}</p>
+                </div>
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.klipperProfile')}</label>
+                  <select
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    value={form.model || 'voron_2.4_350'}
+                    onChange={(e) => setForm({ ...form, model: e.target.value })}
+                  >
+                    <option value="voron_2.4_350">Voron 2.4 (350mm)</option>
+                  </select>
+                </div>
+              </>
+            )}
+            {!isKlipper && (
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.modelOptional')}</label>
               <select
@@ -6892,6 +7027,7 @@ export function AddPrinterModal({
                 </optgroup>
               </select>
             </div>
+            )}
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.locationGroup')}</label>
               <input
@@ -6915,15 +7051,17 @@ export function AddPrinterModal({
                 {t('printers.modal.autoArchiveLabel')}
               </label>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowDiagnostic(true)}
-              disabled={!form.ip_address.trim()}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-bambu-gray hover:text-white disabled:opacity-40 disabled:cursor-not-allowed border border-bambu-dark-tertiary rounded-lg transition-colors"
-            >
-              <Stethoscope className="w-4 h-4" />
-              {t('diagnostic.runButton')}
-            </button>
+            {!isKlipper && (
+              <button
+                type="button"
+                onClick={() => setShowDiagnostic(true)}
+                disabled={!form.ip_address.trim()}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-bambu-gray hover:text-white disabled:opacity-40 disabled:cursor-not-allowed border border-bambu-dark-tertiary rounded-lg transition-colors"
+              >
+                <Stethoscope className="w-4 h-4" />
+                {t('diagnostic.runButton')}
+              </button>
+            )}
             {saveWarning ? (
               <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 p-3 space-y-3">
                 <div className="flex items-start gap-2">
@@ -6963,7 +7101,7 @@ export function AddPrinterModal({
       <ConnectionDiagnosticModal
         connection={{
           ip_address: form.ip_address.trim(),
-          serial_number: form.serial_number.trim() || undefined,
+          serial_number: (form.serial_number || '').trim() || undefined,
           access_code: form.access_code || undefined,
         }}
         printerName={form.name || null}

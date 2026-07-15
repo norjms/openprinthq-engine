@@ -439,6 +439,14 @@ export default {
       noCamera: 'カメラを表示する権限がありません',
     },
     // Add/Edit modal
+    klipperActions: {
+      homing: '全軸の原点復帰中…',
+      levelling: 'ガントリーをレベリング中…',
+      eStopSent: '緊急停止を送信しました',
+      homeAll: '全軸原点復帰',
+      quadGantryLevel: 'クアッドガントリーレベル',
+      emergencyStop: '緊急停止',
+    },
     modal: {
       addTitle: 'プリンターを追加',
       editTitle: 'プリンターを編集',
@@ -449,6 +457,14 @@ export default {
       autoArchiveLabel: '完了した印刷を自動アーカイブ',
       fromPrinterSettings: 'プリンターの設定から取得',
       modelOptional: 'モデル（任意）',
+      connectionType: '接続タイプ',
+      typeBambu: 'Bambu Lab (MQTT)',
+      typeKlipper: 'Voron / Klipper (Moonraker)',
+      moonrakerPort: 'Moonraker ポート',
+      moonrakerApiKey: 'Moonraker API キー（任意）',
+      moonrakerApiKeyPlaceholder: 'オープン LAN の場合は空欄',
+      moonrakerApiKeyHelp: 'Moonraker が認証を必要とする場合のみ入力します。オープン LAN では空欄のままにできます。',
+      klipperProfile: 'プリンタープロファイル',
       saveChanges: '変更を保存',
     },
     // Skip objects
