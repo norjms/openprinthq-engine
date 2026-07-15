@@ -2458,6 +2458,78 @@ class PrintScheduler:
         if owner:
             printer_manager.set_current_print_user(item.printer_id, owner.id, owner.username)
 
+    async def _start_print_klipper(self, db: AsyncSession, item: PrintQueueItem, printer: Printer):
+        """Dispatch a queued print to a Klipper/Moonraker printer (live-only).
+
+        Uploads the library ``.gcode`` via Moonraker and starts it — no FTP, no
+        3MF archive, no AMS. Fully gated: Bambu queue items never reach here.
+        On failure the item is marked failed with a clear message.
+        """
+        from backend.app.services.klipper import moonraker_files
+
+        def _fail(msg: str):
+            item.status = "failed"
+            item.error_message = msg
+            item.completed_at = datetime.now(timezone.utc)
+
+        # Klipper prints library .gcode only; archive-source items are Bambu 3MF.
+        if not item.library_file_id:
+            _fail("Klipper printers can only print library .gcode files")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        result = await db.execute(LibraryFile.active().where(LibraryFile.id == item.library_file_id))
+        library_file = result.scalar_one_or_none()
+        if not library_file:
+            _fail("Library file not found")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        lib_path = Path(library_file.file_path)
+        file_path = lib_path if lib_path.is_absolute() else settings.base_dir / library_file.file_path
+        filename = library_file.filename
+
+        if not filename.lower().endswith(".gcode"):
+            _fail("Klipper printers can only print plain .gcode files (a .gcode.3mf is a Bambu container)")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        remote_name = Path(filename).name
+        try:
+            await moonraker_files.upload_gcode(
+                printer.ip_address,
+                printer.moonraker_port or 7125,
+                str(file_path),
+                remote_name=remote_name,
+                api_key=printer.moonraker_api_key,
+            )
+        except Exception as e:
+            logger.error("Queue item %s: Moonraker upload failed: %s", item.id, e)
+            _fail(f"Failed to upload to Moonraker: {e}")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        # Credit the owner so on_print_complete can attribute the PrintLogEntry.
+        await self._propagate_owner_to_printer_manager(db, item)
+
+        # Mark printing BEFORE sending the command (crash-safety, mirrors the
+        # Bambu path — a phantom "printing" is safer than a phantom reprint).
+        item.status = "printing"
+        item.started_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        if not printer_manager.start_print(item.printer_id, remote_name):
+            _fail("Failed to start print on Klipper printer")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        logger.info("Queue item %s: Klipper print started on %s (%s)", item.id, printer.name, remote_name)
+
     async def _start_print(self, db: AsyncSession, item: PrintQueueItem):
         """Upload file and start print for a queue item.
 
@@ -2503,6 +2575,15 @@ class PrintScheduler:
                 item.id,
                 item.status,
             )
+            return
+
+        # Klipper / Moonraker printers: live-only dispatch, fully separate from
+        # the Bambu FTP/3MF/AMS/archive flow below (which can't apply — .gcode
+        # isn't a 3MF, there's no AMS, and upload is HTTP not FTP).
+        from backend.app.services.printer_capabilities import is_klipper
+
+        if is_klipper(printer):
+            await self._start_print_klipper(db, item, printer)
             return
 
         # Determine source: archive or library file

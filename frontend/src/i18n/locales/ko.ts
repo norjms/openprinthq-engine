@@ -408,6 +408,14 @@ export default {
       noSmartPlugControl: '스마트 플러그를 제어할 권한이 없습니다',
       noCamera: '카메라를 볼 권한이 없습니다'
     },
+    klipperActions: {
+      homing: '모든 축 원점 복귀 중…',
+      levelling: '갠트리 레벨링 중…',
+      eStopSent: '비상 정지 전송됨',
+      homeAll: '모든 축 원점 복귀',
+      quadGantryLevel: '쿼드 갠트리 레벨',
+      emergencyStop: '비상 정지',
+    },
     modal: {
       addTitle: '프린터 추가',
       editTitle: '프린터 편집',
@@ -418,6 +426,14 @@ export default {
       autoArchiveLabel: '완료된 인쇄 자동 아카이브',
       fromPrinterSettings: '프린터 설정에서',
       modelOptional: '모델 (선택사항)',
+      connectionType: '연결 유형',
+      typeBambu: 'Bambu Lab (MQTT)',
+      typeKlipper: 'Voron / Klipper (Moonraker)',
+      moonrakerPort: 'Moonraker 포트',
+      moonrakerApiKey: 'Moonraker API 키 (선택)',
+      moonrakerApiKeyPlaceholder: '개방형 LAN이면 비워 두세요',
+      moonrakerApiKeyHelp: 'Moonraker가 인증을 요구할 때만 필요합니다. 개방형 LAN에서는 비워 둘 수 있습니다.',
+      klipperProfile: '프린터 프로필',
       saveChanges: '변경사항 저장'
     },
     skipObjects: {

@@ -440,6 +440,14 @@ export default {
       noCamera: 'No tiene permiso para ver las cámaras',
     },
     // Add/Edit modal
+    klipperActions: {
+      homing: 'Buscando origen de todos los ejes…',
+      levelling: 'Nivelando el pórtico…',
+      eStopSent: 'Parada de emergencia enviada',
+      homeAll: 'Buscar origen (todos los ejes)',
+      quadGantryLevel: 'Nivelación Quad Gantry',
+      emergencyStop: 'Parada de emergencia',
+    },
     modal: {
       addTitle: 'Añadir impresora',
       editTitle: 'Editar impresora',
@@ -450,6 +458,14 @@ export default {
       autoArchiveLabel: 'Archivar automáticamente las impresiones completadas',
       fromPrinterSettings: 'Desde los ajustes de la impresora',
       modelOptional: 'Modelo (opcional)',
+      connectionType: 'Tipo de conexión',
+      typeBambu: 'Bambu Lab (MQTT)',
+      typeKlipper: 'Voron / Klipper (Moonraker)',
+      moonrakerPort: 'Puerto de Moonraker',
+      moonrakerApiKey: 'Clave API de Moonraker (opcional)',
+      moonrakerApiKeyPlaceholder: 'Dejar vacío para LAN abierta',
+      moonrakerApiKeyHelp: 'Solo es necesario si Moonraker requiere autenticación. En LAN abierta, déjelo en blanco.',
+      klipperProfile: 'Perfil de impresora',
       saveChanges: 'Guardar cambios',
     },
     // Skip objects

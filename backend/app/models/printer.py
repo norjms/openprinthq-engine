@@ -11,10 +11,24 @@ class Printer(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
+    # Bambu printers: the real device serial. Klipper printers: a synthetic
+    # stable id derived at creation (e.g. "klipper:<uuid>").
     serial_number: Mapped[str] = mapped_column(String(50), unique=True)
     ip_address: Mapped[str] = mapped_column(String(253))
-    access_code: Mapped[str] = mapped_column(String(20))
+    # Bambu LAN access code. Nullable because Klipper/Moonraker printers on an
+    # open LAN need no credential (stored as "" for Klipper on legacy DBs).
+    access_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # For Bambu rows: the Bambu model string (X1C, P1S, ...). For Klipper rows:
+    # the KlipperProfile key (e.g. "voron_2.4_350").
     model: Mapped[str | None] = mapped_column(String(50))
+    # "bambu" (default) or "klipper". Drives which client/protocol is used and
+    # which feature families apply (see services/printer_capabilities.py).
+    connection_type: Mapped[str] = mapped_column(String(20), default="bambu", server_default="bambu")
+    # Klipper/Moonraker connection details (NULL for Bambu rows).
+    moonraker_port: Mapped[int] = mapped_column(default=7125, server_default="7125")
+    # Optional Moonraker API key; stored as-is like access_code. Never returned
+    # in API responses — see schemas/printer.py PrinterResponse.
+    moonraker_api_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     location: Mapped[str | None] = mapped_column(String(100))  # Group/location name
     nozzle_count: Mapped[int] = mapped_column(default=1)  # 1 or 2, auto-detected from MQTT
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.printer import Printer
 from backend.app.services.bambu_mqtt import BambuMQTTClient, MQTTLogEntry, PrinterState, get_stage_name
+from backend.app.services.printer_capabilities import is_klipper
+from backend.app.services.printer_client import PrinterClient
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +84,14 @@ def supports_chamber_temp(model: str | None) -> bool:
         return False
     # Normalize model name (uppercase, strip whitespace)
     model_upper = model.strip().upper()
-    return model_upper in CHAMBER_TEMP_SUPPORTED_MODELS
+    if model_upper in CHAMBER_TEMP_SUPPORTED_MODELS:
+        return True
+    # Klipper printers store a profile key in `model`; chamber support comes
+    # from that profile (e.g. the Voron 2.4 has a heated chamber).
+    from backend.app.services.klipper.profiles import KLIPPER_PROFILES
+
+    profile = KLIPPER_PROFILES.get(model)
+    return profile.has_chamber if profile else False
 
 
 # Models with an ACTIVE chamber heater (M141 has an effect).
@@ -294,7 +303,10 @@ class PrinterManager:
     """Manager for multiple printer connections."""
 
     def __init__(self):
-        self._clients: dict[int, BambuMQTTClient] = {}
+        # May hold a BambuMQTTClient or a Klipper MoonrakerClient; both satisfy
+        # the PrinterClient protocol. Bambu-only methods (AMS/drying/k-profiles)
+        # are only ever called after a capability/connection_type check.
+        self._clients: dict[int, PrinterClient] = {}
         self._models: dict[int, str | None] = {}  # Cache printer models for feature detection
         self._printer_info: dict[int, PrinterInfo] = {}  # Cache printer name/serial for callbacks
         self._on_print_start: Callable[[int, dict], None] | None = None
@@ -555,23 +567,44 @@ class PrinterManager:
             if self._on_drying_complete:
                 self._schedule_async(self._on_drying_complete(printer_id, ams_id))
 
-        client = BambuMQTTClient(
-            ip_address=printer.ip_address,
-            serial_number=printer.serial_number,
-            access_code=printer.access_code,
-            model=printer.model,
-            on_state_change=on_state_change,
-            on_print_start=on_print_start,
-            on_print_complete=on_print_complete,
-            on_ams_change=on_ams_change,
-            on_layer_change=on_layer_change,
-            on_bed_temp_update=on_bed_temp_update,
-            on_drying_complete=on_drying_complete,
-            on_print_running_observed=on_print_running_observed,
-            on_finish_photo_moment=on_finish_photo_moment,
-        )
+        if is_klipper(printer):
+            # Klipper / Moonraker printer. Only the transport-agnostic callbacks
+            # apply — no AMS/drying/finish-photo. Imported lazily so the
+            # websocket/httpx deps aren't pulled in for Bambu-only deployments.
+            from backend.app.services.klipper.moonraker_client import MoonrakerClient
 
-        client.connect()
+            client = MoonrakerClient(
+                ip_address=printer.ip_address,
+                port=printer.moonraker_port or 7125,
+                api_key=printer.moonraker_api_key,
+                model=printer.model,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        else:
+            client = BambuMQTTClient(
+                ip_address=printer.ip_address,
+                serial_number=printer.serial_number,
+                access_code=printer.access_code,
+                model=printer.model,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_ams_change=on_ams_change,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+                on_drying_complete=on_drying_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_finish_photo_moment=on_finish_photo_moment,
+            )
+            client.connect()
+
         self._clients[printer_id] = client
         self._models[printer_id] = printer.model  # Cache model for feature detection
         self._printer_info[printer_id] = PrinterInfo(printer.name, printer.serial_number)
@@ -653,7 +686,7 @@ class PrinterManager:
             return client.check_staleness()
         return False
 
-    def get_client(self, printer_id: int) -> BambuMQTTClient | None:
+    def get_client(self, printer_id: int) -> PrinterClient | None:
         """Get the MQTT client for a printer."""
         return self._clients.get(printer_id)
 
