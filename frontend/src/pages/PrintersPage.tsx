@@ -6568,6 +6568,8 @@ export function AddPrinterModal({
     auto_archive: true,
   });
   const isKlipper = form.connection_type === 'klipper';
+  const isOctoprint = form.connection_type === 'octoprint' || form.connection_type === 'prusalink';
+  const isBambu = form.connection_type === 'bambu';
   // Supported Voron/Klipper profiles for the model dropdown (data-driven).
   const { data: klipperProfiles } = useQuery({
     queryKey: ['klipperProfiles'],
@@ -6626,10 +6628,11 @@ export function AddPrinterModal({
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Klipper printers use Moonraker (HTTP/WS), not the Bambu MQTT diagnostic.
-    // Skip the pre-flight and add directly; ensure the profile key is set.
-    if (isKlipper) {
-      onAdd({ ...form, model: form.model || 'voron_2.4_350', serial_number: undefined, access_code: undefined });
+    // External printers (Klipper/OctoPrint/PrusaLink) use HTTP APIs, not the
+    // Bambu MQTT diagnostic. Skip the pre-flight and add directly.
+    if (!isBambu) {
+      const model = isKlipper ? (form.model || 'voron_2.4_350') : undefined;
+      onAdd({ ...form, model, serial_number: undefined, access_code: undefined });
       return;
     }
     setCheckingSave(true);
@@ -6908,21 +6911,22 @@ export function AddPrinterModal({
           <form onSubmit={handleAddSubmit} className="space-y-4">
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.connectionType')}</label>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setForm({ ...form, connection_type: 'bambu' })}
-                  className={`flex-1 px-3 py-2 rounded-lg border text-sm transition-colors ${!isKlipper ? 'border-bambu-green text-white bg-bambu-green/10' : 'border-bambu-dark-tertiary text-bambu-gray hover:text-white'}`}
-                >
-                  {t('printers.modal.typeBambu')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setForm({ ...form, connection_type: 'klipper', model: 'voron_2.4_350' })}
-                  className={`flex-1 px-3 py-2 rounded-lg border text-sm transition-colors ${isKlipper ? 'border-bambu-green text-white bg-bambu-green/10' : 'border-bambu-dark-tertiary text-bambu-gray hover:text-white'}`}
-                >
-                  {t('printers.modal.typeKlipper')}
-                </button>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  { ct: 'bambu', label: t('printers.modal.typeBambu'), patch: { connection_type: 'bambu' as const } },
+                  { ct: 'klipper', label: t('printers.modal.typeKlipper'), patch: { connection_type: 'klipper' as const, model: 'voron_2.4_350', moonraker_port: 7125 } },
+                  { ct: 'octoprint', label: t('printers.modal.typeOctoprint'), patch: { connection_type: 'octoprint' as const, model: '', moonraker_port: 80 } },
+                  { ct: 'prusalink', label: t('printers.modal.typePrusalink'), patch: { connection_type: 'prusalink' as const, model: '', moonraker_port: 80 } },
+                ] as const).map(({ ct, label, patch }) => (
+                  <button
+                    key={ct}
+                    type="button"
+                    onClick={() => setForm({ ...form, ...patch })}
+                    className={`px-3 py-2 rounded-lg border text-sm transition-colors ${form.connection_type === ct ? 'border-bambu-green text-white bg-bambu-green/10' : 'border-bambu-dark-tertiary text-bambu-gray hover:text-white'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
             </div>
             <div>
@@ -6948,12 +6952,12 @@ export function AddPrinterModal({
                 placeholder="192.168.1.100 or printer.local"
               />
             </div>
-            {!isKlipper && (
+            {isBambu && (
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.serialNumber')}</label>
               <input
                 type="text"
-                required={!isKlipper}
+                required={isBambu}
                 className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                 value={form.serial_number}
                 onChange={(e) => setForm({ ...form, serial_number: e.target.value })}
@@ -6961,12 +6965,12 @@ export function AddPrinterModal({
               />
             </div>
             )}
-            {!isKlipper && (
+            {isBambu && (
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.accessCode')}</label>
               <input
                 type="password"
-                required={!isKlipper}
+                required={isBambu}
                 className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                 value={form.access_code}
                 onChange={(e) => setForm({ ...form, access_code: e.target.value })}
@@ -6974,31 +6978,34 @@ export function AddPrinterModal({
               />
             </div>
             )}
-            {isKlipper && (
+            {(isKlipper || isOctoprint) && (
               <>
                 <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.moonrakerPort')}</label>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.hostPort')}</label>
                   <input
                     type="number"
                     min={1}
                     max={65535}
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                    value={form.moonraker_port ?? 7125}
-                    onChange={(e) => setForm({ ...form, moonraker_port: Number(e.target.value) || 7125 })}
-                    placeholder="7125"
+                    value={form.moonraker_port ?? (isKlipper ? 7125 : 80)}
+                    onChange={(e) => setForm({ ...form, moonraker_port: Number(e.target.value) || (isKlipper ? 7125 : 80) })}
+                    placeholder={isKlipper ? '7125' : '80'}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.moonrakerApiKey')}</label>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.apiKeyOptional')}</label>
                   <input
                     type="password"
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                     value={form.moonraker_api_key || ''}
                     onChange={(e) => setForm({ ...form, moonraker_api_key: e.target.value })}
-                    placeholder={t('printers.modal.moonrakerApiKeyPlaceholder')}
+                    placeholder={isKlipper ? t('printers.modal.moonrakerApiKeyPlaceholder') : ''}
                   />
-                  <p className="text-xs text-bambu-gray mt-1">{t('printers.modal.moonrakerApiKeyHelp')}</p>
+                  <p className="text-xs text-bambu-gray mt-1">{isKlipper ? t('printers.modal.moonrakerApiKeyHelp') : t('printers.modal.apiKeyHelp')}</p>
                 </div>
+              </>
+            )}
+            {isKlipper && (
                 <div>
                   <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.klipperProfile')}</label>
                   <select
@@ -7011,9 +7018,8 @@ export function AddPrinterModal({
                     ))}
                   </select>
                 </div>
-              </>
             )}
-            {!isKlipper && (
+            {isBambu && (
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.modelOptional')}</label>
               <select
@@ -7074,7 +7080,7 @@ export function AddPrinterModal({
                 {t('printers.modal.autoArchiveLabel')}
               </label>
             </div>
-            {!isKlipper && (
+            {isBambu && (
               <button
                 type="button"
                 onClick={() => setShowDiagnostic(true)}

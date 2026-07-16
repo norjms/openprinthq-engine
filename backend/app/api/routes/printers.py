@@ -174,16 +174,16 @@ async def create_printer(
     were turning into support tickets that all traced back to a mistyped
     access code.
     """
-    if printer_data.connection_type == "klipper":
-        # Klipper / Moonraker: open LAN, no MQTT pre-flight. Synthesize a stable,
-        # unique serial now (Moonraker has no serial concept).
+    if printer_data.connection_type != "bambu":
+        # External printer (Moonraker/OctoPrint/PrusaLink): no MQTT pre-flight.
+        # Synthesize a stable, unique serial now (these have no serial concept).
         import uuid
 
         data = printer_data.model_dump()
         if not data.get("serial_number"):
-            data["serial_number"] = f"klipper:{uuid.uuid4().hex[:18]}"
+            data["serial_number"] = f"{printer_data.connection_type}:{uuid.uuid4().hex[:16]}"
         # Store "" not NULL: legacy SQLite made access_code NOT NULL and can't
-        # drop that via ALTER. Moonraker ignores access_code anyway.
+        # drop that via ALTER. External clients ignore access_code anyway.
         data["access_code"] = data.get("access_code") or ""
         printer = Printer(**data)
     else:
@@ -222,28 +222,36 @@ async def create_printer(
     if printer.is_active:
         await printer_manager.connect_printer(printer)
 
-    # Klipper: best-effort camera auto-detect from Moonraker's webcam list, so a
-    # freshly-added Voron shows its stream without manual URL entry. Never fatal.
-    if printer.connection_type == "klipper" and not printer.external_camera_url:
+    # Best-effort camera auto-detect so a freshly-added external printer shows
+    # its stream without manual URL entry. Never fatal.
+    if printer.connection_type != "bambu" and not printer.external_camera_url:
         try:
-            from backend.app.services.klipper import moonraker_files
+            stream = snap = None
+            if printer.connection_type == "klipper":
+                from backend.app.services.klipper import moonraker_files
 
-            webcams = await moonraker_files.get_webcams(
-                printer.ip_address, printer.moonraker_port or 7125, api_key=printer.moonraker_api_key
-            )
-            if webcams:
-                cam = webcams[0]
-                stream = moonraker_files.absolutise_webcam_url(printer.ip_address, cam.get("stream_url"))
-                snap = moonraker_files.absolutise_webcam_url(printer.ip_address, cam.get("snapshot_url"))
-                if stream:
-                    printer.external_camera_url = stream
-                    printer.external_camera_snapshot_url = snap
-                    printer.external_camera_type = "mjpeg"
-                    printer.external_camera_enabled = True
-                    await db.commit()
-                    await db.refresh(printer)
+                webcams = await moonraker_files.get_webcams(
+                    printer.ip_address, printer.moonraker_port or 7125, api_key=printer.moonraker_api_key
+                )
+                if webcams:
+                    cam = webcams[0]
+                    stream = moonraker_files.absolutise_webcam_url(printer.ip_address, cam.get("stream_url"))
+                    snap = moonraker_files.absolutise_webcam_url(printer.ip_address, cam.get("snapshot_url"))
+            elif printer.connection_type in ("octoprint", "prusalink"):
+                from backend.app.services.octoprint import octoprint_files
+
+                stream = await octoprint_files.get_webcam_snapshot_url(
+                    printer.ip_address, printer.moonraker_port or 80, api_key=printer.moonraker_api_key
+                )
+            if stream:
+                printer.external_camera_url = stream
+                printer.external_camera_snapshot_url = snap
+                printer.external_camera_type = "mjpeg"
+                printer.external_camera_enabled = True
+                await db.commit()
+                await db.refresh(printer)
         except Exception:
-            logger.info("Moonraker webcam auto-detect skipped for printer %s", printer.id, exc_info=True)
+            logger.info("Webcam auto-detect skipped for printer %s", printer.id, exc_info=True)
 
     return printer
 

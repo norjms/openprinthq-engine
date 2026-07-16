@@ -9,7 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.printer import Printer
 from backend.app.services.bambu_mqtt import BambuMQTTClient, MQTTLogEntry, PrinterState, get_stage_name
-from backend.app.services.printer_capabilities import is_klipper
+from backend.app.services.printer_capabilities import (
+    TRANSPORT_MOONRAKER,
+    TRANSPORT_OCTOPRINT,
+    transport_of,
+)
 from backend.app.services.printer_client import PrinterClient
 
 logger = logging.getLogger(__name__)
@@ -567,7 +571,8 @@ class PrinterManager:
             if self._on_drying_complete:
                 self._schedule_async(self._on_drying_complete(printer_id, ams_id))
 
-        if is_klipper(printer):
+        transport = transport_of(printer)
+        if transport == TRANSPORT_MOONRAKER:
             # Klipper / Moonraker printer. Only the transport-agnostic callbacks
             # apply — no AMS/drying/finish-photo. Imported lazily so the
             # websocket/httpx deps aren't pulled in for Bambu-only deployments.
@@ -578,6 +583,25 @@ class PrinterManager:
                 port=printer.moonraker_port or 7125,
                 api_key=printer.moonraker_api_key,
                 model=printer.model,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_OCTOPRINT:
+            # OctoPrint / PrusaLink (REST). moonraker_port/moonraker_api_key are
+            # reused as the generic external host port + API key.
+            from backend.app.services.octoprint.octoprint_client import OctoPrintClient, PrusaLinkClient
+
+            cls = PrusaLinkClient if printer.connection_type == "prusalink" else OctoPrintClient
+            client = cls(
+                ip_address=printer.ip_address,
+                port=printer.moonraker_port or 80,
+                api_key=printer.moonraker_api_key,
                 serial_number=printer.serial_number,
                 on_state_change=on_state_change,
                 on_print_start=on_print_start,
