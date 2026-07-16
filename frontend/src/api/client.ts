@@ -535,6 +535,17 @@ export interface PrinterStatus {
   supports_chamber_heater?: boolean;
 }
 
+export interface KlipperProfileInfo {
+  key: string;
+  label: string;
+  bed: [number, number];
+  extruder_count: number;
+  has_chamber: boolean;
+  has_leveling: boolean;
+  leveling_label: string | null;
+  experimental: boolean;
+}
+
 export interface PrinterCreate {
   name: string;
   connection_type?: 'bambu' | 'klipper';  // defaults to 'bambu' on the backend
@@ -3829,6 +3840,10 @@ export const api = {
       `/printers/${printerId}/home-axes?axes=${axes}`,
       { method: 'POST' }
     ),
+
+  // Supported Klipper/Voron profiles for the add-printer dialog.
+  getKlipperProfiles: () =>
+    request<KlipperProfileInfo[]>(`/printers/klipper/profiles`),
 
   // Klipper / Moonraker control actions (no-op on Bambu printers — server 400s).
   klipperLevel: (printerId: number) =>
