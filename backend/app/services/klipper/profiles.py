@@ -5,10 +5,12 @@ Adding support for another Klipper printer is a *data* change: add one
 required — the connection layer (Moonraker) and the data layer (capabilities)
 read everything they need from the profile.
 
-Covers the Voron family (V0, Trident, 2.4, Switchwire). ``voron_2.4_350`` is the
-profile verified against real hardware; the others share the same code paths
-and differ only in geometry + the bed-levelling macro, but are unverified until
-someone tests them (``experimental=True``).
+Covers the Voron family plus popular Klipper-based consumer printers (Creality
+K-series, Qidi, Sovol, RatRig, Vzbot, FlashForge AD5M, Elegoo Centauri, FLSun,
+Anycubic, BIQU) — all controllable through the existing Moonraker client.
+``voron_2.4_350`` is the profile verified against real hardware; the others
+share the same code paths and differ only in geometry + the bed-levelling
+macro, but are unverified until someone tests them (``experimental=True``).
 
 The profile key is stored in ``Printer.model`` for Klipper rows (Bambu rows
 keep their Bambu model string there).
@@ -62,10 +64,19 @@ class KlipperProfile:
     experimental: bool = True  # False only once verified against real hardware
 
 
-# Macro presets for the levelling styles.
-_QGL = KlipperMacros()  # QUAD_GANTRY_LEVEL (2.4)
-_ZTILT = KlipperMacros(level="Z_TILT_ADJUST")  # Trident
-_NO_LEVEL = KlipperMacros(level=None)  # single-Z (V0, Switchwire)
+# Macro presets for the levelling styles. Klipper printers expose different
+# bed/gantry-levelling commands depending on kinematics + Z-motor count.
+_QGL = KlipperMacros()  # QUAD_GANTRY_LEVEL — 4-Z gantry (Voron 2.4, SV08)
+_ZTILT = KlipperMacros(level="Z_TILT_ADJUST")  # 3-Z bed (Trident, RatRig V-Core)
+_BEDMESH = KlipperMacros(level="BED_MESH_CALIBRATE")  # single-Z CoreXY / bed-slingers
+_DELTA = KlipperMacros(level="DELTA_CALIBRATE")  # delta kinematics (FLSun)
+_NO_LEVEL = KlipperMacros(level=None)  # single-Z, no auto-level (V0, Switchwire)
+
+# Leveling labels paired with the presets above.
+_L_QGL = "Quad Gantry Level"
+_L_ZTILT = "Z Tilt Adjust"
+_L_MESH = "Bed Mesh Calibrate"
+_L_DELTA = "Delta Calibrate"
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +119,49 @@ KLIPPER_PROFILES: dict[str, KlipperProfile] = {
         key="voron_switchwire", label="Voron Switchwire", bed_size_mm=(250, 210),
         macros=_NO_LEVEL, leveling_label=None,
     ),
+    # ===================================================================
+    # Curated popular Klipper printers (Chunk 0). All controllable via the
+    # existing Moonraker client. Geometry from OrcaSlicer profiles; levelling
+    # from kinematics. experimental=True until verified on hardware.
+    # ===================================================================
+    # --- Creality (CoreXY K-series + bed-slinger Ender Klipper) -----------
+    "creality_k1": KlipperProfile(key="creality_k1", label="Creality K1", bed_size_mm=(220, 220), macros=_BEDMESH, leveling_label=_L_MESH),
+    "creality_k1c": KlipperProfile(key="creality_k1c", label="Creality K1C", bed_size_mm=(220, 220), macros=_BEDMESH, leveling_label=_L_MESH),
+    "creality_k1_max": KlipperProfile(key="creality_k1_max", label="Creality K1 Max", bed_size_mm=(300, 300), macros=_BEDMESH, leveling_label=_L_MESH),
+    "creality_k2_plus": KlipperProfile(key="creality_k2_plus", label="Creality K2 Plus", bed_size_mm=(350, 350), macros=_BEDMESH, leveling_label=_L_MESH),
+    "creality_ender3_v3_ke": KlipperProfile(key="creality_ender3_v3_ke", label="Creality Ender-3 V3 KE", bed_size_mm=(220, 220), macros=_BEDMESH, leveling_label=_L_MESH),
+    "creality_ender3_v3": KlipperProfile(key="creality_ender3_v3", label="Creality Ender-3 V3", bed_size_mm=(220, 220), macros=_BEDMESH, leveling_label=_L_MESH),
+    # --- Qidi (CoreXY, heated chamber) -----------------------------------
+    "qidi_plus4": KlipperProfile(key="qidi_plus4", label="Qidi Plus4", bed_size_mm=(305, 305), macros=_BEDMESH, leveling_label=_L_MESH),
+    "qidi_xmax3": KlipperProfile(key="qidi_xmax3", label="Qidi X-Max 3", bed_size_mm=(325, 325), macros=_BEDMESH, leveling_label=_L_MESH),
+    "qidi_xplus3": KlipperProfile(key="qidi_xplus3", label="Qidi X-Plus 3", bed_size_mm=(280, 280), macros=_BEDMESH, leveling_label=_L_MESH),
+    "qidi_q1_pro": KlipperProfile(key="qidi_q1_pro", label="Qidi Q1 Pro", bed_size_mm=(245, 245), macros=_BEDMESH, leveling_label=_L_MESH),
+    # --- Sovol -----------------------------------------------------------
+    "sovol_sv08": KlipperProfile(key="sovol_sv08", label="Sovol SV08", bed_size_mm=(350, 350), macros=_QGL, leveling_label=_L_QGL),
+    "sovol_sv07": KlipperProfile(key="sovol_sv07", label="Sovol SV07", bed_size_mm=(220, 220), macros=_BEDMESH, leveling_label=_L_MESH),
+    "sovol_sv07_plus": KlipperProfile(key="sovol_sv07_plus", label="Sovol SV07 Plus", bed_size_mm=(300, 300), macros=_BEDMESH, leveling_label=_L_MESH),
+    # --- RatRig V-Core (CoreXY, 3-Z tilt) --------------------------------
+    "ratrig_vcore3_300": KlipperProfile(key="ratrig_vcore3_300", label="RatRig V-Core 3 (300mm)", bed_size_mm=(300, 300), macros=_ZTILT, leveling_label=_L_ZTILT),
+    "ratrig_vcore3_400": KlipperProfile(key="ratrig_vcore3_400", label="RatRig V-Core 3 (400mm)", bed_size_mm=(400, 400), macros=_ZTILT, leveling_label=_L_ZTILT),
+    "ratrig_vcore3_500": KlipperProfile(key="ratrig_vcore3_500", label="RatRig V-Core 3 (500mm)", bed_size_mm=(500, 500), macros=_ZTILT, leveling_label=_L_ZTILT),
+    "ratrig_vminion": KlipperProfile(key="ratrig_vminion", label="RatRig V-Minion", bed_size_mm=(180, 180), macros=_BEDMESH, leveling_label=_L_MESH),
+    # --- Vzbot (CoreXY speed) --------------------------------------------
+    "vzbot_235": KlipperProfile(key="vzbot_235", label="Vzbot 235", bed_size_mm=(235, 235), macros=_BEDMESH, leveling_label=_L_MESH),
+    "vzbot_330": KlipperProfile(key="vzbot_330", label="Vzbot 330", bed_size_mm=(330, 330), macros=_BEDMESH, leveling_label=_L_MESH),
+    # --- FlashForge (AD5M = CoreXY Klipper) ------------------------------
+    "flashforge_ad5m": KlipperProfile(key="flashforge_ad5m", label="FlashForge Adventurer 5M", bed_size_mm=(220, 220), macros=_BEDMESH, leveling_label=_L_MESH),
+    "flashforge_ad5m_pro": KlipperProfile(key="flashforge_ad5m_pro", label="FlashForge Adventurer 5M Pro", bed_size_mm=(220, 220), macros=_BEDMESH, leveling_label=_L_MESH),
+    # --- Elegoo Centauri (CoreXY Klipper) --------------------------------
+    "elegoo_centauri": KlipperProfile(key="elegoo_centauri", label="Elegoo Centauri", bed_size_mm=(256, 256), macros=_BEDMESH, leveling_label=_L_MESH),
+    "elegoo_centauri_carbon": KlipperProfile(key="elegoo_centauri_carbon", label="Elegoo Centauri Carbon", bed_size_mm=(256, 256), macros=_BEDMESH, leveling_label=_L_MESH),
+    # --- FLSun (delta) ---------------------------------------------------
+    "flsun_v400": KlipperProfile(key="flsun_v400", label="FLSun V400", bed_size_mm=(300, 300), macros=_DELTA, leveling_label=_L_DELTA),
+    "flsun_s1": KlipperProfile(key="flsun_s1", label="FLSun S1", bed_size_mm=(320, 320), macros=_DELTA, leveling_label=_L_DELTA),
+    # --- Anycubic (Klipper models) ---------------------------------------
+    "anycubic_kobra_s1": KlipperProfile(key="anycubic_kobra_s1", label="Anycubic Kobra S1", bed_size_mm=(250, 250), macros=_BEDMESH, leveling_label=_L_MESH),
+    "anycubic_kobra_3": KlipperProfile(key="anycubic_kobra_3", label="Anycubic Kobra 3", bed_size_mm=(250, 250), macros=_BEDMESH, leveling_label=_L_MESH),
+    # --- BIQU ------------------------------------------------------------
+    "biqu_hurakan": KlipperProfile(key="biqu_hurakan", label="BIQU Hurakan", bed_size_mm=(235, 235), macros=_BEDMESH, leveling_label=_L_MESH),
 }
 
 # Default when a stored profile key is unknown/missing. The 350 2.4 is the
