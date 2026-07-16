@@ -4033,7 +4033,7 @@ async def on_print_complete(printer_id: int, data: dict):
         from datetime import timedelta
 
         from backend.app.models.printer import Printer
-        from backend.app.services.printer_capabilities import is_klipper
+        from backend.app.services.printer_capabilities import is_external as is_klipper
 
         async with async_session() as _klip_session:
             _klip_printer = await _klip_session.get(Printer, printer_id)

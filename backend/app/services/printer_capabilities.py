@@ -1,13 +1,15 @@
-"""Per-printer capability resolution.
+"""Per-printer capability + transport resolution.
 
 The app was originally Bambu-only; many routes and services assume every
-printer speaks MQTT and has AMS, k-profiles, drying, cloud profiles, etc.
-With Klipper/Moonraker printers in the mix, those assumptions must be gated.
+printer speaks MQTT and has AMS, k-profiles, drying, cloud profiles, etc. With
+external printers (Klipper/Moonraker, OctoPrint, PrusaLink, …) in the mix those
+assumptions must be gated.
 
-This module is the single source of truth: given a ``Printer`` row, it returns
-a ``PrinterCapabilities`` describing which feature families apply. Callers gate
-Bambu-only behaviour on these flags (or the ``is_klipper`` shortcut) instead of
-checking ``model`` strings ad hoc.
+This module is the single source of truth. Given a ``Printer`` row it returns:
+- ``capabilities_for()`` — a ``PrinterCapabilities`` describing which feature
+  families apply (callers gate Bambu-only behaviour on these).
+- transport helpers (``is_bambu`` / ``is_external`` / ``is_klipper`` /
+  ``is_octoprint``) + ``transport_of()`` — which client implementation to use.
 
 It duck-types the printer object (reads attributes) so it has no import-time
 dependency on the SQLAlchemy model and stays free of circular imports.
@@ -19,16 +21,30 @@ from dataclasses import dataclass
 
 from backend.app.services.klipper.profiles import KlipperProfile, get_profile
 
-# Connection type values stored in ``Printer.connection_type``.
+# ``Printer.connection_type`` values.
 CONNECTION_BAMBU = "bambu"
-CONNECTION_KLIPPER = "klipper"
+CONNECTION_KLIPPER = "klipper"  # Moonraker (Klipper) transport
+CONNECTION_OCTOPRINT = "octoprint"  # OctoPrint REST transport
+CONNECTION_PRUSALINK = "prusalink"  # PrusaLink (OctoPrint-compatible) transport
+
+# Transport families — which client implementation drives the connection.
+MOONRAKER_TYPES = frozenset({CONNECTION_KLIPPER})
+OCTOPRINT_TYPES = frozenset({CONNECTION_OCTOPRINT, CONNECTION_PRUSALINK})
+NON_BAMBU_TYPES = MOONRAKER_TYPES | OCTOPRINT_TYPES
+# All connection types the API/schema accepts.
+KNOWN_CONNECTION_TYPES = frozenset({CONNECTION_BAMBU}) | NON_BAMBU_TYPES
+
+# Transport identifiers returned by ``transport_of``.
+TRANSPORT_BAMBU = "bambu"
+TRANSPORT_MOONRAKER = "moonraker"
+TRANSPORT_OCTOPRINT = "octoprint"
 
 
 @dataclass(frozen=True)
 class PrinterCapabilities:
     connection_type: str
     # Feature families. Bambu printers have the full set (finer model-specific
-    # gating still lives in printer_manager.supports_* helpers); Klipper
+    # gating still lives in printer_manager.supports_* helpers); external
     # printers only have the live-control basics.
     has_ams: bool
     has_drying: bool
@@ -38,16 +54,20 @@ class PrinterCapabilities:
     has_chamber: bool
     can_control: bool  # pause/resume/stop, set temps, home
     can_print: bool  # upload + start a job
-    # Klipper-only geometry/profile context (None for Bambu).
+    # Klipper-only geometry/profile context (None otherwise).
     klipper_profile: KlipperProfile | None = None
-
-    @property
-    def is_klipper(self) -> bool:
-        return self.connection_type == CONNECTION_KLIPPER
 
     @property
     def is_bambu(self) -> bool:
         return self.connection_type == CONNECTION_BAMBU
+
+    @property
+    def is_klipper(self) -> bool:
+        return self.connection_type in MOONRAKER_TYPES
+
+    @property
+    def is_external(self) -> bool:
+        return self.connection_type != CONNECTION_BAMBU
 
 
 def _connection_type(printer) -> str:
@@ -59,10 +79,10 @@ def capabilities_for(printer) -> PrinterCapabilities:
     """Resolve the capability set for a printer row."""
     conn = _connection_type(printer)
 
-    if conn == CONNECTION_KLIPPER:
+    if conn in MOONRAKER_TYPES:
         profile = get_profile(getattr(printer, "model", None))
         return PrinterCapabilities(
-            connection_type=CONNECTION_KLIPPER,
+            connection_type=conn,
             has_ams=False,
             has_drying=False,
             has_kprofiles=False,
@@ -72,6 +92,22 @@ def capabilities_for(printer) -> PrinterCapabilities:
             can_control=True,
             can_print=True,
             klipper_profile=profile,
+        )
+
+    if conn in OCTOPRINT_TYPES:
+        # OctoPrint / PrusaLink: live control + upload, no Bambu feature families.
+        # Chamber is plugin-dependent on OctoPrint and not modelled yet.
+        return PrinterCapabilities(
+            connection_type=conn,
+            has_ams=False,
+            has_drying=False,
+            has_kprofiles=False,
+            has_cloud=False,
+            has_3mf_archive=False,
+            has_chamber=False,
+            can_control=True,
+            can_print=True,
+            klipper_profile=None,
         )
 
     # Default: full Bambu capability set.
@@ -89,6 +125,34 @@ def capabilities_for(printer) -> PrinterCapabilities:
     )
 
 
+def transport_of(printer) -> str:
+    """Which client transport drives this printer (bambu / moonraker / octoprint)."""
+    conn = _connection_type(printer)
+    if conn in MOONRAKER_TYPES:
+        return TRANSPORT_MOONRAKER
+    if conn in OCTOPRINT_TYPES:
+        return TRANSPORT_OCTOPRINT
+    return TRANSPORT_BAMBU
+
+
+def is_bambu(printer) -> bool:
+    return _connection_type(printer) == CONNECTION_BAMBU
+
+
+def is_external(printer) -> bool:
+    """Any non-Bambu printer (Klipper, OctoPrint, PrusaLink, …).
+
+    This is the correct gate for 'Bambu-only feature' guards — it catches every
+    external transport, not just Klipper.
+    """
+    return _connection_type(printer) != CONNECTION_BAMBU
+
+
 def is_klipper(printer) -> bool:
-    """Convenience shortcut for the most common gate."""
-    return _connection_type(printer) == CONNECTION_KLIPPER
+    """Moonraker-transport printers (Klipper)."""
+    return _connection_type(printer) in MOONRAKER_TYPES
+
+
+def is_octoprint(printer) -> bool:
+    """OctoPrint-transport printers (OctoPrint, PrusaLink)."""
+    return _connection_type(printer) in OCTOPRINT_TYPES

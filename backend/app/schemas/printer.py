@@ -65,14 +65,16 @@ class PrinterCreate(PrinterBase):
 
     @model_validator(mode="after")
     def _check_per_type_requirements(self) -> "PrinterCreate":
-        """Bambu printers need serial + access code; Klipper printers don't."""
+        """Bambu printers need serial + access code; external printers don't."""
+        from backend.app.services.printer_capabilities import KNOWN_CONNECTION_TYPES
+
         if self.connection_type == "bambu":
             if not self.serial_number:
                 raise ValueError("serial_number is required for Bambu printers")
             if not self.access_code:
                 raise ValueError("access_code is required for Bambu printers")
-        elif self.connection_type == "klipper":
-            pass  # serial assigned later; access_code/api_key optional (open LAN)
+        elif self.connection_type in KNOWN_CONNECTION_TYPES:
+            pass  # external: serial synthesised later; access_code/api_key optional
         else:
             raise ValueError(f"unknown connection_type: {self.connection_type!r}")
         return self
