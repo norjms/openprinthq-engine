@@ -1807,6 +1807,15 @@ function PrinterCard({
   // (status, pause/resume/stop, light, home). AMS / drying / k-profiles /
   // print-speed / airduct / calibration are Bambu-only and hidden below.
   const isKlipper = printer.connection_type === 'klipper';
+  // Voron/Klipper profile for this printer (cached, shared across cards) — drives
+  // the levelling action's label (QGL vs Z-Tilt) and whether it's shown at all.
+  const { data: klipperProfiles } = useQuery({
+    queryKey: ['klipperProfiles'],
+    queryFn: () => api.getKlipperProfiles(),
+    enabled: isKlipper,
+    staleTime: Infinity,
+  });
+  const klipperProfile = isKlipper ? klipperProfiles?.find((p) => p.key === printer.model) : undefined;
   const [showMenu, setShowMenu] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteArchives, setDeleteArchives] = useState(true);
@@ -3105,17 +3114,22 @@ function PrinterCard({
                 <Home className="w-4 h-4" />
                 {t('printers.klipperActions.homeAll')}
               </button>
-              <button
-                className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2 disabled:opacity-50"
-                disabled={!status?.connected || klipperLevelMutation.isPending}
-                onClick={() => {
-                  klipperLevelMutation.mutate();
-                  setShowMenu(false);
-                }}
-              >
-                <Grid2x2 className="w-4 h-4" />
-                {t('printers.klipperActions.quadGantryLevel')}
-              </button>
+              {/* Levelling label + visibility come from the profile: QGL on the
+                  2.4, Z-Tilt on the Trident, hidden on single-Z (V0/Switchwire).
+                  Falls back to the generic i18n label until the profile loads. */}
+              {(klipperProfile ? klipperProfile.has_leveling : true) && (
+                <button
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2 disabled:opacity-50"
+                  disabled={!status?.connected || klipperLevelMutation.isPending}
+                  onClick={() => {
+                    klipperLevelMutation.mutate();
+                    setShowMenu(false);
+                  }}
+                >
+                  <Grid2x2 className="w-4 h-4" />
+                  {klipperProfile?.leveling_label || t('printers.klipperActions.quadGantryLevel')}
+                </button>
+              )}
               <button
                 className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-500/10 flex items-center gap-2 disabled:opacity-50"
                 disabled={!status?.connected || klipperEStopMutation.isPending}
@@ -6554,6 +6568,13 @@ export function AddPrinterModal({
     auto_archive: true,
   });
   const isKlipper = form.connection_type === 'klipper';
+  // Supported Voron/Klipper profiles for the model dropdown (data-driven).
+  const { data: klipperProfiles } = useQuery({
+    queryKey: ['klipperProfiles'],
+    queryFn: () => api.getKlipperProfiles(),
+    enabled: isKlipper,
+    staleTime: Infinity,
+  });
 
   // Discovery state
   const [discovering, setDiscovering] = useState(false);
@@ -6985,7 +7006,9 @@ export function AddPrinterModal({
                     value={form.model || 'voron_2.4_350'}
                     onChange={(e) => setForm({ ...form, model: e.target.value })}
                   >
-                    <option value="voron_2.4_350">Voron 2.4 (350mm)</option>
+                    {(klipperProfiles ?? [{ key: 'voron_2.4_350', label: 'Voron 2.4 (350mm)' }]).map((p) => (
+                      <option key={p.key} value={p.key}>{p.label}</option>
+                    ))}
                   </select>
                 </div>
               </>

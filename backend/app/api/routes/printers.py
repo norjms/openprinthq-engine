@@ -133,6 +133,33 @@ async def list_printers(
     return [_serialize_printer(p, include_secret=include_secret) for p in printers]
 
 
+@router.get("/klipper/profiles")
+async def list_klipper_profiles(
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+):
+    """List the supported Klipper/Voron printer profiles for the add dialog.
+
+    Data-driven from the profile registry so the UI stays in sync as profiles
+    are added. Each entry carries geometry + capability hints the frontend uses
+    to render the model dropdown and gate the levelling control.
+    """
+    from backend.app.services.klipper.profiles import list_profiles
+
+    return [
+        {
+            "key": p.key,
+            "label": p.label,
+            "bed": list(p.bed_size_mm),
+            "extruder_count": p.extruder_count,
+            "has_chamber": p.has_chamber,
+            "has_leveling": p.macros.level is not None,
+            "leveling_label": p.leveling_label,
+            "experimental": p.experimental,
+        }
+        for p in list_profiles()
+    ]
+
+
 @router.post("/", response_model=PrinterResponse)
 async def create_printer(
     printer_data: PrinterCreate,
