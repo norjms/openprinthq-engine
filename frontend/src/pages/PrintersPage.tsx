@@ -6569,6 +6569,7 @@ export function AddPrinterModal({
   });
   const isKlipper = form.connection_type === 'klipper';
   const isOctoprint = form.connection_type === 'octoprint' || form.connection_type === 'prusalink';
+  const isDuet = form.connection_type === 'duet';
   const isBambu = form.connection_type === 'bambu';
   // Supported Voron/Klipper profiles for the model dropdown (data-driven).
   const { data: klipperProfiles } = useQuery({
@@ -6917,6 +6918,7 @@ export function AddPrinterModal({
                   { ct: 'klipper', label: t('printers.modal.typeKlipper'), patch: { connection_type: 'klipper' as const, model: 'voron_2.4_350', moonraker_port: 7125 } },
                   { ct: 'octoprint', label: t('printers.modal.typeOctoprint'), patch: { connection_type: 'octoprint' as const, model: '', moonraker_port: 80 } },
                   { ct: 'prusalink', label: t('printers.modal.typePrusalink'), patch: { connection_type: 'prusalink' as const, model: '', moonraker_port: 80 } },
+                  { ct: 'duet', label: t('printers.modal.typeDuet'), patch: { connection_type: 'duet' as const, model: '', moonraker_port: 80 } },
                 ] as const).map(({ ct, label, patch }) => (
                   <button
                     key={ct}
@@ -6978,7 +6980,7 @@ export function AddPrinterModal({
               />
             </div>
             )}
-            {(isKlipper || isOctoprint) && (
+            {(isKlipper || isOctoprint || isDuet) && (
               <>
                 <div>
                   <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.hostPort')}</label>

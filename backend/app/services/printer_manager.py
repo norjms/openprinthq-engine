@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.models.printer import Printer
 from backend.app.services.bambu_mqtt import BambuMQTTClient, MQTTLogEntry, PrinterState, get_stage_name
 from backend.app.services.printer_capabilities import (
+    TRANSPORT_DUET,
     TRANSPORT_MOONRAKER,
     TRANSPORT_OCTOPRINT,
     transport_of,
@@ -599,6 +600,24 @@ class PrinterManager:
 
             cls = PrusaLinkClient if printer.connection_type == "prusalink" else OctoPrintClient
             client = cls(
+                ip_address=printer.ip_address,
+                port=printer.moonraker_port or 80,
+                api_key=printer.moonraker_api_key,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_DUET:
+            # Duet / RepRapFirmware (DWC). moonraker_port/moonraker_api_key are
+            # reused as the DWC port + password.
+            from backend.app.services.duet.duet_client import DuetClient
+
+            client = DuetClient(
                 ip_address=printer.ip_address,
                 port=printer.moonraker_port or 80,
                 api_key=printer.moonraker_api_key,
