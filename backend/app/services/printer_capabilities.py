@@ -26,11 +26,13 @@ CONNECTION_BAMBU = "bambu"
 CONNECTION_KLIPPER = "klipper"  # Moonraker (Klipper) transport
 CONNECTION_OCTOPRINT = "octoprint"  # OctoPrint REST transport
 CONNECTION_PRUSALINK = "prusalink"  # PrusaLink (OctoPrint-compatible) transport
+CONNECTION_DUET = "duet"  # Duet / RepRapFirmware (DWC) transport
 
 # Transport families — which client implementation drives the connection.
 MOONRAKER_TYPES = frozenset({CONNECTION_KLIPPER})
 OCTOPRINT_TYPES = frozenset({CONNECTION_OCTOPRINT, CONNECTION_PRUSALINK})
-NON_BAMBU_TYPES = MOONRAKER_TYPES | OCTOPRINT_TYPES
+DUET_TYPES = frozenset({CONNECTION_DUET})
+NON_BAMBU_TYPES = MOONRAKER_TYPES | OCTOPRINT_TYPES | DUET_TYPES
 # All connection types the API/schema accepts.
 KNOWN_CONNECTION_TYPES = frozenset({CONNECTION_BAMBU}) | NON_BAMBU_TYPES
 
@@ -38,6 +40,7 @@ KNOWN_CONNECTION_TYPES = frozenset({CONNECTION_BAMBU}) | NON_BAMBU_TYPES
 TRANSPORT_BAMBU = "bambu"
 TRANSPORT_MOONRAKER = "moonraker"
 TRANSPORT_OCTOPRINT = "octoprint"
+TRANSPORT_DUET = "duet"
 
 
 @dataclass(frozen=True)
@@ -94,9 +97,9 @@ def capabilities_for(printer) -> PrinterCapabilities:
             klipper_profile=profile,
         )
 
-    if conn in OCTOPRINT_TYPES:
-        # OctoPrint / PrusaLink: live control + upload, no Bambu feature families.
-        # Chamber is plugin-dependent on OctoPrint and not modelled yet.
+    if conn in OCTOPRINT_TYPES or conn in DUET_TYPES:
+        # OctoPrint / PrusaLink / Duet: live control + upload, no Bambu feature
+        # families. Chamber is config/plugin-dependent and not modelled yet.
         return PrinterCapabilities(
             connection_type=conn,
             has_ams=False,
@@ -132,6 +135,8 @@ def transport_of(printer) -> str:
         return TRANSPORT_MOONRAKER
     if conn in OCTOPRINT_TYPES:
         return TRANSPORT_OCTOPRINT
+    if conn in DUET_TYPES:
+        return TRANSPORT_DUET
     return TRANSPORT_BAMBU
 
 
