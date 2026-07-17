@@ -11,6 +11,8 @@ from backend.app.models.printer import Printer
 from backend.app.services.bambu_mqtt import BambuMQTTClient, MQTTLogEntry, PrinterState, get_stage_name
 from backend.app.services.printer_capabilities import (
     TRANSPORT_DUET,
+    TRANSPORT_FLASHFORGE,
+    TRANSPORT_MKS,
     TRANSPORT_MOONRAKER,
     TRANSPORT_OCTOPRINT,
     transport_of,
@@ -621,6 +623,42 @@ class PrinterManager:
                 ip_address=printer.ip_address,
                 port=printer.moonraker_port or 80,
                 api_key=printer.moonraker_api_key,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_FLASHFORGE:
+            # FlashForge legacy TCP protocol. moonraker_port is reused as the
+            # printer's TCP command port (default 8899); no auth on this
+            # transport, so moonraker_api_key is unused.
+            from backend.app.services.flashforge.flashforge_client import FlashForgeClient
+
+            client = FlashForgeClient(
+                ip_address=printer.ip_address,
+                port=printer.moonraker_port or 8899,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_MKS:
+            # MKS WiFi module. moonraker_port is reused as the TCP console
+            # port (default 8080); no auth on this transport, so
+            # moonraker_api_key is unused.
+            from backend.app.services.mks.mks_client import MKSClient
+
+            client = MKSClient(
+                ip_address=printer.ip_address,
+                port=printer.moonraker_port or 8080,
                 serial_number=printer.serial_number,
                 on_state_change=on_state_change,
                 on_print_start=on_print_start,

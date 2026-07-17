@@ -461,6 +461,8 @@ export default {
       typeOctoprint: 'OctoPrint',
       typePrusalink: 'PrusaLink',
       typeDuet: 'Duet / RepRapFirmware',
+      typeFlashforge: 'FlashForge',
+      typeMks: 'MKS',
       hostPort: 'Port',
       apiKeyOptional: 'Clé API (facultatif)',
       apiKeyHelp: "Nécessaire uniquement si l'imprimante exige une clé API / un jeton.",
