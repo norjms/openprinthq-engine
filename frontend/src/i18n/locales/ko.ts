@@ -429,6 +429,8 @@ export default {
       typeOctoprint: 'OctoPrint',
       typePrusalink: 'PrusaLink',
       typeDuet: 'Duet / RepRapFirmware',
+      typeFlashforge: 'FlashForge',
+      typeMks: 'MKS',
       hostPort: '포트',
       apiKeyOptional: 'API 키 (선택)',
       apiKeyHelp: '프린터가 API 키/토큰을 요구할 때만 필요합니다.',
