@@ -27,12 +27,16 @@ CONNECTION_KLIPPER = "klipper"  # Moonraker (Klipper) transport
 CONNECTION_OCTOPRINT = "octoprint"  # OctoPrint REST transport
 CONNECTION_PRUSALINK = "prusalink"  # PrusaLink (OctoPrint-compatible) transport
 CONNECTION_DUET = "duet"  # Duet / RepRapFirmware (DWC) transport
+CONNECTION_FLASHFORGE = "flashforge"  # FlashForge legacy TCP transport
+CONNECTION_MKS = "mks"  # MKS WiFi module (HTTP upload + TCP console) transport
 
 # Transport families — which client implementation drives the connection.
 MOONRAKER_TYPES = frozenset({CONNECTION_KLIPPER})
 OCTOPRINT_TYPES = frozenset({CONNECTION_OCTOPRINT, CONNECTION_PRUSALINK})
 DUET_TYPES = frozenset({CONNECTION_DUET})
-NON_BAMBU_TYPES = MOONRAKER_TYPES | OCTOPRINT_TYPES | DUET_TYPES
+FLASHFORGE_TYPES = frozenset({CONNECTION_FLASHFORGE})
+MKS_TYPES = frozenset({CONNECTION_MKS})
+NON_BAMBU_TYPES = MOONRAKER_TYPES | OCTOPRINT_TYPES | DUET_TYPES | FLASHFORGE_TYPES | MKS_TYPES
 # All connection types the API/schema accepts.
 KNOWN_CONNECTION_TYPES = frozenset({CONNECTION_BAMBU}) | NON_BAMBU_TYPES
 
@@ -41,6 +45,8 @@ TRANSPORT_BAMBU = "bambu"
 TRANSPORT_MOONRAKER = "moonraker"
 TRANSPORT_OCTOPRINT = "octoprint"
 TRANSPORT_DUET = "duet"
+TRANSPORT_FLASHFORGE = "flashforge"
+TRANSPORT_MKS = "mks"
 
 
 @dataclass(frozen=True)
@@ -97,9 +103,10 @@ def capabilities_for(printer) -> PrinterCapabilities:
             klipper_profile=profile,
         )
 
-    if conn in OCTOPRINT_TYPES or conn in DUET_TYPES:
-        # OctoPrint / PrusaLink / Duet: live control + upload, no Bambu feature
-        # families. Chamber is config/plugin-dependent and not modelled yet.
+    if conn in OCTOPRINT_TYPES or conn in DUET_TYPES or conn in FLASHFORGE_TYPES or conn in MKS_TYPES:
+        # OctoPrint / PrusaLink / Duet / FlashForge / MKS: live control +
+        # upload, no Bambu feature families. Chamber is config/plugin-dependent
+        # and not modelled yet.
         return PrinterCapabilities(
             connection_type=conn,
             has_ams=False,
@@ -137,6 +144,10 @@ def transport_of(printer) -> str:
         return TRANSPORT_OCTOPRINT
     if conn in DUET_TYPES:
         return TRANSPORT_DUET
+    if conn in FLASHFORGE_TYPES:
+        return TRANSPORT_FLASHFORGE
+    if conn in MKS_TYPES:
+        return TRANSPORT_MKS
     return TRANSPORT_BAMBU
 
 

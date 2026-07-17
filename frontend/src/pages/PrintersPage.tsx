@@ -6570,6 +6570,8 @@ export function AddPrinterModal({
   const isKlipper = form.connection_type === 'klipper';
   const isOctoprint = form.connection_type === 'octoprint' || form.connection_type === 'prusalink';
   const isDuet = form.connection_type === 'duet';
+  const isFlashforge = form.connection_type === 'flashforge';
+  const isMks = form.connection_type === 'mks';
   const isBambu = form.connection_type === 'bambu';
   // Supported Voron/Klipper profiles for the model dropdown (data-driven).
   const { data: klipperProfiles } = useQuery({
@@ -6919,6 +6921,8 @@ export function AddPrinterModal({
                   { ct: 'octoprint', label: t('printers.modal.typeOctoprint'), patch: { connection_type: 'octoprint' as const, model: '', moonraker_port: 80 } },
                   { ct: 'prusalink', label: t('printers.modal.typePrusalink'), patch: { connection_type: 'prusalink' as const, model: '', moonraker_port: 80 } },
                   { ct: 'duet', label: t('printers.modal.typeDuet'), patch: { connection_type: 'duet' as const, model: '', moonraker_port: 80 } },
+                  { ct: 'flashforge', label: t('printers.modal.typeFlashforge'), patch: { connection_type: 'flashforge' as const, model: '', moonraker_port: 8899 } },
+                  { ct: 'mks', label: t('printers.modal.typeMks'), patch: { connection_type: 'mks' as const, model: '', moonraker_port: 8080 } },
                 ] as const).map(({ ct, label, patch }) => (
                   <button
                     key={ct}
@@ -6980,7 +6984,7 @@ export function AddPrinterModal({
               />
             </div>
             )}
-            {(isKlipper || isOctoprint || isDuet) && (
+            {(isKlipper || isOctoprint || isDuet || isFlashforge || isMks) && (
               <>
                 <div>
                   <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.hostPort')}</label>
@@ -6989,11 +6993,12 @@ export function AddPrinterModal({
                     min={1}
                     max={65535}
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                    value={form.moonraker_port ?? (isKlipper ? 7125 : 80)}
-                    onChange={(e) => setForm({ ...form, moonraker_port: Number(e.target.value) || (isKlipper ? 7125 : 80) })}
-                    placeholder={isKlipper ? '7125' : '80'}
+                    value={form.moonraker_port ?? (isKlipper ? 7125 : isFlashforge ? 8899 : isMks ? 8080 : 80)}
+                    onChange={(e) => setForm({ ...form, moonraker_port: Number(e.target.value) || (isKlipper ? 7125 : isFlashforge ? 8899 : isMks ? 8080 : 80) })}
+                    placeholder={isKlipper ? '7125' : isFlashforge ? '8899' : isMks ? '8080' : '80'}
                   />
                 </div>
+                {!isFlashforge && !isMks && (
                 <div>
                   <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.apiKeyOptional')}</label>
                   <input
@@ -7005,6 +7010,7 @@ export function AddPrinterModal({
                   />
                   <p className="text-xs text-bambu-gray mt-1">{isKlipper ? t('printers.modal.moonrakerApiKeyHelp') : t('printers.modal.apiKeyHelp')}</p>
                 </div>
+                )}
               </>
             )}
             {isKlipper && (
