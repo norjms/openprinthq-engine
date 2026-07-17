@@ -460,6 +460,7 @@ export default {
       modelOptional: 'Modelo (opcional)',
       typeOctoprint: 'OctoPrint',
       typePrusalink: 'PrusaLink',
+      typeDuet: 'Duet / RepRapFirmware',
       hostPort: 'Porta',
       apiKeyOptional: 'Chave de API (opcional)',
       apiKeyHelp: 'Necessário apenas se a impressora exigir uma chave de API ou token.',

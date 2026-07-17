@@ -2593,6 +2593,65 @@ class PrintScheduler:
 
         logger.info("Queue item %s: OctoPrint print started on %s (%s)", item.id, printer.name, remote_name)
 
+    async def _start_print_duet(self, db: AsyncSession, item: PrintQueueItem, printer: Printer):
+        """Dispatch a queued print to a Duet / RepRapFirmware printer (live-only).
+
+        Uploads the library ``.gcode`` to ``0:/gcodes/`` and starts it with M32.
+        """
+        from backend.app.services.duet import duet_files
+
+        def _fail(msg: str):
+            item.status = "failed"
+            item.error_message = msg
+            item.completed_at = datetime.now(timezone.utc)
+
+        if not item.library_file_id:
+            _fail("Duet printers can only print library .gcode files")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        result = await db.execute(LibraryFile.active().where(LibraryFile.id == item.library_file_id))
+        library_file = result.scalar_one_or_none()
+        if not library_file:
+            _fail("Library file not found")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        lib_path = Path(library_file.file_path)
+        file_path = lib_path if lib_path.is_absolute() else settings.base_dir / library_file.file_path
+        filename = library_file.filename
+        if not filename.lower().endswith(".gcode"):
+            _fail("Duet printers can only print plain .gcode files")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        remote_name = Path(filename).name
+        await self._propagate_owner_to_printer_manager(db, item)
+        item.status = "printing"
+        item.started_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        try:
+            await duet_files.upload_gcode(
+                printer.ip_address,
+                printer.moonraker_port or 80,
+                str(file_path),
+                remote_name=remote_name,
+                password=printer.moonraker_api_key,
+                start_print=True,
+            )
+        except Exception as e:
+            logger.error("Queue item %s: Duet upload failed: %s", item.id, e)
+            _fail(f"Failed to upload/start on Duet: {e}")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        logger.info("Queue item %s: Duet print started on %s (%s)", item.id, printer.name, remote_name)
+
     async def _start_print(self, db: AsyncSession, item: PrintQueueItem):
         """Upload file and start print for a queue item.
 
@@ -2644,6 +2703,7 @@ class PrintScheduler:
         # fully separate from the Bambu FTP/3MF/AMS/archive flow below (which
         # can't apply — .gcode isn't a 3MF, there's no AMS, upload is HTTP).
         from backend.app.services.printer_capabilities import (
+            TRANSPORT_DUET,
             TRANSPORT_MOONRAKER,
             TRANSPORT_OCTOPRINT,
             transport_of,
@@ -2655,6 +2715,9 @@ class PrintScheduler:
             return
         if transport == TRANSPORT_OCTOPRINT:
             await self._start_print_octoprint(db, item, printer)
+            return
+        if transport == TRANSPORT_DUET:
+            await self._start_print_duet(db, item, printer)
             return
 
         # Determine source: archive or library file

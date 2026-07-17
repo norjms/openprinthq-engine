@@ -460,6 +460,7 @@ export default {
       modelOptional: 'Model (isteğe bağlı)',
       typeOctoprint: 'OctoPrint',
       typePrusalink: 'PrusaLink',
+      typeDuet: 'Duet / RepRapFirmware',
       hostPort: 'Bağlantı noktası',
       apiKeyOptional: 'API anahtarı (isteğe bağlı)',
       apiKeyHelp: 'Yalnızca yazıcı bir API anahtarı / belirteç gerektiriyorsa gereklidir.',
