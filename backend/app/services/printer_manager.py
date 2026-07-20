@@ -14,6 +14,7 @@ from backend.app.services.printer_capabilities import (
     TRANSPORT_FLASHFORGE,
     TRANSPORT_MKS,
     TRANSPORT_MOONRAKER,
+    TRANSPORT_OBICO,
     TRANSPORT_OCTOPRINT,
     transport_of,
 )
@@ -666,6 +667,20 @@ class PrinterManager:
                 on_print_running_observed=on_print_running_observed,
                 on_layer_change=on_layer_change,
                 on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_OBICO:
+            # Obico (upload-only relay). ip_address holds the Obico server
+            # URL, moonraker_api_key the Obico API key; no live status (see
+            # services/obico/__init__.py) — connect() just starts a
+            # reachability ping.
+            from backend.app.services.obico.obico_client import ObicoClient
+
+            client = ObicoClient(
+                ip_address=printer.ip_address,
+                api_key=printer.moonraker_api_key,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
             )
             client.connect(loop=self._loop or asyncio.get_event_loop())
         else:
