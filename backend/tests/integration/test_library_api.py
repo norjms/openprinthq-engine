@@ -1499,15 +1499,18 @@ class TestPrintFileUploadValidation:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_library_rejects_raw_gcode_upload(self, async_client: AsyncClient, db_session):
-        """``Foo.gcode`` direct uploads are blocked at the library route —
-        the dispatcher would otherwise append ``.3mf`` and ship raw gcode
-        to the printer as a fake 3MF."""
+    async def test_library_accepts_raw_gcode_upload(self, async_client: AsyncClient, db_session):
+        """``Foo.gcode`` direct uploads succeed at the library route — plain
+        .gcode is a required input for the Klipper/OctoPrint/Duet/FlashForge/
+        MKS/Obico transports, so the upload route can't blanket-reject it.
+        Bambu's own version of this guard (dispatch would otherwise append
+        ``.3mf`` and ship raw gcode as a fake 3MF, #1401) now lives in
+        ``print_scheduler.py``'s ``_start_print``, which knows the actual
+        target transport — see the scheduler dispatch tests for that."""
         files = {"file": ("plate_1.gcode", b"; raw gcode\nG28\n", "application/octet-stream")}
         response = await async_client.post("/api/v1/library/files", files=files)
-        assert response.status_code == 400
-        # Error message must name the actual remedy, not just say "invalid".
-        assert "gcode.3mf" in response.json()["detail"]
+        assert response.status_code == 200
+        assert response.json()["filename"] == "plate_1.gcode"
 
     @pytest.mark.asyncio
     @pytest.mark.integration
