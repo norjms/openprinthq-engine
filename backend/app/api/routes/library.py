@@ -189,23 +189,25 @@ def calculate_file_hash(file_path: Path) -> str:
 
 
 def validate_print_file_upload(filename: str, content: bytes) -> None:
-    """Reject obviously-unprintable uploads early so the printer doesn't see them (#1401).
+    """Reject obviously-corrupt uploads early so no printer ever sees them (#1401).
 
-    Bambu printers in network mode only parse ``.gcode.3mf`` zip containers
-    — raw ``.gcode`` and corrupt/non-zip ``.3mf`` uploads cascade into a
-    confusing "Printing stopped because the printer was unable to parse the
-    3mf file" rejection 30 seconds after the user clicks Print. The
-    the queue dispatch path appends ``.3mf`` to a raw-gcode filename when
-    constructing the FTP destination, which is how the printer ends up with a
-    file named ``.gcode.3mf`` whose body is raw gcode — exactly the shape that
-    triggers the firmware parse failure. Catching both classes here gives an
-    actionable error at the
-    upload itself.
+    Bambu printers in network mode only parse ``.gcode.3mf`` zip containers —
+    a corrupt/non-zip ``.3mf`` cascades into a confusing "Printing stopped
+    because the printer was unable to parse the 3mf file" rejection 30
+    seconds after the user clicks Print. Catching that here gives an
+    actionable error at the upload itself.
+
+    Raw ``.gcode`` uploads are NOT rejected here — they're a required input
+    for the Klipper/OctoPrint/Duet/FlashForge/MKS/Obico transports, which is
+    exactly the shape #1401 didn't anticipate. Bambu's own version of this
+    guard (rejecting a non-``.3mf`` file before FTP dispatch, since
+    ``derive_remote_filename()`` would otherwise mislabel it) lives at the
+    point that actually knows the target is Bambu: ``print_scheduler.py``'s
+    ``_start_print``.
 
     Compares the filename suffix rather than ``os.path.splitext`` because
     compound extensions like ``.gcode.3mf`` show up as just ``.3mf`` after
-    ``splitext`` — same content validation needs to fire for both
-    single-``.3mf`` and ``.gcode.3mf`` uploads.
+    ``splitext``.
 
     Raises ``HTTPException(400, ...)`` with a human-readable message on
     rejection; returns ``None`` for valid (or irrelevant — e.g. STL,
@@ -213,18 +215,6 @@ def validate_print_file_upload(filename: str, content: bytes) -> None:
     """
     lower_filename = filename.lower()
     is_3mf_upload = lower_filename.endswith(".3mf")
-    is_raw_gcode_upload = lower_filename.endswith(".gcode") and not lower_filename.endswith(".gcode.3mf")
-
-    if is_raw_gcode_upload:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Raw .gcode files can't be printed on Bambu printers in network mode — "
-                "they need a .gcode.3mf zip container (gcode plus metadata). Re-export from "
-                "your slicer and make sure the file ends in '.gcode.3mf', not just '.gcode'. "
-                "If your OS hides extensions, double-check the file with the extension visible."
-            ),
-        )
 
     if is_3mf_upload and not content.startswith(b"PK\x03\x04"):
         raise HTTPException(
