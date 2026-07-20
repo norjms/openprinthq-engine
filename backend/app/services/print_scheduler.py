@@ -2947,6 +2947,19 @@ class PrintScheduler:
             file_path = settings.base_dir / archive.file_path
             filename = archive.filename
 
+            if not filename.lower().endswith(".3mf"):
+                item.status = "failed"
+                item.error_message = (
+                    "Raw .gcode files can't be printed on Bambu printers in network mode — "
+                    "they need a .gcode.3mf zip container (gcode plus metadata). Re-export from "
+                    "your slicer and make sure the file ends in '.gcode.3mf', not just '.gcode'."
+                )
+                item.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                logger.error("Queue item %s: raw .gcode file can't dispatch to a Bambu printer: %s", item.id, filename)
+                await self._power_off_if_needed(db, item)
+                return
+
         elif item.library_file_id:
             # Print from library file (file manager)
             result = await db.execute(LibraryFile.active().where(LibraryFile.id == item.library_file_id))
@@ -2963,6 +2976,33 @@ class PrintScheduler:
             lib_path = Path(library_file.file_path)
             file_path = lib_path if lib_path.is_absolute() else settings.base_dir / library_file.file_path
             filename = library_file.filename
+
+            # Bambu printers in network mode only parse .gcode.3mf zip
+            # containers — derive_remote_filename() (used below the archive
+            # copy, at FTP-upload time) appends a single ".3mf" to whatever
+            # filename it's given, so a raw ".gcode" file would land on the
+            # printer's SD card as "name.gcode.3mf" while its body is still
+            # plain gcode, triggering a firmware parse failure ~30s into the
+            # print (#1401). This used to be caught at upload time (any raw
+            # .gcode was rejected outright), which also blocked the many
+            # non-Bambu transports (Klipper/OctoPrint/Duet/FlashForge/MKS/
+            # Obico, all handled above and already returned by this point)
+            # that require plain .gcode library files — checked here, before
+            # the archive-copy below, so it only fires for the transport it
+            # actually protects and does no wasted work for a file we're
+            # about to reject anyway.
+            if not filename.lower().endswith(".3mf"):
+                item.status = "failed"
+                item.error_message = (
+                    "Raw .gcode files can't be printed on Bambu printers in network mode — "
+                    "they need a .gcode.3mf zip container (gcode plus metadata). Re-export from "
+                    "your slicer and make sure the file ends in '.gcode.3mf', not just '.gcode'."
+                )
+                item.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                logger.error("Queue item %s: raw .gcode file can't dispatch to a Bambu printer: %s", item.id, filename)
+                await self._power_off_if_needed(db, item)
+                return
 
             # Create archive from library file so usage tracking has access to the 3MF
             queue_item_id = item.id
