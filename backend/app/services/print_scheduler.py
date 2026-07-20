@@ -2768,6 +2768,82 @@ class PrintScheduler:
 
         logger.info("Queue item %s: MKS print started on %s (%s)", item.id, printer.name, remote_name)
 
+    async def _start_print_obico(self, db: AsyncSession, item: PrintQueueItem, printer: Printer):
+        """Dispatch a queued print to Obico (upload-only relay, live-only).
+
+        Uploads via Obico's ``/api/v1/g_code_files/`` with ``print=true`` so
+        Obico starts it immediately. Bambuddy has no way to observe progress
+        or completion after this (see ``services/obico/__init__.py``) — the
+        queue item is marked completed on a successful dispatch; ongoing
+        status lives on the Obico dashboard, not here.
+        """
+        from backend.app.services.obico import obico_files
+
+        def _fail(msg: str):
+            item.status = "failed"
+            item.error_message = msg
+            item.completed_at = datetime.now(timezone.utc)
+
+        if not item.library_file_id:
+            _fail("Obico printers can only print library .gcode files")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        result = await db.execute(LibraryFile.active().where(LibraryFile.id == item.library_file_id))
+        library_file = result.scalar_one_or_none()
+        if not library_file:
+            _fail("Library file not found")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        lib_path = Path(library_file.file_path)
+        file_path = lib_path if lib_path.is_absolute() else settings.base_dir / library_file.file_path
+        filename = library_file.filename
+        if not filename.lower().endswith(".gcode"):
+            _fail("Obico printers can only print plain .gcode files")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        if not printer.moonraker_api_key or not printer.model:
+            _fail("Obico printer is missing its API key or Obico printer ID")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        remote_name = Path(filename).name
+        await self._propagate_owner_to_printer_manager(db, item)
+        item.status = "printing"
+        item.started_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        try:
+            await obico_files.upload_gcode(
+                printer.ip_address,
+                printer.moonraker_api_key,
+                printer.model,
+                str(file_path),
+                remote_name=remote_name,
+                start_print=True,
+            )
+        except Exception as e:
+            logger.error("Queue item %s: Obico upload failed: %s", item.id, e)
+            _fail(f"Failed to upload/start on Obico: {e}")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        # No progress/completion signal exists for Obico — dispatch success is
+        # the end of Bambuddy's involvement.
+        item.status = "completed"
+        item.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+        logger.info(
+            "Queue item %s: dispatched to Obico on %s (%s) — monitor progress in Obico", item.id, printer.name, remote_name
+        )
+
     async def _start_print(self, db: AsyncSession, item: PrintQueueItem):
         """Upload file and start print for a queue item.
 
@@ -2823,6 +2899,7 @@ class PrintScheduler:
             TRANSPORT_FLASHFORGE,
             TRANSPORT_MKS,
             TRANSPORT_MOONRAKER,
+            TRANSPORT_OBICO,
             TRANSPORT_OCTOPRINT,
             transport_of,
         )
@@ -2842,6 +2919,9 @@ class PrintScheduler:
             return
         if transport == TRANSPORT_MKS:
             await self._start_print_mks(db, item, printer)
+            return
+        if transport == TRANSPORT_OBICO:
+            await self._start_print_obico(db, item, printer)
             return
 
         # Determine source: archive or library file

@@ -29,6 +29,7 @@ CONNECTION_PRUSALINK = "prusalink"  # PrusaLink (OctoPrint-compatible) transport
 CONNECTION_DUET = "duet"  # Duet / RepRapFirmware (DWC) transport
 CONNECTION_FLASHFORGE = "flashforge"  # FlashForge legacy TCP transport
 CONNECTION_MKS = "mks"  # MKS WiFi module (HTTP upload + TCP console) transport
+CONNECTION_OBICO = "obico"  # Obico cloud relay (upload-only) transport
 
 # Transport families — which client implementation drives the connection.
 MOONRAKER_TYPES = frozenset({CONNECTION_KLIPPER})
@@ -36,7 +37,8 @@ OCTOPRINT_TYPES = frozenset({CONNECTION_OCTOPRINT, CONNECTION_PRUSALINK})
 DUET_TYPES = frozenset({CONNECTION_DUET})
 FLASHFORGE_TYPES = frozenset({CONNECTION_FLASHFORGE})
 MKS_TYPES = frozenset({CONNECTION_MKS})
-NON_BAMBU_TYPES = MOONRAKER_TYPES | OCTOPRINT_TYPES | DUET_TYPES | FLASHFORGE_TYPES | MKS_TYPES
+OBICO_TYPES = frozenset({CONNECTION_OBICO})
+NON_BAMBU_TYPES = MOONRAKER_TYPES | OCTOPRINT_TYPES | DUET_TYPES | FLASHFORGE_TYPES | MKS_TYPES | OBICO_TYPES
 # All connection types the API/schema accepts.
 KNOWN_CONNECTION_TYPES = frozenset({CONNECTION_BAMBU}) | NON_BAMBU_TYPES
 
@@ -47,6 +49,7 @@ TRANSPORT_OCTOPRINT = "octoprint"
 TRANSPORT_DUET = "duet"
 TRANSPORT_FLASHFORGE = "flashforge"
 TRANSPORT_MKS = "mks"
+TRANSPORT_OBICO = "obico"
 
 
 @dataclass(frozen=True)
@@ -120,6 +123,23 @@ def capabilities_for(printer) -> PrinterCapabilities:
             klipper_profile=None,
         )
 
+    if conn in OBICO_TYPES:
+        # Obico: upload-only relay — no live status, no pause/resume/stop/gcode/
+        # light API (see services/obico/__init__.py for why). can_control is
+        # False here, unlike every other external transport.
+        return PrinterCapabilities(
+            connection_type=conn,
+            has_ams=False,
+            has_drying=False,
+            has_kprofiles=False,
+            has_cloud=False,
+            has_3mf_archive=False,
+            has_chamber=False,
+            can_control=False,
+            can_print=True,
+            klipper_profile=None,
+        )
+
     # Default: full Bambu capability set.
     return PrinterCapabilities(
         connection_type=CONNECTION_BAMBU,
@@ -148,6 +168,8 @@ def transport_of(printer) -> str:
         return TRANSPORT_FLASHFORGE
     if conn in MKS_TYPES:
         return TRANSPORT_MKS
+    if conn in OBICO_TYPES:
+        return TRANSPORT_OBICO
     return TRANSPORT_BAMBU
 
 

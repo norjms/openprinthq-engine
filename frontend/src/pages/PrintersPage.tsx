@@ -6572,6 +6572,7 @@ export function AddPrinterModal({
   const isDuet = form.connection_type === 'duet';
   const isFlashforge = form.connection_type === 'flashforge';
   const isMks = form.connection_type === 'mks';
+  const isObico = form.connection_type === 'obico';
   const isBambu = form.connection_type === 'bambu';
   // Supported Voron/Klipper profiles for the model dropdown (data-driven).
   const { data: klipperProfiles } = useQuery({
@@ -6634,7 +6635,7 @@ export function AddPrinterModal({
     // External printers (Klipper/OctoPrint/PrusaLink) use HTTP APIs, not the
     // Bambu MQTT diagnostic. Skip the pre-flight and add directly.
     if (!isBambu) {
-      const model = isKlipper ? (form.model || 'voron_2.4_350') : undefined;
+      const model = isKlipper ? (form.model || 'voron_2.4_350') : isObico ? form.model : undefined;
       onAdd({ ...form, model, serial_number: undefined, access_code: undefined });
       return;
     }
@@ -6923,6 +6924,7 @@ export function AddPrinterModal({
                   { ct: 'duet', label: t('printers.modal.typeDuet'), patch: { connection_type: 'duet' as const, model: '', moonraker_port: 80 } },
                   { ct: 'flashforge', label: t('printers.modal.typeFlashforge'), patch: { connection_type: 'flashforge' as const, model: '', moonraker_port: 8899 } },
                   { ct: 'mks', label: t('printers.modal.typeMks'), patch: { connection_type: 'mks' as const, model: '', moonraker_port: 8080 } },
+                  { ct: 'obico', label: t('printers.modal.typeObico'), patch: { connection_type: 'obico' as const, model: '' } },
                 ] as const).map(({ ct, label, patch }) => (
                   <button
                     key={ct}
@@ -6985,32 +6987,56 @@ export function AddPrinterModal({
             </div>
             )}
             {(isKlipper || isOctoprint || isDuet || isFlashforge || isMks) && (
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.hostPort')}</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={65535}
+                  className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.moonraker_port ?? (isKlipper ? 7125 : isFlashforge ? 8899 : isMks ? 8080 : 80)}
+                  onChange={(e) => setForm({ ...form, moonraker_port: Number(e.target.value) || (isKlipper ? 7125 : isFlashforge ? 8899 : isMks ? 8080 : 80) })}
+                  placeholder={isKlipper ? '7125' : isFlashforge ? '8899' : isMks ? '8080' : '80'}
+                />
+              </div>
+            )}
+            {(isKlipper || isOctoprint || isDuet) && (
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.apiKeyOptional')}</label>
+                <input
+                  type="password"
+                  className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.moonraker_api_key || ''}
+                  onChange={(e) => setForm({ ...form, moonraker_api_key: e.target.value })}
+                  placeholder={isKlipper ? t('printers.modal.moonrakerApiKeyPlaceholder') : ''}
+                />
+                <p className="text-xs text-bambu-gray mt-1">{isKlipper ? t('printers.modal.moonrakerApiKeyHelp') : t('printers.modal.apiKeyHelp')}</p>
+              </div>
+            )}
+            {isObico && (
               <>
                 <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.hostPort')}</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={65535}
-                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                    value={form.moonraker_port ?? (isKlipper ? 7125 : isFlashforge ? 8899 : isMks ? 8080 : 80)}
-                    onChange={(e) => setForm({ ...form, moonraker_port: Number(e.target.value) || (isKlipper ? 7125 : isFlashforge ? 8899 : isMks ? 8080 : 80) })}
-                    placeholder={isKlipper ? '7125' : isFlashforge ? '8899' : isMks ? '8080' : '80'}
-                  />
-                </div>
-                {!isFlashforge && !isMks && (
-                <div>
-                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.apiKeyOptional')}</label>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.obicoApiKey')}</label>
                   <input
                     type="password"
+                    required
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                     value={form.moonraker_api_key || ''}
                     onChange={(e) => setForm({ ...form, moonraker_api_key: e.target.value })}
-                    placeholder={isKlipper ? t('printers.modal.moonrakerApiKeyPlaceholder') : ''}
                   />
-                  <p className="text-xs text-bambu-gray mt-1">{isKlipper ? t('printers.modal.moonrakerApiKeyHelp') : t('printers.modal.apiKeyHelp')}</p>
+                  <p className="text-xs text-bambu-gray mt-1">{t('printers.modal.obicoApiKeyHelp')}</p>
                 </div>
-                )}
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.obicoPrinterId')}</label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    value={form.model || ''}
+                    onChange={(e) => setForm({ ...form, model: e.target.value })}
+                  />
+                  <p className="text-xs text-bambu-gray mt-1">{t('printers.modal.obicoPrinterIdHelp')}</p>
+                </div>
               </>
             )}
             {isKlipper && (
