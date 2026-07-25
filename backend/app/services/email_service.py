@@ -445,7 +445,7 @@ async def create_password_reset_link_email_from_template(
 
 
 async def create_welcome_email_from_template(
-    db: AsyncSession, username: str, password: str, login_url: str, app_name: str = "BamBuddy"
+    db: AsyncSession, username: str, password: str, login_url: str, app_name: str = "OpenPrintHQ"
 ) -> tuple[str, str, str]:
     """Create welcome email content using notification template from database.
 
@@ -507,7 +507,7 @@ async def create_welcome_email_from_template(
 
 
 async def create_password_reset_email_from_template(
-    db: AsyncSession, username: str, password: str, login_url: str, app_name: str = "BamBuddy"
+    db: AsyncSession, username: str, password: str, login_url: str, app_name: str = "OpenPrintHQ"
 ) -> tuple[str, str, str]:
     """Create password reset email content using notification template from database.
 
