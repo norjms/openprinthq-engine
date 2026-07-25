@@ -1,0 +1,50 @@
+OpenPrintHQ
+Copyright (C) 2026 OpenPrintHQ contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See the LICENSE file for the full text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+--------------------------------------------------------------------------------
+Attribution / derivative-work notice (AGPL-3.0 §5)
+--------------------------------------------------------------------------------
+
+The OpenPrintHQ print engine is a derivative work of "Bambuddy":
+
+    Bambuddy — https://github.com/maziggy/bambuddy
+    Copyright (C) maziggy and the Bambuddy contributors
+    Licensed under the GNU Affero General Public License v3.0.
+
+The upstream project's own README, copyright notices, and license are retained
+in this repository. OpenPrintHQ continues to license the combined work under
+AGPL-3.0-or-later, as required by the upstream license.
+
+Modifications made by OpenPrintHQ relative to upstream Bambuddy include, among
+others:
+
+  - Multi-vendor printer support beyond Bambu Lab: Snapmaker adapter and
+    extended Klipper/Moonraker, Prusa (PrusaLink), OctoPrint, Duet/RepRap,
+    FlashForge and MKS connection types.
+  - Integration of OrcaSlicer as the built-in slicer via a sidecar service.
+  - A separate multi-tenant control-plane and web frontend (instance-per-user),
+    of which this engine is the per-tenant backend.
+  - Product rebranding of user-facing strings (API metadata, notification and
+    email sender name, MFA issuer) from "Bambuddy" to "OpenPrintHQ".
+
+The authoritative, per-file record of changes is the git history of this
+repository. Functional identifiers that form part of an external contract
+(e.g. MQTT topic prefixes, environment-variable names, backup archive layout)
+have intentionally been left unchanged for compatibility.
+
+--------------------------------------------------------------------------------
+Network use (AGPL-3.0 §13)
+--------------------------------------------------------------------------------
+
+Users who interact with this software over a network are entitled to receive
+the Corresponding Source of the running version. OpenPrintHQ provides a source
+link in the application footer to satisfy this requirement.
