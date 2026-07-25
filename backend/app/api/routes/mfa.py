@@ -712,7 +712,7 @@ async def setup_totp(
 
     await db.commit()
 
-    return TOTPSetupResponse(secret=secret, qr_code_b64=qr_b64, issuer="Bambuddy")
+    return TOTPSetupResponse(secret=secret, qr_code_b64=qr_b64, issuer="OpenPrintHQ")
 
 
 @router.post("/2fa/totp/enable", response_model=TOTPEnableResponse)

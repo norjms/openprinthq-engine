@@ -185,7 +185,7 @@ class NotificationService:
         """Build notification title and body from template."""
         # Add common variables
         variables["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-        variables["app_name"] = "Bambuddy"
+        variables["app_name"] = "OpenPrintHQ"
 
         template = await self._get_template(db, event_type)
         if not template:

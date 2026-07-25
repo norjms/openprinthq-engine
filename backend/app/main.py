@@ -6359,7 +6359,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=app_settings.app_name,
-    description="Archive and manage Bambu Lab 3MF files",
+    description="OpenPrintHQ — self-hosted multi-vendor 3D print management",
     version=APP_VERSION,
     lifespan=lifespan,
 )
