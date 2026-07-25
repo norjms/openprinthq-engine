@@ -48,3 +48,20 @@ Network use (AGPL-3.0 §13)
 Users who interact with this software over a network are entitled to receive
 the Corresponding Source of the running version. OpenPrintHQ provides a source
 link in the application footer to satisfy this requirement.
+
+--------------------------------------------------------------------------------
+Third-party components used by this engine
+--------------------------------------------------------------------------------
+
+Slicing is provided by OrcaSlicer (https://github.com/SoftFever/OrcaSlicer,
+© SoftFever and contributors, AGPL-3.0), run as a sidecar service via
+orca-slicer-api (https://github.com/maziggy/orca-slicer-api). OrcaSlicer is
+itself derived from BambuStudio (© Bambu Lab), PrusaSlicer (© Prusa Research)
+and Slic3r (© Alessandro Ranellucci and contributors), all AGPL-3.0.
+
+This engine also depends on numerous open-source libraries — including FastAPI,
+Starlette, Uvicorn, Pydantic, SQLAlchemy, paho-mqtt, httpx, trimesh, OpenCV,
+and a React-based web UI — each under its own license (MIT / BSD / Apache-2.0 /
+EPL, as applicable). The complete list with versions and licenses is in
+requirements.txt and frontend/package.json; each dependency's license text is
+distributed with that dependency when the software is built.
