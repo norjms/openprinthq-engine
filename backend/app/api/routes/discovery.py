@@ -17,6 +17,7 @@ from backend.app.models.user import User
 from backend.app.services.discovery import (
     discovery_service,
     is_running_in_docker,
+    moonraker_scanner,
     subnet_scanner,
 )
 from backend.app.services.network_utils import get_network_interfaces
@@ -194,3 +195,64 @@ async def stop_subnet_scan(
         scanned=scanned,
         total=total,
     )
+
+
+# --- Klipper / Moonraker discovery -----------------------------------------
+# Klipper hosts don't answer Bambu SSDP, so we probe the Moonraker HTTP API
+# (port 7125) across the subnet. Same request/status shape as the Bambu scan
+# so the frontend can reuse the discovery UX.
+
+
+@router.post("/klipper/scan", response_model=SubnetScanStatus)
+async def start_klipper_scan(
+    request: SubnetScanRequest,
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.DISCOVERY_SCAN),
+):
+    """Start a subnet scan for Klipper/Moonraker printers (port 7125)."""
+    spawn_background_task(
+        moonraker_scanner.scan_subnet(request.subnet, request.timeout),
+        name=f"moonraker-scan-{request.subnet}",
+    )
+    scanned, total = moonraker_scanner.progress
+    return SubnetScanStatus(
+        running=moonraker_scanner.is_running,
+        scanned=scanned,
+        total=total,
+    )
+
+
+@router.get("/klipper/scan/status", response_model=SubnetScanStatus)
+async def get_klipper_scan_status(
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.DISCOVERY_SCAN),
+):
+    """Get the current Klipper/Moonraker scan status."""
+    scanned, total = moonraker_scanner.progress
+    return SubnetScanStatus(
+        running=moonraker_scanner.is_running,
+        scanned=scanned,
+        total=total,
+    )
+
+
+@router.post("/klipper/scan/stop", response_model=SubnetScanStatus)
+async def stop_klipper_scan(
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.DISCOVERY_SCAN),
+):
+    """Stop the current Klipper/Moonraker scan."""
+    moonraker_scanner.stop()
+    scanned, total = moonraker_scanner.progress
+    return SubnetScanStatus(
+        running=moonraker_scanner.is_running,
+        scanned=scanned,
+        total=total,
+    )
+
+
+@router.get("/klipper/printers", response_model=list[DiscoveredPrinterResponse])
+async def get_klipper_discovered_printers(
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.DISCOVERY_SCAN),
+):
+    """List Klipper/Moonraker printers found by the most recent scan."""
+    return [
+        DiscoveredPrinterResponse(**p.to_dict()) for p in moonraker_scanner.discovered_printers
+    ]

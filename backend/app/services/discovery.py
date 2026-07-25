@@ -686,7 +686,151 @@ class TasmotaScanner:
         self._running = False
 
 
+class MoonrakerScanner:
+    """Scanner for discovering Klipper printers exposed through Moonraker.
+
+    Klipper/Moonraker hosts (Mainsail, Fluidd — Voron, RatRig, Creality K1/K2,
+    custom builds) don't advertise over Bambu SSDP, and mDNS multicast doesn't
+    cross the Docker bridge. Instead we probe each host's Moonraker HTTP API on
+    port 7125: a real Moonraker answers ``GET /printer/info`` with JSON carrying
+    a ``result`` object (hostname, klipper state). This mirrors the Bambu
+    ``SubnetScanner`` UX so the add-printer flow can offer one-click discovery
+    for Klipper too.
+    """
+
+    MOONRAKER_PORT = 7125
+
+    def __init__(self):
+        self._discovered: dict[str, DiscoveredPrinter] = {}
+        self._running = False
+        self._scanned = 0
+        self._total = 0
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    @property
+    def discovered_printers(self) -> list[DiscoveredPrinter]:
+        return list(self._discovered.values())
+
+    @property
+    def progress(self) -> tuple[int, int]:
+        """Return (scanned, total) counts."""
+        return self._scanned, self._total
+
+    async def scan_subnet(self, subnet: str, timeout: float = 1.0) -> list[DiscoveredPrinter]:
+        """Scan a subnet for Klipper/Moonraker printers.
+
+        Args:
+            subnet: CIDR notation subnet (e.g., "192.168.1.0/24")
+            timeout: Per-host HTTP timeout in seconds
+
+        Returns:
+            List of discovered printers
+        """
+        if self._running:
+            return []
+
+        self._running = True
+        self._discovered.clear()
+        self._scanned = 0
+
+        try:
+            network = ipaddress.ip_network(subnet, strict=False)
+            hosts = list(network.hosts())
+            self._total = len(hosts)
+
+            if self._total > 1024:
+                logger.warning("Subnet %s has %s hosts, limiting to /22 (1024 hosts)", subnet, self._total)
+                self._total = 1024
+                hosts = hosts[:1024]
+
+            logger.info("Starting Moonraker subnet scan of %s (%s hosts)", subnet, self._total)
+
+            batch_size = 50
+            for i in range(0, len(hosts), batch_size):
+                if not self._running:
+                    break
+
+                batch = hosts[i : i + batch_size]
+                tasks = [self._probe_host(str(ip), timeout) for ip in batch]
+                await asyncio.gather(*tasks, return_exceptions=True)
+                self._scanned = min(i + batch_size, len(hosts))
+
+            logger.info("Moonraker subnet scan complete. Found %s printers.", len(self._discovered))
+            return self.discovered_printers
+
+        except ValueError as e:
+            logger.error("Invalid subnet format: %s", e)
+            return []
+        finally:
+            self._running = False
+
+    async def _probe_host(self, ip: str, timeout: float):
+        """Probe a single host for a Moonraker HTTP API on port 7125."""
+        try:
+            # Cheap TCP gate first so closed ports fail fast instead of waiting
+            # out the full HTTP timeout on every dead address in the subnet.
+            if not await self._check_port(ip, self.MOONRAKER_PORT, min(timeout, 1.0)):
+                return
+            await asyncio.wait_for(self._do_probe(ip, timeout), timeout=timeout + 2.0)
+        except (TimeoutError, asyncio.TimeoutError):
+            pass  # Host did not respond in time; skip
+        except Exception:
+            pass  # Probe failed for this host; skip silently
+
+    async def _check_port(self, ip: str, port: int, timeout: float) -> bool:
+        try:
+            _, writer = await asyncio.wait_for(asyncio.open_connection(ip, port), timeout=timeout)
+            writer.close()
+            await writer.wait_closed()
+            return True
+        except (TimeoutError, asyncio.TimeoutError, ConnectionRefusedError, OSError):
+            return False
+
+    async def _do_probe(self, ip: str, timeout: float):
+        """Query Moonraker's /printer/info to confirm and label the host."""
+        import httpx
+
+        url = f"http://{ip}:{self.MOONRAKER_PORT}/printer/info"
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(url)
+            # A trusted-client Moonraker answers 200; some setups gate this
+            # behind an API key and answer 401. Either way an HTTP response on
+            # 7125 whose body mentions Klipper/Moonraker is a strong signal.
+            body = resp.text or ""
+            result = None
+            if resp.status_code == 200:
+                try:
+                    result = (resp.json() or {}).get("result")
+                except Exception:
+                    result = None
+            looks_moonraker = isinstance(result, dict) or resp.status_code == 401 or "klippy" in body.lower()
+            if not looks_moonraker:
+                return
+
+            hostname = None
+            if isinstance(result, dict):
+                hostname = result.get("hostname")
+            name = hostname or f"Klipper at {ip}"
+            printer = DiscoveredPrinter(
+                serial=f"klipper-{ip.replace('.', '-')}",
+                name=name,
+                ip_address=ip,
+                model="Klipper",
+                discovered_at=datetime.now(timezone.utc).isoformat(),
+            )
+            self._discovered[ip] = printer
+            logger.info("Discovered Moonraker printer '%s' at %s", name, ip)
+
+    def stop(self):
+        """Stop the current scan."""
+        self._running = False
+
+
 # Global instances
 discovery_service = PrinterDiscoveryService()
 subnet_scanner = SubnetScanner()
 tasmota_scanner = TasmotaScanner()
+moonraker_scanner = MoonrakerScanner()
