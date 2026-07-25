@@ -2710,6 +2710,67 @@ class PrintScheduler:
 
         logger.info("Queue item %s: FlashForge print started on %s (%s)", item.id, printer.name, remote_name)
 
+    async def _start_print_snapmaker(self, db: AsyncSession, item: PrintQueueItem, printer: Printer):
+        """Dispatch a queued print to a Snapmaker printer (live-only).
+
+        Uploads via the HTTP API (POST /api/v1/upload), which stores and starts
+        the job. The auth token comes from the printer token
+        (moonraker_api_key) or a fresh /connect handshake.
+        """
+        from backend.app.services.snapmaker import snapmaker_files
+
+        def _fail(msg: str):
+            item.status = "failed"
+            item.error_message = msg
+            item.completed_at = datetime.now(timezone.utc)
+
+        if not item.library_file_id:
+            _fail("Snapmaker printers can only print library .gcode files")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        result = await db.execute(LibraryFile.active().where(LibraryFile.id == item.library_file_id))
+        library_file = result.scalar_one_or_none()
+        if not library_file:
+            _fail("Library file not found")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        lib_path = Path(library_file.file_path)
+        file_path = lib_path if lib_path.is_absolute() else settings.base_dir / library_file.file_path
+        filename = library_file.filename
+        if not filename.lower().endswith(".gcode"):
+            _fail("Snapmaker printers can only print plain .gcode files")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        remote_name = Path(filename).name
+        await self._propagate_owner_to_printer_manager(db, item)
+        item.status = "printing"
+        item.started_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        try:
+            await snapmaker_files.upload_gcode(
+                printer.ip_address,
+                printer.moonraker_port or 8080,
+                str(file_path),
+                remote_name=remote_name,
+                token=printer.moonraker_api_key,
+                start_print=True,
+            )
+        except Exception as e:
+            logger.error("Queue item %s: Snapmaker upload failed: %s", item.id, e)
+            _fail(f"Failed to upload/start on Snapmaker: {e}")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        logger.info("Queue item %s: Snapmaker print started on %s (%s)", item.id, printer.name, remote_name)
+
     async def _start_print_mks(self, db: AsyncSession, item: PrintQueueItem, printer: Printer):
         """Dispatch a queued print to an MKS-WiFi printer (live-only).
 
@@ -2901,6 +2962,7 @@ class PrintScheduler:
             TRANSPORT_MOONRAKER,
             TRANSPORT_OBICO,
             TRANSPORT_OCTOPRINT,
+            TRANSPORT_SNAPMAKER,
             transport_of,
         )
 
@@ -2919,6 +2981,9 @@ class PrintScheduler:
             return
         if transport == TRANSPORT_MKS:
             await self._start_print_mks(db, item, printer)
+            return
+        if transport == TRANSPORT_SNAPMAKER:
+            await self._start_print_snapmaker(db, item, printer)
             return
         if transport == TRANSPORT_OBICO:
             await self._start_print_obico(db, item, printer)
