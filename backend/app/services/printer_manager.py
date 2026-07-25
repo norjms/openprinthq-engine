@@ -13,6 +13,7 @@ from backend.app.services.printer_capabilities import (
     TRANSPORT_DUET,
     TRANSPORT_FLASHFORGE,
     TRANSPORT_MKS,
+    TRANSPORT_SNAPMAKER,
     TRANSPORT_MOONRAKER,
     TRANSPORT_OBICO,
     TRANSPORT_OCTOPRINT,
@@ -660,6 +661,25 @@ class PrinterManager:
             client = MKSClient(
                 ip_address=printer.ip_address,
                 port=printer.moonraker_port or 8080,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_SNAPMAKER:
+            # Snapmaker 2.0/Artisan/J1 LAN HTTP. moonraker_port is reused as
+            # the API port (default 8080); moonraker_api_key as an optional
+            # pre-authorized token.
+            from backend.app.services.snapmaker.snapmaker_client import SnapmakerClient
+
+            client = SnapmakerClient(
+                ip_address=printer.ip_address,
+                port=printer.moonraker_port or 8080,
+                token=printer.moonraker_api_key,
                 serial_number=printer.serial_number,
                 on_state_change=on_state_change,
                 on_print_start=on_print_start,
