@@ -3,7 +3,7 @@ import logging
 import re
 import zipfile
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -3247,6 +3247,31 @@ async def klipper_set_temp(
     if not ok:
         raise HTTPException(500, "Failed to set temperature")
     return {"success": True}
+
+
+@router.post("/{printer_id}/gcode")
+async def send_printer_gcode(
+    printer_id: int,
+    command: str = Body(..., embed=True, max_length=2000),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+):
+    """Send a raw G-code command / macro to the printer.
+
+    Powers the in-app g-code console and the Klipper tuning panel. Works for
+    any transport whose client implements send_gcode (Bambu MQTT gcode_line,
+    Moonraker printer.gcode.script, Duet, etc.). Send-only: responses are not
+    streamed back here (Klipper responses surface via live status).
+    """
+    cmd = (command or "").strip()
+    if not cmd:
+        raise HTTPException(400, "Empty command")
+    client = printer_manager.get_client(printer_id)
+    if not client or not client.state.connected:
+        raise HTTPException(400, "Printer not connected")
+    _ensure_client_supports(client, "send_gcode", "G-code console")
+    if not client.send_gcode(cmd):
+        raise HTTPException(500, "Failed to send command")
+    return {"success": True, "command": cmd}
 
 
 @router.post("/{printer_id}/bed-jog")
