@@ -26,6 +26,7 @@ from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
 from backend.app.services.bambu_ftp import (
     cache_3mf_download,
     delete_file_async,
+    ftp_port_for,
     get_ftp_retry_settings,
     upload_file_async,
     with_ftp_retry,
@@ -3209,6 +3210,7 @@ class PrintScheduler:
                 remote_path,
                 socket_timeout=ftp_timeout,
                 printer_model=printer.model,
+                ftp_port=ftp_port_for(printer),
             )
             logger.debug("Queue item %s: Delete result: %s", item.id, delete_result)
         except Exception as e:
@@ -3247,6 +3249,7 @@ class PrintScheduler:
                     socket_timeout=ftp_timeout,
                     printer_model=printer.model,
                     progress_callback=progress_bridge,
+                    ftp_port=ftp_port_for(printer),
                     max_retries=ftp_retry_count,
                     retry_delay=ftp_retry_delay,
                     operation_name=f"Upload print to {printer.name}",
@@ -3260,6 +3263,7 @@ class PrintScheduler:
                     socket_timeout=ftp_timeout,
                     printer_model=printer.model,
                     progress_callback=progress_bridge,
+                    ftp_port=ftp_port_for(printer),
                 )
         except Exception as e:
             uploaded = False
@@ -3367,6 +3371,7 @@ class PrintScheduler:
                     remote_path,
                     socket_timeout=ftp_timeout,
                     printer_model=printer.model,
+                    ftp_port=ftp_port_for(printer),
                 )
             except Exception as cleanup_err:
                 logger.debug(
@@ -3527,6 +3532,7 @@ class PrintScheduler:
                     printer.access_code,
                     remote_path,
                     printer_model=printer.model,
+                    ftp_port=ftp_port_for(printer),
                 )
             except Exception:
                 pass  # Best-effort — don't fail the error handler

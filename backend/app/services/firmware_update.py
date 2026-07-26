@@ -20,6 +20,7 @@ from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
 from backend.app.models.printer import Printer
 from backend.app.services.bambu_ftp import (
+    ftp_port_for,
     get_ftp_retry_settings,
     get_storage_info_async,
     upload_file_async,
@@ -144,6 +145,7 @@ class FirmwareUpdateService:
                     printer.ip_address,
                     printer.access_code,
                     printer_model=printer.model,
+                    ftp_port=ftp_port_for(printer),
                 )
                 if storage_info and "free_bytes" in storage_info:
                     result["sd_card_free_space"] = storage_info["free_bytes"]
@@ -266,6 +268,7 @@ class FirmwareUpdateService:
                 access_code=printer.access_code,
                 model=model,
                 target_version=target_version,
+                ftp_port=ftp_port_for(printer),
             ),
             name=f"firmware-upload-{printer_id}",
         )
@@ -279,6 +282,7 @@ class FirmwareUpdateService:
         access_code: str,
         model: str,
         target_version: str | None = None,
+        ftp_port: int = 990,
     ):
         """Perform the actual firmware download and upload."""
         state = get_upload_state(printer_id)
@@ -344,6 +348,7 @@ class FirmwareUpdateService:
                     progress_callback=on_upload_progress,
                     socket_timeout=ftp_timeout,
                     printer_model=model,
+                    ftp_port=ftp_port,
                     max_retries=ftp_retry_count,
                     retry_delay=ftp_retry_delay,
                     operation_name=f"Upload firmware to printer {printer_id}",
@@ -357,6 +362,7 @@ class FirmwareUpdateService:
                     progress_callback=on_upload_progress,
                     socket_timeout=ftp_timeout,
                     printer_model=model,
+                    ftp_port=ftp_port,
                 )
 
             if not success:

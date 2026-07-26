@@ -87,6 +87,7 @@ from backend.app.services.bambu_ftp import (
     cache_3mf_download,
     clear_3mf_cache,
     download_file_async,
+    ftp_port_for,
     get_cached_3mf,
     get_ftp_retry_settings,
     with_ftp_retry,
@@ -2900,6 +2901,7 @@ async def on_print_start(printer_id: int, data: dict):
                             timeout=ftp_timeout,
                             socket_timeout=ftp_timeout,
                             printer_model=printer.model,
+                            ftp_port=ftp_port_for(printer),
                             max_retries=ftp_retry_count,
                             retry_delay=ftp_retry_delay,
                             operation_name=f"Download 3MF from {remote_path}",
@@ -2914,6 +2916,7 @@ async def on_print_start(printer_id: int, data: dict):
                             timeout=ftp_timeout,
                             socket_timeout=ftp_timeout,
                             printer_model=printer.model,
+                            ftp_port=ftp_port_for(printer),
                         )
                     if downloaded:
                         downloaded_filename = try_filename
@@ -2943,7 +2946,7 @@ async def on_print_start(printer_id: int, data: dict):
                     break
                 try:
                     dir_files = await list_files_async(
-                        printer.ip_address, printer.access_code, search_dir, printer_model=printer.model
+                        printer.ip_address, printer.access_code, search_dir, printer_model=printer.model, ftp_port=ftp_port_for(printer)
                     )
                     threemf_files = [f.get("name") for f in dir_files if f.get("name", "").endswith(".3mf")]
                     if threemf_files:
@@ -2972,6 +2975,7 @@ async def on_print_start(printer_id: int, data: dict):
                                     timeout=ftp_timeout,
                                     socket_timeout=ftp_timeout,
                                     printer_model=printer.model,
+                                    ftp_port=ftp_port_for(printer),
                                     max_retries=ftp_retry_count,
                                     retry_delay=ftp_retry_delay,
                                     operation_name=f"Download 3MF from {remote_full_path}",
@@ -2985,6 +2989,7 @@ async def on_print_start(printer_id: int, data: dict):
                                     timeout=ftp_timeout,
                                     socket_timeout=ftp_timeout,
                                     printer_model=printer.model,
+                                    ftp_port=ftp_port_for(printer),
                                 )
                             if downloaded:
                                 downloaded_filename = fname
@@ -3036,6 +3041,7 @@ async def on_print_start(printer_id: int, data: dict):
                                         timeout=ftp_timeout,
                                         socket_timeout=ftp_timeout,
                                         printer_model=printer.model,
+                                        ftp_port=ftp_port_for(printer),
                                         max_retries=ftp_retry_count,
                                         retry_delay=ftp_retry_delay,
                                         operation_name=f"Re-download 3MF from {remote_path}",
@@ -3050,6 +3056,7 @@ async def on_print_start(printer_id: int, data: dict):
                                         timeout=ftp_timeout,
                                         socket_timeout=ftp_timeout,
                                         printer_model=printer.model,
+                                        ftp_port=ftp_port_for(printer),
                                     )
                                 if downloaded and peek_plate_index_in_3mf(retry_temp_path) == expected_plate:
                                     logger.info(
@@ -3338,7 +3345,7 @@ async def _list_timelapse_videos(printer) -> tuple[list[dict], str | None]:
     for timelapse_path in ["/timelapse", "/timelapse/video", "/record", "/recording"]:
         try:
             found_files = await list_files_async(
-                printer.ip_address, printer.access_code, timelapse_path, printer_model=printer.model
+                printer.ip_address, printer.access_code, timelapse_path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
             )
             if found_files:
                 video_files = [
@@ -3510,7 +3517,7 @@ async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[
                     )
 
                     timelapse_data = await download_file_bytes_async(
-                        printer.ip_address, printer.access_code, remote_path, printer_model=printer.model
+                        printer.ip_address, printer.access_code, remote_path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
                     )
                     if timelapse_data:
                         success = await service.attach_timelapse(archive_id, timelapse_data, file_name)
@@ -3554,7 +3561,7 @@ async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[
                         logger.info("[TIMELAPSE] Name-match fallback: '%s' matches '%s'", base_name, fname)
 
                         timelapse_data = await download_file_bytes_async(
-                            printer.ip_address, printer.access_code, remote_path, printer_model=printer.model
+                            printer.ip_address, printer.access_code, remote_path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
                         )
                         if timelapse_data:
                             success = await service.attach_timelapse(archive_id, timelapse_data, fname)
@@ -4256,6 +4263,7 @@ async def on_print_complete(printer_id: int, data: dict):
                                 printer.access_code,
                                 remote_path,
                                 printer_model=printer.model,
+                                ftp_port=ftp_port_for(printer),
                             )
                         except Exception as e:
                             delete_result = DeleteResult.FAILED

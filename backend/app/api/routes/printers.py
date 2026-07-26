@@ -44,6 +44,7 @@ from backend.app.services.bambu_ftp import (
     delete_file_async,
     download_file_bytes_async,
     download_file_try_paths_async,
+    ftp_port_for,
     get_cached_3mf,
     get_storage_info_async,
     list_files_async,
@@ -1161,6 +1162,7 @@ async def get_printer_cover(
                     remote_paths,
                     temp_path,
                     printer_model=printer.model,
+                    ftp_port=ftp_port_for(printer),
                 )
                 if downloaded:
                     break
@@ -1299,7 +1301,7 @@ async def list_printer_files(
     if not printer:
         raise HTTPException(404, "Printer not found")
 
-    files = await list_files_async(printer.ip_address, printer.access_code, path, printer_model=printer.model)
+    files = await list_files_async(printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer))
 
     # Add full path to each file
     for f in files:
@@ -1324,7 +1326,7 @@ async def download_printer_file(
     if not printer:
         raise HTTPException(404, "Printer not found")
 
-    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model)
+    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer))
     if data is None:
         raise HTTPException(404, f"File not found: {path}")
 
@@ -1368,7 +1370,7 @@ async def get_printer_file_gcode(
     if not printer:
         raise HTTPException(404, "Printer not found")
 
-    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model)
+    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer))
     if data is None:
         raise HTTPException(404, f"File not found: {path}")
 
@@ -1420,7 +1422,7 @@ async def get_printer_file_plates(
             "is_multi_plate": False,
         }
 
-    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model)
+    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer))
     if data is None:
         raise HTTPException(404, f"File not found: {path}")
 
@@ -1651,7 +1653,7 @@ async def get_printer_file_plate_thumbnail(
     if not printer:
         raise HTTPException(404, "Printer not found")
 
-    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model)
+    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer))
     if data is None:
         raise HTTPException(404, f"File not found: {path}")
 
@@ -1692,7 +1694,7 @@ async def download_printer_files_as_zip(
         for path in paths:
             try:
                 data = await download_file_bytes_async(
-                    printer.ip_address, printer.access_code, path, printer_model=printer.model
+                    printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
                 )
                 if data:
                     filename = path.split("/")[-1]
@@ -1729,7 +1731,7 @@ async def delete_printer_file(
 
     from backend.app.services.bambu_ftp import DeleteResult
 
-    result = await delete_file_async(printer.ip_address, printer.access_code, path, printer_model=printer.model)
+    result = await delete_file_async(printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer))
     if result == DeleteResult.NOT_FOUND:
         raise HTTPException(404, f"File not found on printer: {path}")
     if result == DeleteResult.FAILED:
@@ -1750,7 +1752,7 @@ async def get_printer_storage(
     if not printer:
         raise HTTPException(404, "Printer not found")
 
-    storage_info = await get_storage_info_async(printer.ip_address, printer.access_code, printer_model=printer.model)
+    storage_info = await get_storage_info_async(printer.ip_address, printer.access_code, printer_model=printer.model, ftp_port=ftp_port_for(printer))
 
     return storage_info or {"used_bytes": None, "free_bytes": None}
 
@@ -3532,6 +3534,7 @@ async def get_printable_objects(
                     remote_paths,
                     temp_path,
                     printer_model=printer.model,
+                    ftp_port=ftp_port_for(printer),
                 )
                 if downloaded and temp_path.exists():
                     with open(temp_path, "rb") as f:
