@@ -2239,6 +2239,7 @@ async def scan_timelapse(
     from backend.app.models.printer import Printer
     from backend.app.services.bambu_ftp import (
         download_file_bytes_async,
+        ftp_port_for,
         get_ftp_retry_settings,
         list_files_async,
         with_ftp_retry,
@@ -2270,7 +2271,7 @@ async def scan_timelapse(
     for timelapse_path in ["/timelapse", "/timelapse/video", "/record", "/recording"]:
         try:
             files = await list_files_async(
-                printer.ip_address, printer.access_code, timelapse_path, printer_model=printer.model
+                printer.ip_address, printer.access_code, timelapse_path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
             )
             if files:
                 break
@@ -2382,6 +2383,7 @@ async def scan_timelapse(
             remote_path,
             socket_timeout=ftp_timeout,
             printer_model=printer.model,
+            ftp_port=ftp_port_for(printer),
             max_retries=ftp_retry_count,
             retry_delay=ftp_retry_delay,
             operation_name=f"Download timelapse {matching_file['name']}",
@@ -2393,6 +2395,7 @@ async def scan_timelapse(
             remote_path,
             socket_timeout=ftp_timeout,
             printer_model=printer.model,
+            ftp_port=ftp_port_for(printer),
         )
 
     if not timelapse_data:
@@ -2422,6 +2425,7 @@ async def select_timelapse(
     from backend.app.models.printer import Printer
     from backend.app.services.bambu_ftp import (
         download_file_bytes_async,
+        ftp_port_for,
         get_ftp_retry_settings,
         list_files_async,
         with_ftp_retry,
@@ -2446,7 +2450,7 @@ async def select_timelapse(
     for timelapse_dir in ["/timelapse", "/timelapse/video", "/record", "/recording"]:
         try:
             files = await list_files_async(
-                printer.ip_address, printer.access_code, timelapse_dir, printer_model=printer.model
+                printer.ip_address, printer.access_code, timelapse_dir, printer_model=printer.model, ftp_port=ftp_port_for(printer)
             )
             for f in files:
                 if f.get("name") == filename:
@@ -2471,6 +2475,7 @@ async def select_timelapse(
             remote_path,
             socket_timeout=ftp_timeout,
             printer_model=printer.model,
+            ftp_port=ftp_port_for(printer),
             max_retries=ftp_retry_count,
             retry_delay=ftp_retry_delay,
             operation_name=f"Download timelapse {filename}",
@@ -2482,6 +2487,7 @@ async def select_timelapse(
             remote_path,
             socket_timeout=ftp_timeout,
             printer_model=printer.model,
+            ftp_port=ftp_port_for(printer),
         )
 
     if not timelapse_data:
