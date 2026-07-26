@@ -308,6 +308,19 @@ class PrinterInfo:
         self.serial_number = serial_number
 
 
+def _endpoint_port(printer, role: str, default: int) -> int:
+    """Port for a printer's endpoint role, honouring endpoint_overrides
+    ({role: 'host:port'}) set when the printer is reached via a connector relay."""
+    ov = getattr(printer, "endpoint_overrides", None) or {}
+    val = ov.get(role) if isinstance(ov, dict) else None
+    if isinstance(val, str) and ":" in val:
+        try:
+            return int(val.rsplit(":", 1)[1])
+        except ValueError:
+            return default
+    return default
+
+
 class PrinterManager:
     """Manager for multiple printer connections."""
 
@@ -709,6 +722,7 @@ class PrinterManager:
                 serial_number=printer.serial_number,
                 access_code=printer.access_code,
                 model=printer.model,
+                mqtt_port=_endpoint_port(printer, "mqtt", 8883),
                 on_state_change=on_state_change,
                 on_print_start=on_print_start,
                 on_print_complete=on_print_complete,

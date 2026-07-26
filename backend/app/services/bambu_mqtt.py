@@ -468,6 +468,7 @@ class BambuMQTTClient:
         serial_number: str,
         access_code: str,
         model: str | None = None,
+        mqtt_port: int = 8883,
         on_state_change: Callable[[PrinterState], None] | None = None,
         on_print_start: Callable[[dict], None] | None = None,
         on_print_complete: Callable[[dict], None] | None = None,
@@ -482,6 +483,7 @@ class BambuMQTTClient:
         self.serial_number = serial_number
         self.access_code = access_code
         self.model = model
+        self.mqtt_port = mqtt_port or self.MQTT_PORT
         self.on_state_change = on_state_change
         self.on_print_start = on_print_start
         self.on_print_complete = on_print_complete
@@ -3595,7 +3597,7 @@ class BambuMQTTClient:
         # trigger false disconnects.  Stale detection (60s no messages) handles
         # the P1S/P1P firmware bug where the broker stops publishing but the
         # TCP connection stays alive.
-        self._client.connect_async(self.ip_address, self.MQTT_PORT, keepalive=30)
+        self._client.connect_async(self.ip_address, self.mqtt_port, keepalive=30)
         self._client.loop_start()
 
     def start_print(

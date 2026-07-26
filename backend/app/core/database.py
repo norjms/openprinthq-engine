@@ -677,6 +677,11 @@ async def run_migrations(conn):
         conn,
         "ALTER TABLE pipeline_runs ADD COLUMN parent_run_id INTEGER REFERENCES pipeline_runs(id) ON DELETE SET NULL",
     )
+    # Multi-port connector routing: per-role endpoint overrides (vendor-agnostic).
+    await _safe_execute(
+        conn,
+        "ALTER TABLE printers ADD COLUMN endpoint_overrides JSON",
+    )
 
     # Migration: Add source_archive_id column to pipeline_runs (#1425 PR B follow-up).
     # Allows a pipeline run to source from an archive's source 3MF in addition
