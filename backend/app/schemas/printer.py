@@ -103,6 +103,7 @@ class PrinterUpdate(BaseModel):
     auto_archive: bool | None = None
     print_hours_offset: float | None = None
     moonraker_port: int | None = Field(default=None, ge=1, le=65535)
+    endpoint_overrides: dict | None = None
     moonraker_api_key: str | None = None
     external_camera_url: str | None = None
     external_camera_type: str | None = None
