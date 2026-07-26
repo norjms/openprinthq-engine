@@ -62,3 +62,39 @@ async def write_log_entry(
     db.add(entry)
     await db.flush()
     return entry
+
+
+async def compute_entry_cost(db, filament_grams, filament_type, duration_seconds):
+    """Best-effort per-entry cost. Filament cost is exact (grams x the spool's
+    cost_per_kg, else the default_filament_cost setting). Energy is an estimate
+    (duration x nominal draw x the energy rate) until a smart plug supplies a
+    real reading. Never raises — returns (filament_cost, energy_kwh, energy_cost),
+    any of which may be None."""
+    cost = energy_kwh = energy_cost = None
+    try:
+        from backend.app.api.routes.settings import get_setting
+        if filament_grams:
+            cpk = None
+            try:
+                if filament_type:
+                    from sqlalchemy import select
+                    from backend.app.models.filament import Filament
+                    primary = str(filament_type).split(",")[0].strip()
+                    fil = (await db.execute(select(Filament).where(Filament.type == primary).limit(1))).scalar_one_or_none()
+                    if fil and getattr(fil, "cost_per_kg", None):
+                        cpk = float(fil.cost_per_kg)
+            except Exception:
+                cpk = None
+            if cpk is None:
+                dc = await get_setting(db, "default_filament_cost")
+                cpk = float(dc) if dc else 25.0
+            cost = round((float(filament_grams) / 1000.0) * cpk, 2)
+        if duration_seconds:
+            rate_s = await get_setting(db, "energy_cost_per_kwh")
+            rate = float(rate_s) if rate_s else 0.15
+            NOMINAL_KW = 0.10  # avg FDM draw; replace with smart-plug reading when present
+            energy_kwh = round((float(duration_seconds) / 3600.0) * NOMINAL_KW, 3)
+            energy_cost = round(energy_kwh * rate, 2)
+    except Exception:
+        pass
+    return cost, energy_kwh, energy_cost
