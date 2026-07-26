@@ -4054,6 +4054,10 @@ async def on_print_complete(printer_id: int, data: dict):
                 if isinstance(_dur, (int, float)) and _dur > 0:
                     _started_at = _completed_at - timedelta(seconds=float(_dur))
                 _user = _print_user_info or {}
+                from backend.app.services.print_log import compute_entry_cost as _entry_costs
+                _k_cost, _k_ekwh, _k_ecost = await _entry_costs(
+                    _klip_session, data.get("filament_used_grams"), data.get("filament_type"),
+                    (_completed_at - _started_at).total_seconds() if (_started_at and _completed_at) else None)
                 await write_log_entry(
                     _klip_session,
                     status=_log_status,
@@ -4062,6 +4066,11 @@ async def on_print_complete(printer_id: int, data: dict):
                     printer_id=printer_id,
                     started_at=_started_at,
                     completed_at=_completed_at,
+                    filament_used_grams=data.get("filament_used_grams"),
+                    filament_type=data.get("filament_type"),
+                    cost=_k_cost,
+                    energy_kwh=_k_ekwh,
+                    energy_cost=_k_ecost,
                     created_by_id=_user.get("user_id"),
                     created_by_username=_user.get("username"),
                 )
@@ -4687,6 +4696,15 @@ async def on_print_complete(printer_id: int, data: dict):
                 if _run_cost is None and _run_status == "completed":
                     _run_cost = archive.cost
 
+                _run_ekwh = _run_ecost = None
+                try:
+                    from backend.app.services.print_log import compute_entry_cost as _entry_costs
+                    if archive.started_at and archive.completed_at:
+                        _bd = (archive.completed_at - archive.started_at).total_seconds()
+                        _tmpc, _run_ekwh, _run_ecost = await _entry_costs(db, None, None, _bd)
+                except Exception:
+                    pass
+
                 await write_log_entry(
                     db,
                     archive_id=archive.id,
@@ -4700,6 +4718,8 @@ async def on_print_complete(printer_id: int, data: dict):
                     filament_color=archive.filament_color,
                     filament_used_grams=_run_grams,
                     cost=_run_cost,
+                    energy_kwh=_run_ekwh,
+                    energy_cost=_run_ecost,
                     failure_reason=archive.failure_reason,
                     thumbnail_path=archive.thumbnail_path,
                     created_by_id=archive.created_by_id,
