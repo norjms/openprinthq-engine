@@ -93,6 +93,53 @@ async def get_webcams(ip_address: str, port: int, *, api_key: str | None = None)
     return (result or {}).get("webcams", []) if isinstance(result, dict) else []
 
 
+async def get_console(
+    ip_address: str, port: int, *, count: int = 100, api_key: str | None = None
+) -> dict:
+    """Return Moonraker's recent g-code console log + the toolhead's homed axes.
+
+    Powers the in-app Klipper console (realtime response log) and its
+    "home first" hint. Read-only. Two cheap HTTP GETs against the Moonraker
+    API port:
+
+    * ``/server/gcode_store?count=N`` → the rolling console buffer. Each entry
+      is ``{message, time, type}`` where type is ``command`` (echo of what was
+      sent) or ``response`` (Klipper's reply, incl. ``!! error`` / ``// echo``).
+    * ``/printer/objects/query?toolhead=homed_axes`` → e.g. ``"xyz"`` once homed,
+      ``""`` before. Lets the UI show "not homed" and guide the user to Home
+      instead of surfacing the raw "Must home axis first" error.
+
+    Never raises for the homed lookup — if that query fails the console log is
+    still returned with ``homed_axes: null``.
+    """
+    base = _http_base(ip_address, port)
+    headers = _headers(api_key)
+    store: list[dict] = []
+    homed_axes: str | None = None
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(
+            f"{base}/server/gcode_store", params={"count": max(1, min(int(count), 1000))}, headers=headers
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        result = body.get("result") if isinstance(body, dict) else None
+        if isinstance(result, dict):
+            store = result.get("gcode_store", []) or []
+        try:
+            hr = await client.get(
+                f"{base}/printer/objects/query", params={"toolhead": "homed_axes"}, headers=headers
+            )
+            hr.raise_for_status()
+            hb = hr.json()
+            hres = hb.get("result") if isinstance(hb, dict) else None
+            th = ((hres or {}).get("status") or {}).get("toolhead") if isinstance(hres, dict) else None
+            if isinstance(th, dict):
+                homed_axes = str(th.get("homed_axes", "") or "")
+        except Exception as exc:  # noqa: BLE001 — homed state is a nice-to-have
+            logger.debug("[%s] homed_axes query failed: %s", ip_address, exc)
+    return {"gcode_store": store, "homed_axes": homed_axes}
+
+
 def absolutise_webcam_url(ip_address: str, url: str | None) -> str | None:
     """Make a Moonraker webcam URL absolute.
 
