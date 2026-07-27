@@ -3360,9 +3360,11 @@ async def run_migrations(conn):
     if is_sqlite():
         await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN chamber_heater BOOLEAN DEFAULT 0")
         await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN show_filament_panel BOOLEAN DEFAULT 1")
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN show_bed_ejection BOOLEAN DEFAULT 0")
     else:
         await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN chamber_heater BOOLEAN DEFAULT false")
         await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN show_filament_panel BOOLEAN DEFAULT true")
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN show_bed_ejection BOOLEAN DEFAULT false")
 
 
 _USER_PRINT_TEMPLATE_RENAMES: tuple[tuple[str, str, str], ...] = (

@@ -115,6 +115,7 @@ class PrinterUpdate(BaseModel):
     mac_address: str | None = None
     chamber_heater: bool | None = None
     show_filament_panel: bool | None = None
+    show_bed_ejection: bool | None = None
 
 
 class PrinterResponse(PrinterBase):
@@ -133,6 +134,7 @@ class PrinterResponse(PrinterBase):
     mac_address: str | None = None
     chamber_heater: bool = False
     show_filament_panel: bool = True
+    show_bed_ejection: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -165,6 +167,7 @@ class PrinterResponse(PrinterBase):
             "mac_address": getattr(printer, "mac_address", None),
             "chamber_heater": bool(getattr(printer, "chamber_heater", False)),
             "show_filament_panel": bool(getattr(printer, "show_filament_panel", True)),
+            "show_bed_ejection": bool(getattr(printer, "show_bed_ejection", False)),
             "created_at": printer.created_at,
             "updated_at": printer.updated_at,
         }

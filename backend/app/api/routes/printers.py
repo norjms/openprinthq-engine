@@ -557,9 +557,11 @@ async def delete_printer(
                         If False, keep archives but remove their printer association.
     """
     from sqlalchemy import delete as sql_delete
+    from sqlalchemy import update
 
     from backend.app.models.archive import PrintArchive
     from backend.app.models.maintenance import MaintenanceHistory, PrinterMaintenance
+    from backend.app.models.print_queue import PrintQueueItem
     from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
 
     result = await db.execute(select(Printer).where(Printer.id == printer_id))
@@ -569,13 +571,25 @@ async def delete_printer(
 
     printer_manager.disconnect_printer(printer_id)
 
+    # Un-assign (do NOT delete) any queued jobs pinned to this printer. The FK is
+    # ON DELETE CASCADE, so without this the jobs would be silently destroyed when
+    # the printer row goes away. Setting printer_id=NULL returns them to the
+    # unassigned pool so the scheduler can place them elsewhere (or the user can
+    # reassign/delete). Print-log stays intact (no FK) and archives are preserved
+    # when delete_archives=False, so stats/history are unaffected.
+    unassigned = (
+        await db.execute(
+            update(PrintQueueItem)
+            .where(PrintQueueItem.printer_id == printer_id)
+            .values(printer_id=None, waiting_reason="Printer removed — reassign or delete")
+        )
+    ).rowcount
+
     if delete_archives:
         # Delete all archives for this printer
         await db.execute(sql_delete(PrintArchive).where(PrintArchive.printer_id == printer_id))
     else:
-        # Orphan the archives instead of deleting them
-        from sqlalchemy import update
-
+        # Orphan the archives instead of deleting them (keeps stats/history)
         await db.execute(update(PrintArchive).where(PrintArchive.printer_id == printer_id).values(printer_id=None))
 
     # Delete slot assignments for this printer (SQLite doesn't enforce FK cascades)
@@ -597,7 +611,7 @@ async def delete_printer(
     await db.delete(printer)
     await db.commit()
 
-    return {"status": "deleted", "archives_deleted": delete_archives}
+    return {"status": "deleted", "archives_deleted": delete_archives, "queue_items_unassigned": unassigned}
 
 
 @router.get("/{printer_id}/status", response_model=PrinterStatus)
