@@ -5,7 +5,7 @@ import zipfile
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import Response
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.auth import (
@@ -401,6 +401,80 @@ async def get_developer_mode_warnings(
                 }
             )
     return warnings
+
+
+@router.get("/catalog")
+async def printer_catalog(
+    search: str | None = Query(None, description="Match vendor or model"),
+    mechanism: str | None = Query(None, description="Filter by comm mechanism"),
+    limit: int = Query(1000, ge=1, le=2000),
+    db: AsyncSession = Depends(get_db),
+):
+    """OrcaSlicer-derived printer catalog (control-command framework).
+
+    Lets the add-printer flow offer EVERY printer model OrcaSlicer supports, each
+    with its communication mechanism + capability flags + count of supported
+    control commands. Read-only over the ctl_* reference tables. Declared before
+    ``/{printer_id}`` so it isn't shadowed. Returns an empty catalog (not 500) if
+    the framework tables aren't installed in this tenant DB.
+    """
+    try:
+        conds, params = [], {"lim": limit}
+        if search:
+            conds.append("(pt.vendor ILIKE :q OR pt.model ILIKE :q)")
+            params["q"] = f"%{search}%"
+        if mechanism:
+            conds.append("pt.mechanism_key = :mech")
+            params["mech"] = mechanism
+        where = (" WHERE " + " AND ".join(conds)) if conds else ""
+        rows = (await db.execute(text(
+            "SELECT pt.id, pt.vendor, pt.model, pt.dialect_key, pt.mechanism_key, "
+            "pt.gcode_flavor, pt.nozzle_count, pt.has_chamber_heater, pt.has_aux_fan, "
+            "pt.is_multi_nozzle, pt.popularity_rank, pt.difficulty, "
+            "(SELECT count(*) FROM ctl_printer_command_support s "
+            " WHERE s.printer_type_id=pt.id AND s.supported) AS supported_commands "
+            f"FROM ctl_printer_type pt{where} "
+            "ORDER BY pt.popularity_rank NULLS LAST, pt.vendor, pt.model LIMIT :lim"
+        ), params)).mappings().all()
+        return {"count": len(rows), "printers": [dict(r) for r in rows]}
+    except Exception as e:  # noqa: BLE001
+        return {"count": 0, "printers": [], "error": f"catalog unavailable: {e}"}
+
+
+@router.get("/catalog/mechanisms")
+async def printer_catalog_mechanisms(db: AsyncSession = Depends(get_db)):
+    """Comm mechanisms + how many catalog models use each (for add-printer grouping)."""
+    try:
+        rows = (await db.execute(text(
+            "SELECT m.key, m.name, m.transport, m.gcode_passthrough, "
+            "(SELECT count(*) FROM ctl_printer_type pt WHERE pt.mechanism_key=m.key) AS models "
+            "FROM ctl_comm_mechanism m ORDER BY models DESC"
+        ))).mappings().all()
+        return {"mechanisms": [dict(r) for r in rows]}
+    except Exception as e:  # noqa: BLE001
+        return {"mechanisms": [], "error": str(e)}
+
+
+@router.get("/catalog/{catalog_id}/commands")
+async def printer_catalog_commands(catalog_id: int, db: AsyncSession = Depends(get_db)):
+    """Supported/UNSUPPORTED control commands for a catalog model + the resolved
+    per-mechanism command template. Powers capability display and, later, control."""
+    try:
+        rows = (await db.execute(text(
+            "SELECT c.key AS command, c.category, c.display_name, s.status, s.supported, "
+            "COALESCE(s.reason, t.template) AS resolves_to, t.send_method "
+            "FROM ctl_printer_type pt CROSS JOIN ctl_command c "
+            "LEFT JOIN ctl_printer_command_support s ON s.printer_type_id=pt.id AND s.command_key=c.key "
+            "LEFT JOIN ctl_command_template t ON t.dialect_key=pt.dialect_key AND t.command_key=c.key "
+            "WHERE pt.id = :pid ORDER BY c.category, c.key"
+        ), {"pid": catalog_id})).mappings().all()
+        if not rows:
+            raise HTTPException(404, "catalog printer not found")
+        return {"catalog_id": catalog_id, "commands": [dict(r) for r in rows]}
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        return {"catalog_id": catalog_id, "commands": [], "error": str(e)}
 
 
 @router.get("/{printer_id}")
