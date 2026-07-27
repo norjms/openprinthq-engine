@@ -3251,6 +3251,42 @@ async def klipper_set_temp(
     return {"success": True}
 
 
+@router.get("/{printer_id}/klipper/console")
+async def klipper_console(
+    printer_id: int,
+    count: int = Query(120, ge=1, le=1000, description="How many recent console lines to return"),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+    db: AsyncSession = Depends(get_db),
+):
+    """Realtime Klipper console: recent g-code responses + homed-axes state.
+
+    Read-only passthrough to Moonraker's HTTP API (``/server/gcode_store`` and
+    ``/printer/objects/query?toolhead=homed_axes``). The frontend polls this to
+    stream Klipper's own responses (commands, echoes, ``!!`` errors) — something
+    the fire-and-forget WebSocket send path can't return — and to show whether
+    the machine is homed. Klipper transport only.
+    """
+    result = await db.execute(select(Printer).where(Printer.id == printer_id))
+    printer = result.scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+    if (printer.connection_type or "").lower() != "klipper":
+        raise HTTPException(400, "Console is only available for Klipper/Moonraker printers")
+
+    from backend.app.services.klipper import moonraker_files
+
+    try:
+        data = await moonraker_files.get_console(
+            printer.ip_address,
+            printer.moonraker_port or 7125,
+            count=count,
+            api_key=printer.moonraker_api_key,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Could not reach Moonraker: {exc}") from exc
+    return data
+
+
 @router.post("/{printer_id}/gcode")
 async def send_printer_gcode(
     printer_id: int,
