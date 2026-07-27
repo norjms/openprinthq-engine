@@ -415,3 +415,15 @@ class MoonrakerClient:
 
     def set_bed_temp(self, temp: float) -> bool:
         return self.send_gcode(f"M140 S{int(temp)}")
+
+    # Names the generic temperature routes call (parity with the Bambu client,
+    # which exposes set_nozzle_temperature/set_bed_temperature). Without these,
+    # POST /temperature/{nozzle,bed} raised AttributeError on Klipper printers —
+    # the Set/Off temp buttons on a Moonraker printer did nothing (surfaced as a
+    # misleading "auth unavailable" 503 from the fail-closed auth middleware).
+    # Klipper here is single-extruder, so the nozzle index is ignored.
+    def set_nozzle_temperature(self, target: int, nozzle: int = 0) -> bool:
+        return self.set_nozzle_temp(float(target))
+
+    def set_bed_temperature(self, target: int) -> bool:
+        return self.set_bed_temp(float(target))
