@@ -3347,6 +3347,23 @@ async def run_migrations(conn):
     # names by appending " Email" (#1792). See ``_migrate_rename_user_print_template_names``.
     await _migrate_rename_user_print_template_names(conn)
 
+    # Migration: printer device identity + per-printer UI/hardware settings.
+    #  - mac_address: the printer host's primary NIC MAC, recorded while online.
+    #    Klipper/Moonraker printers get a random synthetic serial at creation, so
+    #    the MAC is the only stable hardware key for re-identifying a printer whose
+    #    DHCP lease changed (offline-relocate / relink flow).
+    #  - chamber_heater / show_filament_panel: per-printer settings that used to
+    #    live client-side; the database is now the source of truth so they follow
+    #    the printer across devices and survive promotion. BOOLEAN defaults are
+    #    dialect-split (Postgres rejects ``DEFAULT 0/1`` for BOOLEAN).
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN mac_address VARCHAR(17)")
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN chamber_heater BOOLEAN DEFAULT 0")
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN show_filament_panel BOOLEAN DEFAULT 1")
+    else:
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN chamber_heater BOOLEAN DEFAULT false")
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN show_filament_panel BOOLEAN DEFAULT true")
+
 
 _USER_PRINT_TEMPLATE_RENAMES: tuple[tuple[str, str, str], ...] = (
     ("user_print_start", "User Print Started", "User Print Started Email"),
