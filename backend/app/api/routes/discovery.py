@@ -63,6 +63,7 @@ class DiscoveredPrinterResponse(BaseModel):
     name: str
     ip_address: str
     model: str | None = None
+    mac: str | None = None
     discovered_at: str | None = None
 
 
@@ -134,6 +135,7 @@ async def get_discovered_printers(
             name=p.name,
             ip_address=p.ip_address,
             model=p.model,
+            mac=getattr(p, "mac", None),
             discovered_at=p.discovered_at,
         )
         for p in printers.values()

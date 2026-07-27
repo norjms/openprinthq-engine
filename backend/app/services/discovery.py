@@ -72,6 +72,7 @@ class DiscoveredPrinter:
     name: str
     ip_address: str
     model: str | None = None
+    mac: str | None = None
     discovered_at: str | None = None
 
     def to_dict(self) -> dict:
@@ -80,6 +81,7 @@ class DiscoveredPrinter:
             "name": self.name,
             "ip_address": self.ip_address,
             "model": self.model,
+            "mac": self.mac,
             "discovered_at": self.discovered_at,
         }
 
@@ -814,11 +816,33 @@ class MoonrakerScanner:
             if isinstance(result, dict):
                 hostname = result.get("hostname")
             name = hostname or f"Klipper at {ip}"
+            # Fetch a stable hardware id (primary NIC MAC) so a printer whose
+            # DHCP lease changes can still be re-identified across an IP change.
+            mac = None
+            try:
+                si = await client.get(f"http://{ip}:{self.MOONRAKER_PORT}/machine/system_info")
+                if si.status_code == 200:
+                    net = (((si.json() or {}).get("result") or {}).get("system_info") or {}).get("network") or {}
+                    chosen = None
+                    for _ifname, info in net.items():
+                        macaddr = (info or {}).get("mac_address")
+                        if not macaddr:
+                            continue
+                        addrs = [a.get("address") for a in (info.get("ip_addresses") or [])]
+                        if ip in addrs:
+                            chosen = macaddr
+                            break
+                        if chosen is None:
+                            chosen = macaddr
+                    mac = chosen.lower() if chosen else None
+            except Exception:
+                mac = None
             printer = DiscoveredPrinter(
                 serial=f"klipper-{ip.replace('.', '-')}",
                 name=name,
                 ip_address=ip,
                 model="Klipper",
+                mac=mac,
                 discovered_at=datetime.now(timezone.utc).isoformat(),
             )
             self._discovered[ip] = printer

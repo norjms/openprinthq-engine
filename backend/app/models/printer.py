@@ -63,6 +63,16 @@ class Printer(Base):
     # Queue: True after a print finishes/fails, until user acknowledges the plate is cleared.
     # Persisted so the gate survives crashes and power cycles (issue #961).
     awaiting_plate_clear: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Device identity: the printer host's primary NIC MAC, recorded while the
+    # printer is reachable. For Klipper/Moonraker (whose serial_number is a random
+    # synthetic id) this is the only stable hardware key, used to re-identify a
+    # printer that changed IP (offline-relocate / relink flow). Normalized lower-case.
+    mac_address: Mapped[str | None] = mapped_column(String(17), nullable=True)
+    # Per-printer settings (DB is the source of truth; previously client-only).
+    # chamber_heater: printer has a controllable chamber heater → show the control.
+    chamber_heater: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # show_filament_panel: show the multi-material (AMS/CFS/MMU) panel for this printer.
+    show_filament_panel: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
