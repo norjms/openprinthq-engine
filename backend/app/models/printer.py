@@ -73,6 +73,8 @@ class Printer(Base):
     chamber_heater: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     # show_filament_panel: show the multi-material (AMS/CFS/MMU) panel for this printer.
     show_filament_panel: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    # show_bed_ejection: opt-in — show the bed-ejection & continuous-printing panel.
+    show_bed_ejection: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
