@@ -112,6 +112,9 @@ class PrinterUpdate(BaseModel):
     camera_rotation: int | None = None  # 0, 90, 180, 270 degrees
     plate_detection_enabled: bool | None = None
     plate_detection_roi: PlateDetectionROI | None = None
+    mac_address: str | None = None
+    chamber_heater: bool | None = None
+    show_filament_panel: bool | None = None
 
 
 class PrinterResponse(PrinterBase):
@@ -127,6 +130,9 @@ class PrinterResponse(PrinterBase):
     camera_rotation: int = 0  # 0, 90, 180, 270 degrees
     plate_detection_enabled: bool = False
     plate_detection_roi: PlateDetectionROI | None = None
+    mac_address: str | None = None
+    chamber_heater: bool = False
+    show_filament_panel: bool = True
     created_at: datetime
     updated_at: datetime
 
@@ -156,6 +162,9 @@ class PrinterResponse(PrinterBase):
             "nozzle_count": printer.nozzle_count,
             "print_hours_offset": printer.print_hours_offset,
             "plate_detection_enabled": printer.plate_detection_enabled,
+            "mac_address": getattr(printer, "mac_address", None),
+            "chamber_heater": bool(getattr(printer, "chamber_heater", False)),
+            "show_filament_panel": bool(getattr(printer, "show_filament_panel", True)),
             "created_at": printer.created_at,
             "updated_at": printer.updated_at,
         }
