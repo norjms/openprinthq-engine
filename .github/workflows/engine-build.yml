@@ -1,0 +1,66 @@
+# OpenPrintHQ Engine (fork of Bambuddy) - build the per-tenant engine image
+# and publish it to GHCR.
+#
+# Runs only on the fork's build branch. Upstream's own publish scripts
+# (docker-publish*.sh) target maziggy/bambuddy and are left untouched; this
+# workflow is additive and never rewrites upstream history or authorship.
+#
+# The image is multi-arch so the arm64 production host can pull the same
+# artifact the amd64 dev/test tiers use.
+name: engine-build
+
+on:
+  push:
+    branches: [feature/klipper-extended]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: engine-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Engine -> GHCR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read engine version
+        id: v
+        run: |
+          set -euo pipefail
+          # Single source of truth in the backend config.
+          VER=$(grep -oE 'APP_VERSION *= *"[^"]+"' backend/app/core/config.py \
+                | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ -z "${VER}" ]; then echo "could not read APP_VERSION"; exit 1; fi
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "short=$(echo ${GITHUB_SHA} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          echo "Engine version ${VER}"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/openprinthq-engine:dev
+            ghcr.io/${{ github.repository_owner }}/openprinthq-engine:${{ steps.v.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/openprinthq-engine:sha-${{ steps.v.outputs.short }}
+          cache-from: type=gha,scope=engine
+          cache-to: type=gha,mode=max,scope=engine
