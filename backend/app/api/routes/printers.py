@@ -180,7 +180,7 @@ async def create_printer(
         # Synthesize a stable, unique serial now (these have no serial concept).
         import uuid
 
-        data = printer_data.model_dump()
+        data = printer_data.model_dump(exclude={"defer_connection_test"})
         if not data.get("serial_number"):
             data["serial_number"] = f"{printer_data.connection_type}:{uuid.uuid4().hex[:16]}"
         # Store "" not NULL: legacy SQLite made access_code NOT NULL and can't
@@ -193,27 +193,32 @@ async def create_printer(
         if result.scalar_one_or_none():
             raise HTTPException(400, "Printer with this serial number already exists")
 
-        test_result = await printer_manager.test_connection(
-            ip_address=printer_data.ip_address,
-            serial_number=printer_data.serial_number,
-            access_code=printer_data.access_code,
-        )
-        if not test_result.get("success"):
-            # The frontend renders the user-facing message via i18n on `code`;
-            # `message` is an English fallback for non-UI clients (curl / scripts).
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "printer_connection_failed",
-                    "message": (
-                        "Could not connect to the printer. Verify IP address, serial number, "
-                        "and access code, and confirm LAN-only mode is enabled. "
-                        "The printer was not added."
-                    ),
-                },
+        # Connector-routed (remote-LAN) Bambu printers can't be reached directly
+        # from a cloud-hosted engine at create time — they're only reachable once
+        # the control-plane stands up the relay AFTER creation. Skip the pre-flight
+        # in that case; the connection is validated once the route is active.
+        if not printer_data.defer_connection_test:
+            test_result = await printer_manager.test_connection(
+                ip_address=printer_data.ip_address,
+                serial_number=printer_data.serial_number,
+                access_code=printer_data.access_code,
             )
+            if not test_result.get("success"):
+                # The frontend renders the user-facing message via i18n on `code`;
+                # `message` is an English fallback for non-UI clients (curl / scripts).
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "printer_connection_failed",
+                        "message": (
+                            "Could not connect to the printer. Verify IP address, serial number, "
+                            "and access code, and confirm LAN-only mode is enabled. "
+                            "The printer was not added."
+                        ),
+                    },
+                )
 
-        printer = Printer(**printer_data.model_dump())
+        printer = Printer(**printer_data.model_dump(exclude={"defer_connection_test"}))
 
     db.add(printer)
     await db.commit()
