@@ -523,6 +523,18 @@ class BambuMQTTClient:
         self._drying_targets: dict[int, dict[str, object]] = {}
 
         self.state = PrinterState()
+        # Agent-local model (OctoEverywhere-inspired, AGPL-3.0): when this session
+        # runs THROUGH the connector relay, the transport has higher latency/jitter
+        # than a LAN MQTT connection, so we use longer staleness thresholds and
+        # require sustained staleness (hysteresis) before flipping to offline — a
+        # single relay hiccup must not oscillate the printer's online state.
+        # Routed sessions target the control-plane relay host rather than a LAN IP.
+        _relay_host = os.environ.get("OPHQ_RELAY_HOST", "")
+        self._is_routed = (
+            str(ip_address).startswith("openprinthq-")
+            or (bool(_relay_host) and str(ip_address) == _relay_host)
+        )
+        self._consecutive_stale = 0
         self._client: mqtt.Client | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._previous_gcode_state: str | None = None
@@ -642,13 +654,24 @@ class BambuMQTTClient:
 
     # Maximum time (seconds) without a message before considering connection stale
     STALE_TIMEOUT = 60.0
+    # When routed through a connector, allow more slack before considering the
+    # transport stale (relay latency + Bambu's own ~1Hz push cadence).
+    STALE_TIMEOUT_ROUTED = 150.0
+    # Number of consecutive stale evaluations required before flipping offline.
+    # LAN: flip promptly (1). Routed: require sustained staleness so a brief
+    # tunnel hiccup between pushes doesn't oscillate the card.
+    STALE_HYSTERESIS_ROUTED = 2
+
+    @property
+    def _stale_timeout(self) -> float:
+        return self.STALE_TIMEOUT_ROUTED if self._is_routed else self.STALE_TIMEOUT
 
     def is_stale(self) -> bool:
         """Check if the connection is stale (no messages for too long)."""
         if self._last_message_time == 0:
             return False  # Never received a message yet
         time_since_last = time.time() - self._last_message_time
-        return time_since_last > self.STALE_TIMEOUT
+        return time_since_last > self._stale_timeout
 
     # Minimum seconds between stale reconnect attempts.  Frontend polls
     # status every few seconds — without a cooldown, each poll would
@@ -658,6 +681,17 @@ class BambuMQTTClient:
     def check_staleness(self) -> bool:
         """Check staleness and update connected state if stale. Returns True if connected."""
         if self.state.connected and self.is_stale():
+            # Hysteresis: for connector-routed printers, require sustained
+            # staleness before flipping offline so a single relay gap between
+            # Bambu pushes doesn't oscillate the card (OctoEverywhere-style
+            # stability; see agent-local model). LAN printers flip promptly.
+            self._consecutive_stale += 1
+            if self._is_routed and self._consecutive_stale < self.STALE_HYSTERESIS_ROUTED:
+                # Still within the grace window — keep the connection considered
+                # up, but do kick a reconnect attempt in the background.
+                self._maybe_background_reconnect()
+                return self.state.connected
+
             # Don't force-close again if we already did recently — give paho
             # time to reconnect and the printer time to send its first message.
             now = time.time()
@@ -692,7 +726,23 @@ class BambuMQTTClient:
             # gets the hard-reset path) but the dispatcher exists for safety.
             self._stale_reconnecting = True
             self._reset_client_for_reconnect()
+        elif not self.is_stale():
+            # Fresh again — clear the hysteresis counter.
+            self._consecutive_stale = 0
         return self.state.connected
+
+    def _maybe_background_reconnect(self) -> None:
+        """Kick a reconnect during the hysteresis grace window without flipping
+        the visible connected state yet. Rate-limited by STALE_RECONNECT_COOLDOWN."""
+        now = time.time()
+        if now - self._last_stale_reconnect < self.STALE_RECONNECT_COOLDOWN:
+            return
+        self._last_stale_reconnect = now
+        self._stale_reconnecting = True
+        try:
+            self._reset_client_for_reconnect()
+        except Exception:
+            pass
 
     def force_reconnect_stale_session(self, reason: str) -> None:
         # Heals the #887/#936/#1136 half-broken session: telemetry keeps
