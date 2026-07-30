@@ -71,6 +71,20 @@ class MoonrakerClient:
         self.state = PrinterState()
 
         self._on_state_change = on_state_change
+        # Agent-local model (OctoEverywhere-inspired, AGPL-3.0): a connector-routed
+        # Moonraker session runs through the relay tunnel, so a brief tunnel gap can
+        # drop the websocket even though the printer is fine. Defer the offline flip
+        # by a grace window for routed printers so a fast reconnect doesn't oscillate
+        # the card. Routed sessions target the control-plane relay host, not a LAN IP.
+        import os as _os
+        _relay_host = _os.environ.get("OPHQ_RELAY_HOST", "")
+        self._is_routed = (
+            str(self.ip_address).startswith("openprinthq-")
+            or (bool(_relay_host) and str(self.ip_address) == _relay_host)
+        )
+        # Seconds to keep 'connected' true after a ws drop while reconnecting.
+        self._offline_grace_s = 12.0 if self._is_routed else 0.0
+        self._disconnected_at = 0.0
         self._on_print_start = on_print_start
         self._on_print_complete = on_print_complete
         self._on_print_running_observed = on_print_running_observed
@@ -119,9 +133,16 @@ class MoonrakerClient:
         self.state.connected = False
 
     def check_staleness(self) -> bool:
-        """Moonraker pushes only on change; liveness is the ws connection
-        itself (auto keep-alive pings). The read loop flips ``connected`` on
-        drop, so just report the current flag."""
+        """Moonraker pushes only on change; liveness is the ws connection itself.
+        For routed printers we keep ``connected`` true through a short grace window
+        after a ws drop (see __init__); if the grace expires without a reconnect,
+        flip offline here."""
+        if self._offline_grace_s > 0.0 and self.state.connected and self._disconnected_at > 0.0:
+            import time as _t
+            if (_t.time() - self._disconnected_at) > self._offline_grace_s and self._ws is None:
+                self.state.connected = False
+                self.state.state = "unknown"
+                self._emit_state_change()
         return self.state.connected
 
     # -- the connection task ------------------------------------------------
@@ -145,6 +166,7 @@ class MoonrakerClient:
                     await self._subscribe(ws)
                     await self._query_printer_info(ws)
                     self.state.connected = True
+                    self._disconnected_at = 0.0
                     self._emit_state_change()
                     async for raw in ws:
                         if self._stop:
@@ -157,9 +179,17 @@ class MoonrakerClient:
             finally:
                 self._ws = None
                 if self.state.connected:
-                    self.state.connected = False
-                    self.state.state = "unknown"
-                    self._emit_state_change()
+                    # Hysteresis for routed printers: keep 'connected' true through a
+                    # short grace window so a quick relay reconnect doesn't flip the
+                    # card offline. If we reconnect within the window (loop top sets
+                    # connected=True again), the user never sees a blip.
+                    import time as _t
+                    if self._offline_grace_s > 0.0:
+                        self._disconnected_at = _t.time()
+                    else:
+                        self.state.connected = False
+                        self.state.state = "unknown"
+                        self._emit_state_change()
 
             if self._stop:
                 break
