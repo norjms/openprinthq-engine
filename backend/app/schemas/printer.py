@@ -62,6 +62,13 @@ class PrinterCreate(PrinterBase):
     # Secret — only accepted on input, never returned. Optional (open-LAN
     # Moonraker needs no key).
     moonraker_api_key: str | None = Field(default=None, max_length=255)
+    # When True, skip the MQTT connection pre-flight and persist the printer
+    # anyway. Used for connector-routed (remote-LAN) Bambu printers: at create
+    # time the printer is only reachable through the relay the control-plane
+    # stands up AFTER creation, so a pre-flight against the raw LAN IP can never
+    # succeed from a cloud-hosted engine. The connection is validated once the
+    # route is active. Direct/local adds keep the pre-flight (typo protection).
+    defer_connection_test: bool = Field(default=False)
 
     @model_validator(mode="after")
     def _check_per_type_requirements(self) -> "PrinterCreate":
