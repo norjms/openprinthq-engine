@@ -6317,6 +6317,12 @@ async def lifespan(app: FastAPI):
 
     start_loop_watchdog()
 
+    # Broker single-port engine shim (docs/broker-architecture.md): gives routed
+    # printers a loopback address the engine dials unchanged, tunnelling to the
+    # client's ONE gateway port. Per-tenant (one engine container per user).
+    from backend.app.services.broker_shim import start_broker_shim
+    start_broker_shim()
+
     # Initialize virtual printer manager and sync from DB
     from backend.app.services.virtual_printer import virtual_printer_manager
 
@@ -6347,6 +6353,10 @@ async def lifespan(app: FastAPI):
     from backend.app.services.loop_watchdog import stop_loop_watchdog
 
     stop_loop_watchdog()
+
+    from backend.app.services.broker_shim import stop_broker_shim
+
+    await stop_broker_shim()
     # Tear down all camera fan-out broadcasters (#1089) so subscribers exit
     # cleanly rather than waiting on a queue that nothing will ever fill.
     try:
