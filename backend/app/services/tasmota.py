@@ -1,6 +1,7 @@
 """Service for communicating with Tasmota devices via HTTP API."""
 
 import ipaddress
+import os
 import logging
 from typing import TYPE_CHECKING
 
@@ -33,6 +34,40 @@ class TasmotaService:
             return False  # Not a valid IP
         return not addr.is_loopback and not addr.is_link_local
 
+    @staticmethod
+    def _route(ip: str) -> str:
+        """Map a plug's LAN address to a reachable endpoint.
+
+        A cloud-hosted instance cannot reach the tenant's LAN, so every request
+        to a plug times out and it shows as unreachable while the device itself
+        is perfectly healthy. The connector already tunnels TCP for printers;
+        OPHQ_LAN_PROXY carries the same idea for plugs as a comma-separated list
+        of `lan_ip=host:port` pairs, supplied by the control-plane when it opens
+        the relays.
+
+        The plug's stored ip_address is deliberately left untouched: it is
+        validated as a bare IPv4 address, and writing `host:port` into it makes
+        the whole smart-plug API fail to serialise.
+        """
+        mapping = os.environ.get("OPHQ_LAN_PROXY", "")
+        if not mapping:
+            # A file rather than only an environment variable: the control-plane
+            # opens and closes relays while this container is running, and env
+            # can only change by recreating it.
+            try:
+                path = os.environ.get("OPHQ_LAN_PROXY_FILE", "/app/data/lan_proxy.map")
+                with open(path, "r", encoding="utf-8") as fh:
+                    mapping = fh.read().strip()
+            except OSError:
+                return ip
+        if not mapping:
+            return ip
+        for pair in mapping.split(","):
+            src, _, dst = pair.partition("=")
+            if src.strip() == ip and dst.strip():
+                return dst.strip()
+        return ip
+
     async def _send_command(
         self,
         ip: str,
@@ -44,7 +79,7 @@ class TasmotaService:
         if not self._validate_ip(ip):
             logger.warning("Blocked Tasmota request to invalid IP: %s", ip)
             return None
-        url = self._build_url(ip, command)
+        url = self._build_url(self._route(ip), command)
         auth = (username, password) if username and password else None
 
         try:
