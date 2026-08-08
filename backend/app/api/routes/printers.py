@@ -2129,6 +2129,7 @@ async def set_ams_backup(
     if not client or not client.state.connected:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "set_ams_filament_backup", "AMS filament backup")
     success = client.set_ams_filament_backup(enabled)
     if not success:
         raise HTTPException(500, "Failed to send command to printer")
@@ -3175,6 +3176,7 @@ async def set_chamber_temperature(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "set_chamber_temperature", "Chamber heating")
     success = client.set_chamber_temperature(target)
     if not success:
         raise HTTPException(500, "Failed to set chamber temperature")
@@ -3206,6 +3208,7 @@ async def set_fan_speed(
         raise HTTPException(400, "Printer not connected")
 
     pwm_speed = round(speed * 255 / 100)
+    _ensure_client_supports(client, "set_fan_speed", "Fan speed control")
     success = client.set_fan_speed(fan_id, pwm_speed)
     if not success:
         raise HTTPException(500, "Failed to set fan speed")
@@ -3231,6 +3234,7 @@ async def select_extruder(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "select_extruder", "Extruder selection")
     success = client.select_extruder(extruder)
     if not success:
         raise HTTPException(500, "Failed to select nozzle")
@@ -3264,6 +3268,65 @@ async def set_airduct_mode(
         raise HTTPException(500, "Failed to set airduct mode")
 
     return {"success": True, "message": f"Airduct mode set to {mode}"}
+
+
+@router.post("/{printer_id}/timelapse")
+async def set_timelapse(
+    printer_id: int,
+    enabled: bool = Query(..., description="True to record a timelapse, False to stop"),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+    db: AsyncSession = Depends(get_db),
+):
+    """Turn the printer's built-in timelapse recording on or off.
+
+    This is the per-printer switch. It is distinct from the instance-wide
+    `default_timelapse` setting, which only decides what a *newly started* job
+    asks for; this drives the machine directly so it can be changed for the
+    printer that is in front of you.
+    """
+    result = await db.execute(select(Printer).where(Printer.id == printer_id))
+    printer = result.scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+
+    client = printer_manager.get_client(printer_id)
+    if not client:
+        raise HTTPException(400, "Printer not connected")
+
+    _ensure_client_supports(client, "set_timelapse", "Timelapse")
+    if not client.set_timelapse(enabled):
+        raise HTTPException(500, "Failed to set timelapse")
+
+    return {"success": True, "timelapse": enabled}
+
+
+@router.post("/{printer_id}/liveview")
+async def set_liveview(
+    printer_id: int,
+    enabled: bool = Query(..., description="True to enable the camera feed, False to disable"),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+    db: AsyncSession = Depends(get_db),
+):
+    """Enable or disable the printer's camera feed at the machine.
+
+    Disabling this stops the printer serving video at all, so every viewer loses
+    the stream, not just this browser. The UI treats it as a privacy switch
+    rather than a per-session play/pause.
+    """
+    result = await db.execute(select(Printer).where(Printer.id == printer_id))
+    printer = result.scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+
+    client = printer_manager.get_client(printer_id)
+    if not client:
+        raise HTTPException(400, "Printer not connected")
+
+    _ensure_client_supports(client, "set_liveview", "Camera live view")
+    if not client.set_liveview(enabled):
+        raise HTTPException(500, "Failed to set live view")
+
+    return {"success": True, "liveview": enabled}
 
 
 @router.post("/{printer_id}/chamber-light")
@@ -3592,6 +3655,7 @@ async def clear_hms_errors(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "clear_hms_errors", "Clearing printer alerts")
     success = client.clear_hms_errors()
     if not success:
         raise HTTPException(500, "Failed to clear HMS errors")
@@ -4041,6 +4105,7 @@ async def ams_load(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "ams_load_filament", "AMS filament loading")
     success = client.ams_load_filament(tray_id)
     if not success:
         raise HTTPException(500, "Failed to send load command")
@@ -4070,6 +4135,7 @@ async def ams_unload(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "ams_unload_filament", "AMS filament unloading")
     success = client.ams_unload_filament()
     if not success:
         raise HTTPException(500, "Failed to send unload command")
