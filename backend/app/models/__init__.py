@@ -21,6 +21,7 @@ from backend.app.models.pending_upload import PendingUpload
 from backend.app.models.pipeline_run import PipelineJob, PipelineRun
 from backend.app.models.print_batch import PrintBatch
 from backend.app.models.printer import Printer
+from backend.app.models.printer_group import PrinterGroup, printer_group_members
 from backend.app.models.printer_sensor_history import PrinterSensorHistory
 from backend.app.models.project import Project
 from backend.app.models.settings import Settings
@@ -41,6 +42,8 @@ from backend.app.models.user_totp import UserTOTP
 
 __all__ = [
     "Printer",
+    "PrinterGroup",
+    "printer_group_members",
     "PrintArchive",
     "Filament",
     "Settings",

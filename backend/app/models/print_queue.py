@@ -21,6 +21,19 @@ class PrintQueueItem(Base):
     # Target location filter for model-based assignment (only used with target_model)
     # When set, only printers in this location are considered
     target_location: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Target printer group (mutually exclusive with printer_id and target_model).
+    # When set, the scheduler assigns the item to whichever member of the group
+    # frees up first, using the same idle/connected/filament checks as
+    # model-based assignment. ON DELETE SET NULL so deleting a group leaves the
+    # item unassigned and visibly waiting rather than silently dropping it.
+    target_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("printer_groups.id", ondelete="SET NULL"), nullable=True
+    )
+    # Eager-loaded so the queue serializer can show the group name without a
+    # per-row lazy load (which would blow up under async as a MissingGreenlet).
+    target_group: Mapped["PrinterGroup | None"] = relationship(  # noqa: F821
+        "PrinterGroup", lazy="selectin"
+    )
     # Required filament types for model-based assignment (JSON array, e.g., '["PLA", "PETG"]')
     # Used by scheduler to validate printer has compatible filaments loaded
     required_filament_types: Mapped[str | None] = mapped_column(Text, nullable=True)
