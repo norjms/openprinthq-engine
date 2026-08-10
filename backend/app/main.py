@@ -52,6 +52,7 @@ from backend.app.api.routes import (
     pipeline_runs,
     print_log,
     print_queue,
+    printer_groups,
     printer_sensor_history,
     printers,
     projects,
@@ -6805,6 +6806,7 @@ app.include_router(bug_report.router, prefix=app_settings.api_prefix)
 app.include_router(users.router, prefix=app_settings.api_prefix)
 app.include_router(groups.router, prefix=app_settings.api_prefix)
 app.include_router(printers.router, prefix=app_settings.api_prefix)
+app.include_router(printer_groups.router, prefix=app_settings.api_prefix)
 app.include_router(archives.router, prefix=app_settings.api_prefix)
 app.include_router(filaments.router, prefix=app_settings.api_prefix)
 app.include_router(inventory.router, prefix=app_settings.api_prefix)

@@ -194,6 +194,7 @@ async def init_db():
         print_log,
         print_queue,
         printer,
+        printer_group,
         printer_sensor_history,
         project,
         project_bom,
@@ -3335,6 +3336,21 @@ async def run_migrations(conn):
         await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN gate_acknowledged BOOLEAN DEFAULT 0")
     else:
         await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN gate_acknowledged BOOLEAN DEFAULT false")
+
+    # Migration: Add target_group_id column to print_queue (printer groups).
+    # Existing rows get NULL, which is the "not group-targeted" state, so this
+    # is inert for every queue item created before groups existed. The FK is
+    # added inline on Postgres; SQLite cannot add a constraint to an existing
+    # table, and _safe_execute swallows that, leaving a plain nullable column
+    # (which is what create_all produces on a fresh SQLite DB anyway).
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN target_group_id INTEGER")
+    else:
+        await _safe_execute(
+            conn,
+            "ALTER TABLE print_queue ADD COLUMN target_group_id INTEGER "
+            "REFERENCES printer_groups(id) ON DELETE SET NULL",
+        )
 
     # Migration: Add is_autologin column to oidc_providers (#1589). Postgres
     # rejects ``DEFAULT 0`` for BOOLEAN columns.

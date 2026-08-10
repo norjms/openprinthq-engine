@@ -19,6 +19,9 @@ class PrintQueueItemCreate(BaseModel):
     printer_id: int | None = None  # None = unassigned, user assigns later
     target_model: str | None = None  # Target printer model (mutually exclusive with printer_id)
     target_location: str | None = None  # Target location filter (only used with target_model)
+    # Target printer group. Mutually exclusive with printer_id and target_model.
+    # The scheduler runs the item on whichever group member frees up first.
+    target_group_id: int | None = None
     required_filament_types: list[str] | None = None  # Required filament types for model-based assignment
     filament_overrides: list[dict] | None = None  # Filament overrides for model-based assignment
     # Either archive_id OR library_file_id must be provided
@@ -74,6 +77,7 @@ class PrintQueueItemUpdate(BaseModel):
     printer_id: int | None = None
     target_model: str | None = None  # Target printer model (mutually exclusive with printer_id)
     target_location: str | None = None  # Target location filter (only used with target_model)
+    target_group_id: int | None = None  # Target printer group (mutually exclusive with the two above)
     filament_overrides: list[dict] | None = None  # Filament overrides for model-based assignment
     position: int | None = None
     scheduled_time: datetime | None = None
@@ -105,6 +109,8 @@ class PrintQueueItemResponse(BaseModel):
     printer_id: int | None  # None = unassigned
     target_model: str | None = None  # Target printer model for model-based assignment
     target_location: str | None = None  # Target location filter for model-based assignment
+    target_group_id: int | None = None  # Target printer group for group-based assignment
+    target_group_name: str | None = None  # Resolved group name, for display
     required_filament_types: list[str] | None = None  # Required filament types for model-based assignment
     filament_overrides: list[dict] | None = None  # Filament overrides for model-based assignment
     waiting_reason: str | None = None  # Why a model-based job hasn't started yet
