@@ -19,6 +19,7 @@ from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
+from backend.app.models.printer_group import PrinterGroup
 from backend.app.models.settings import Settings
 from backend.app.models.smart_plug import SmartPlug
 from backend.app.models.spool_assignment import SpoolAssignment
@@ -213,15 +214,17 @@ class PrintScheduler:
 
             # Get all pending items, ordered by printer and position (or SJF order)
             if sjf_enabled:
-                # SJF: group by printer (and target_model for model-based jobs),
-                # then items already jumped get top priority (starvation guard),
-                # then sort by print_time ascending. Items with no print time go last.
+                # SJF: group by printer (and by target_model / target_group_id for
+                # unassigned jobs), then items already jumped get top priority
+                # (starvation guard), then sort by print_time ascending. Items
+                # with no print time go last.
                 result = await db.execute(
                     select(PrintQueueItem)
                     .where(PrintQueueItem.status == "pending")
                     .order_by(
                         PrintQueueItem.printer_id,
                         PrintQueueItem.target_model,
+                        PrintQueueItem.target_group_id,
                         PrintQueueItem.been_jumped.desc(),
                         PrintQueueItem.print_time_seconds.asc().nullslast(),
                         PrintQueueItem.position,
@@ -419,8 +422,10 @@ class PrintScheduler:
                                 other.been_jumped = True
                         await db.commit()
 
-                elif item.target_model:
-                    # Model-based assignment - find any idle printer of matching model
+                elif item.target_model or item.target_group_id:
+                    # Model-based or group-based assignment: find any idle printer
+                    # in the candidate set (all printers of a model, or all members
+                    # of a group).
                     # Parse required filament types if present
                     required_types = None
                     if item.required_filament_types:
@@ -445,15 +450,31 @@ class PrintScheduler:
                             # Merge: keep original types for non-overridden slots, add override types
                             effective_types = sorted(set(required_types or []) | set(override_types))
 
-                    printer_id, waiting_reason = await self._find_idle_printer_for_model(
-                        db,
-                        item.target_model,
-                        busy_printers,
-                        effective_types,
-                        item.target_location,
-                        filament_overrides=filament_overrides,
-                        require_plate_clear=require_plate_clear,
-                    )
+                    if item.target_group_id:
+                        printer_id, waiting_reason = await self._find_idle_printer_for_group(
+                            db,
+                            item.target_group_id,
+                            busy_printers,
+                            effective_types,
+                            filament_overrides=filament_overrides,
+                            require_plate_clear=require_plate_clear,
+                        )
+                        # Notifications take a single "what was this aimed at"
+                        # string; groups reuse the same field as models.
+                        target_desc = (
+                            item.target_group.name if item.target_group else f"group {item.target_group_id}"
+                        )
+                    else:
+                        printer_id, waiting_reason = await self._find_idle_printer_for_model(
+                            db,
+                            item.target_model,
+                            busy_printers,
+                            effective_types,
+                            item.target_location,
+                            filament_overrides=filament_overrides,
+                            require_plate_clear=require_plate_clear,
+                        )
+                        target_desc = item.target_model
 
                     # Update waiting_reason if changed and send notification when first waiting
                     if item.waiting_reason != waiting_reason:
@@ -467,7 +488,7 @@ class PrintScheduler:
                             job_name = await self._get_job_name(db, item)
                             await notification_service.on_queue_job_waiting(
                                 job_name=job_name,
-                                target_model=item.target_model,
+                                target_model=target_desc,
                                 waiting_reason=waiting_reason,
                                 db=db,
                             )
@@ -497,7 +518,12 @@ class PrintScheduler:
                         # Assign printer and start - clear waiting reason
                         item.printer_id = printer_id
                         item.waiting_reason = None
-                        logger.info("Model-based assignment: queue item %s assigned to printer %s", item.id, printer_id)
+                        logger.info(
+                            "Target-based assignment (%s): queue item %s assigned to printer %s",
+                            target_desc,
+                            item.id,
+                            printer_id,
+                        )
 
                         # Send assignment notification
                         job_name = await self._get_job_name(db, item)
@@ -506,7 +532,7 @@ class PrintScheduler:
                             job_name=job_name,
                             printer_id=printer_id,
                             printer_name=printer.name if printer else "Unknown",
-                            target_model=item.target_model,
+                            target_model=target_desc,
                             db=db,
                         )
 
@@ -535,8 +561,7 @@ class PrintScheduler:
                                     other.id != item.id
                                     and other.status == "pending"
                                     and other.printer_id is None
-                                    and other.target_model
-                                    and other.target_model.upper() == item.target_model.upper()
+                                    and self._same_target(other, item)
                                     and not other.been_jumped
                                     and other.position < item.position
                                     and (
@@ -616,6 +641,75 @@ class PrintScheduler:
         if not printers:
             return None, f"No active {normalized_model} printers{location_suffix} configured"
 
+        return self._select_idle_printer(
+            printers,
+            f"{normalized_model} printers{location_suffix}",
+            exclude_ids,
+            required_filament_types=required_filament_types,
+            filament_overrides=filament_overrides,
+            require_plate_clear=require_plate_clear,
+        )
+
+    async def _find_idle_printer_for_group(
+        self,
+        db: AsyncSession,
+        group_id: int,
+        exclude_ids: set[int],
+        required_filament_types: list[str] | None = None,
+        filament_overrides: list[dict] | None = None,
+        require_plate_clear: bool = True,
+    ) -> tuple[int | None, str | None]:
+        """Find an idle, connected member of a printer group.
+
+        Same checks as :meth:`_find_idle_printer_for_model`; only the candidate
+        set differs (group membership instead of model plus location). A job
+        aimed at a group runs on whichever member frees up first.
+
+        Returns:
+            Tuple of (printer_id, waiting_reason), matching the model variant.
+        """
+        result = await db.execute(select(PrinterGroup).where(PrinterGroup.id == group_id))
+        group = result.scalar_one_or_none()
+        if group is None:
+            # The group was deleted after the item was queued; the FK is
+            # ON DELETE SET NULL so this should be unreachable, but the item
+            # must not silently vanish from the operator's view if it happens.
+            return None, "Target printer group no longer exists"
+
+        printers = [p for p in group.printers if p.is_active]
+        label = f"printers in group '{group.name}'"
+        if not printers:
+            return None, f"No active {label} configured"
+
+        return self._select_idle_printer(
+            printers,
+            label,
+            exclude_ids,
+            required_filament_types=required_filament_types,
+            filament_overrides=filament_overrides,
+            require_plate_clear=require_plate_clear,
+        )
+
+    def _select_idle_printer(
+        self,
+        printers: list[Printer],
+        target_desc: str,
+        exclude_ids: set[int],
+        required_filament_types: list[str] | None = None,
+        filament_overrides: list[dict] | None = None,
+        require_plate_clear: bool = True,
+    ) -> tuple[int | None, str | None]:
+        """Pick an available printer from an already-resolved candidate list.
+
+        Shared by model-based and group-based assignment so both inherit the
+        identical idle / connected / filament / force-colour logic and the
+        same waiting-reason wording.
+
+        Args:
+            printers: Candidate printers (already filtered to is_active).
+            target_desc: Human phrase naming the candidate set, used in the
+                         waiting reason, e.g. "X1C printers in Back room".
+        """
         # Separate force-matched overrides from preference-only overrides
         force_overrides = [o for o in (filament_overrides or []) if o.get("force_color_match")]
         pref_overrides = [o for o in (filament_overrides or []) if not o.get("force_color_match")]
@@ -745,7 +839,20 @@ class PrintScheduler:
         if printers_offline:
             reasons.append(f"Offline: {', '.join(printers_offline)}")
 
-        return None, " | ".join(reasons) if reasons else f"No available {model} printers{location_suffix}"
+        return None, " | ".join(reasons) if reasons else f"No available {target_desc}"
+
+    @staticmethod
+    def _same_target(a: PrintQueueItem, b: PrintQueueItem) -> bool:
+        """True when two unassigned items compete for the same candidate set.
+
+        Used by the SJF starvation guard, which may only mark an item as
+        jumped by another item that could actually have taken its printer.
+        """
+        if b.target_group_id is not None:
+            return a.target_group_id == b.target_group_id
+        if b.target_model and a.target_model:
+            return a.target_model.upper() == b.target_model.upper()
+        return False
 
     @staticmethod
     def _is_busy_only(waiting_reason: str) -> bool:

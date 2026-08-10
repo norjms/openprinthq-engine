@@ -21,6 +21,7 @@ from backend.app.models.library import LibraryFile
 from backend.app.models.print_batch import PrintBatch
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
+from backend.app.models.printer_group import PrinterGroup
 from backend.app.models.project import Project
 from backend.app.models.user import User
 from backend.app.schemas.print_queue import (
@@ -165,6 +166,8 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
         "printer_id": item.printer_id,
         "target_model": item.target_model,
         "target_location": item.target_location,
+        "target_group_id": item.target_group_id,
+        "target_group_name": item.target_group.name if item.target_group else None,
         "required_filament_types": required_filament_types_parsed,
         "filament_overrides": filament_overrides_parsed,
         "waiting_reason": item.waiting_reason,
@@ -374,6 +377,22 @@ async def add_to_queue(
     if data.printer_id and target_model_norm:
         raise HTTPException(400, "Cannot specify both printer_id and target_model")
 
+    # target_group_id is a third, mutually exclusive targeting mode.
+    if data.target_group_id is not None and (data.printer_id or target_model_norm):
+        raise HTTPException(400, "Cannot specify target_group_id together with printer_id or target_model")
+
+    # Validate the group exists and has at least one active member, mirroring
+    # the target_model check below: a group with nothing schedulable in it
+    # would sit in the queue forever with no useful waiting reason.
+    target_group = None
+    if data.target_group_id is not None:
+        result = await db.execute(select(PrinterGroup).where(PrinterGroup.id == data.target_group_id))
+        target_group = result.scalar_one_or_none()
+        if not target_group:
+            raise HTTPException(400, "Printer group not found")
+        if not [p for p in target_group.printers if p.is_active]:
+            raise HTTPException(400, f"Printer group '{target_group.name}' has no active printers")
+
     # Validate printer exists (if assigned)
     if data.printer_id is not None:
         result = await db.execute(select(Printer).where(Printer.id == data.printer_id))
@@ -451,7 +470,7 @@ async def add_to_queue(
 
     # Extract filament types for model-based assignment (used by scheduler for validation)
     required_filament_types = None
-    if target_model_norm:
+    if target_model_norm or target_group is not None:
         # Get file path from archive or library file
         file_path = None
         if archive:
@@ -617,6 +636,7 @@ async def add_to_queue(
             printer_id=data.printer_id,
             target_model=target_model_norm,
             target_location=data.target_location,
+            target_group_id=data.target_group_id,
             required_filament_types=required_filament_types,
             filament_overrides=filament_overrides_json,
             archive_id=data.archive_id,
@@ -657,7 +677,14 @@ async def add_to_queue(
     await db.refresh(item, ["archive", "printer", "library_file", "created_by", "batch"])
 
     source_name = f"archive {data.archive_id}" if data.archive_id else f"library file {data.library_file_id}"
-    target_desc = data.printer_id or (f"model {target_model_norm}" if target_model_norm else "unassigned")
+    if data.printer_id:
+        target_desc = data.printer_id
+    elif target_model_norm:
+        target_desc = f"model {target_model_norm}"
+    elif target_group is not None:
+        target_desc = f"group {target_group.name}"
+    else:
+        target_desc = "unassigned"
     qty_desc = f" (×{quantity})" if quantity > 1 else ""
     logger.info("Added %s to queue for %s%s", source_name, target_desc, qty_desc)
 
