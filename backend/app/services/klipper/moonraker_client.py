@@ -44,7 +44,17 @@ _SUBSCRIBE_OBJECTS = {
     "toolhead": ["homed_axes", "print_time"],
 }
 
-_RECONNECT_BACKOFF_SECONDS = (1, 2, 5, 10, 15)
+# Reconnect cadence after a dropped websocket. The short head keeps a printer
+# that is rebooting or briefly off-wifi feeling instantaneous; the long tail
+# exists for the machine that is switched off on purpose. Without the tail the
+# client retries every 15s forever, which on a relayed deployment means a
+# permanent trickle of doomed connection attempts through the connector tunnel
+# and a WARNING in the log every 25s for as long as the printer stays off.
+_RECONNECT_BACKOFF_SECONDS = (1, 2, 5, 10, 15, 30, 60, 120, 300)
+
+# Connection failures logged at WARNING before repeats are demoted to DEBUG. The
+# transition itself gets one INFO line so the log explains its own silence.
+_LOUD_RECONNECT_FAILURES = 4
 
 
 class MoonrakerClient:
@@ -160,6 +170,12 @@ class MoonrakerClient:
 
                 async with ws_connect(url, additional_headers=headers, max_size=8 * 1024 * 1024) as ws:
                     self._ws = ws
+                    if attempt > _LOUD_RECONNECT_FAILURES:
+                        logger.info(
+                            "[%s] Moonraker recovered after %d failed attempts",
+                            self.serial_number,
+                            attempt,
+                        )
                     attempt = 0
                     logger.info("[%s] Moonraker connected at %s", self.serial_number, self._ws_url)
                     await self._resolve_chamber_object()
@@ -175,7 +191,23 @@ class MoonrakerClient:
             except asyncio.CancelledError:
                 break
             except Exception as exc:  # noqa: BLE001 — log and reconnect
-                logger.warning("[%s] Moonraker connection error: %s", self.serial_number, exc)
+                # Volume scales with how long this has been failing: loud while
+                # it might still be news, one line to announce the backoff, then
+                # quiet. A powered-off printer should not be the noisiest thing
+                # in the log.
+                if attempt < _LOUD_RECONNECT_FAILURES:
+                    logger.warning("[%s] Moonraker connection error: %s", self.serial_number, exc)
+                elif attempt == _LOUD_RECONNECT_FAILURES:
+                    logger.info(
+                        "[%s] Moonraker still unreachable after %d attempts (%s) — backing off to one "
+                        "retry every %ds; further failures logged at debug level",
+                        self.serial_number,
+                        attempt + 1,
+                        exc,
+                        _RECONNECT_BACKOFF_SECONDS[-1],
+                    )
+                else:
+                    logger.debug("[%s] Moonraker connection error: %s", self.serial_number, exc)
             finally:
                 self._ws = None
                 if self.state.connected:

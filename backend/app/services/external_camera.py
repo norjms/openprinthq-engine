@@ -17,7 +17,15 @@ from urllib.parse import urlparse
 
 import aiohttp
 
+from backend.app.services.endpoint_backoff import EndpointBackoff
+
 logger = logging.getLogger(__name__)
+
+# Snapshot endpoints are polled by background tasks (finish photos, plate
+# detection, Obico) on a fixed cadence. When the camera's printer is powered off
+# that poll fails every single time, forever. Back the endpoint off instead of
+# retrying at full rate, and stop logging the same failure indefinitely.
+_snapshot_backoff = EndpointBackoff(name="camera snapshot")
 
 
 def _sanitize_camera_url(url: str, allowed_schemes: tuple[str, ...] = ("http", "https", "rtsp")) -> str | None:
@@ -178,6 +186,7 @@ async def capture_frame(
     camera_type: str,
     timeout: int = 15,
     snapshot_url: str | None = None,
+    force: bool = False,
 ) -> bytes | None:
     """Capture single frame from external camera.
 
@@ -190,20 +199,24 @@ async def capture_frame(
             handling on sources that expose a dedicated frame endpoint (e.g. go2rtc's
             `/api/frame.jpeg` reliably returns a clean image while the MJPEG stream's
             first frame is often the encoder's stale keyframe). #1177.
+        force: Bypass the per-endpoint failure backoff. Pass True for captures
+            driven by a direct user action so a person is never made to wait out
+            a cooldown; leave False for background polling, which is what the
+            backoff exists to throttle.
 
     Returns:
         JPEG bytes or None on failure
     """
     if snapshot_url:
         logger.debug("capture_frame using snapshot override url=%s...", snapshot_url[:50])
-        return await _capture_snapshot(snapshot_url, timeout)
+        return await _capture_snapshot(snapshot_url, timeout, force=force)
     logger.debug("capture_frame called: type=%s, url=%s...", camera_type, url[:50] if url else "None")
     if camera_type == "mjpeg":
         return await _capture_mjpeg_frame(url, timeout)
     elif camera_type == "rtsp":
         return await _capture_rtsp_frame(url, timeout)
     elif camera_type == "snapshot":
-        return await _capture_snapshot(url, timeout)
+        return await _capture_snapshot(url, timeout, force=force)
     elif camera_type == "usb":
         return await _capture_usb_frame(url, timeout)
     else:
@@ -494,17 +507,51 @@ def _transcode_to_jpeg(data: bytes) -> bytes | None:
         return None
 
 
-async def _capture_snapshot(url: str, timeout: int) -> bytes | None:
+def _log_snapshot_failure(safe_url: str, message: str, *args) -> None:
+    """Log a snapshot failure at a volume that reflects how often it has happened.
+
+    The first few failures are logged normally. Once an endpoint is established
+    as down (a printer switched off at the wall, most often) one INFO line says
+    so and explains the backoff, and everything after that is DEBUG. Without
+    this a deliberately powered-off printer writes an ERROR every poll for as
+    long as it stays off.
+    """
+    level = _snapshot_backoff.record_failure(safe_url, error=message % args if args else message)
+    if level == logging.INFO:
+        logger.info(
+            "External camera at %s...: %s — %s",
+            safe_url[:50],
+            message % args if args else message,
+            _snapshot_backoff.failure_summary(safe_url),
+        )
+    else:
+        logger.log(level, message, *args)
+
+
+async def _capture_snapshot(url: str, timeout: int, force: bool = False) -> bytes | None:
     """Fetch snapshot from HTTP URL.
 
     Note: This function intentionally makes requests to user-configured URLs.
     External camera support requires connecting to user-specified camera endpoints.
     URL is sanitized and dangerous destinations are blocked.
+
+    Args:
+        force: Skip the failure backoff and attempt the fetch regardless. Set
+            this for anything driven by a direct user action (opening a camera
+            view, the "test connection" button) so a person is never told to
+            wait out a cooldown they did not ask for. Background pollers leave
+            it False.
     """
     # Sanitize URL - returns reconstructed URL from validated components
     safe_url = _sanitize_camera_url(url, ("http", "https"))
     if not safe_url:
         logger.error("Invalid snapshot URL format: %s...", url[:50])
+        return None
+
+    if not force and not _snapshot_backoff.should_attempt(safe_url):
+        # Endpoint is known-bad and inside its cooldown. Skipping the request is
+        # the point: it is what stops an off printer from generating traffic.
+        logger.debug("Snapshot skipped, endpoint backing off: %s...", safe_url[:50])
         return None
 
     try:
@@ -513,16 +560,19 @@ async def _capture_snapshot(url: str, timeout: int) -> bytes | None:
             session.get(safe_url) as response,
         ):
             if response.status != 200:
-                logger.error("Snapshot URL returned status %s", response.status)
+                _log_snapshot_failure(safe_url, "Snapshot URL returned status %s", response.status)
                 return None
 
             data = await response.read()
     except TimeoutError:
-        logger.warning("Snapshot capture timed out after %ss", timeout)
+        _log_snapshot_failure(safe_url, "Snapshot capture timed out after %ss", timeout)
         return None
     except (aiohttp.ClientError, OSError) as e:
-        logger.error("Snapshot capture failed: %s", e)
+        _log_snapshot_failure(safe_url, "Snapshot capture failed: %s", e)
         return None
+
+    if _snapshot_backoff.record_success(safe_url):
+        logger.info("External camera at %s... recovered", safe_url[:50])
 
     # Fast path: already JPEG (SOI marker), stream it as-is (no decode/re-encode).
     if data.startswith(b"\xff\xd8"):
@@ -561,7 +611,7 @@ async def test_connection(url: str, camera_type: str) -> dict:
     """
     logger.info("Testing camera connection: type=%s, url=%s...", camera_type, url[:50])
     try:
-        frame = await capture_frame(url, camera_type, timeout=10)
+        frame = await capture_frame(url, camera_type, timeout=10, force=True)
         logger.info("Capture result: %s bytes", len(frame) if frame else 0)
 
         if frame:
