@@ -8,7 +8,7 @@ from backend.app.models.filament import Filament
 from backend.app.models.github_backup import GitHubBackupConfig, GitHubBackupLog
 from backend.app.models.group import Group, user_groups
 from backend.app.models.kprofile_note import KProfileNote
-from backend.app.models.library import LibraryFile, LibraryFolder
+from backend.app.models.library import LibraryFile, LibraryFolder, LibraryMeshReport
 from backend.app.models.local_preset import LocalPreset
 from backend.app.models.location import Location
 from backend.app.models.long_lived_token import LongLivedToken
@@ -64,6 +64,7 @@ __all__ = [
     "PrintBatch",
     "LibraryFolder",
     "LibraryFile",
+    "LibraryMeshReport",
     "Location",
     "User",
     "Group",
