@@ -31,7 +31,7 @@ from backend.app.core.database import async_session, get_db
 from backend.app.core.permissions import Permission
 from backend.app.core.tasks import spawn_background_task
 from backend.app.models.archive import PrintArchive
-from backend.app.models.library import LibraryFile, LibraryFileTag, LibraryFolder
+from backend.app.models.library import LibraryFile, LibraryFileTag, LibraryFolder, LibraryMeshReport
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.project import Project
 from backend.app.models.user import User
@@ -63,6 +63,7 @@ from backend.app.schemas.library import (
     ZipExtractResult,
 )
 from backend.app.schemas.slicer import SliceRequest, SliceResponse
+from backend.app.services import mesh_integrity
 from backend.app.services.archive import ThreeMFParser
 from backend.app.services.plate_thumbnail import inject_plate_thumbnails_if_missing
 from backend.app.services.stl_thumbnail import MIN_USABLE_STL_BYTES, generate_stl_thumbnail
@@ -1763,6 +1764,18 @@ async def scan_external_folder(
         _backfill_external_stl_thumbnails(list(set(folder_cache.values()))),
         name=f"stl-backfill-folder-{folder_id}",
     )
+
+    # Mesh integrity is a second, separate deferred pass rather than part of the
+    # walk above, and the setting is read HERE rather than inside the task so a
+    # deployment that has not enabled it spawns nothing at all. That keeps a
+    # scan byte-for-byte what it was for every tenant who has not asked for the
+    # check, which matters because a scan runs on every upload on shared
+    # infrastructure.
+    if await mesh_integrity.integrity_enabled(db):
+        spawn_background_task(
+            mesh_integrity.run_pass(list(set(folder_cache.values()))),
+            name=f"mesh-integrity-folder-{folder_id}",
+        )
 
     return {"status": "success", "added": added, "removed": removed}
 
@@ -4849,3 +4862,160 @@ async def get_library_stats(
         "disk_total_bytes": disk_total_bytes,
         "disk_used_bytes": disk_used_bytes,
     }
+
+
+# ============ Mesh Integrity ============
+#
+# A non-manifold mesh or one with holes is the most common cause of a print that
+# fails in a way that looks like a printer fault, so the library reports it next
+# to the file. Results are cached by content hash in ``library_mesh_reports``;
+# see :mod:`backend.app.services.mesh_integrity` for what counts as a problem
+# and why the list is deliberately short.
+
+
+def _report_payload(report: LibraryMeshReport | None) -> dict:
+    """Shape one cached report for the API.
+
+    ``checked`` is the field the UI should branch on. A file that could not be
+    parsed, was skipped as too large, or is not a mesh format at all is NOT a
+    file with a problem, and collapsing those into one boolean here means no
+    caller can accidentally badge a STEP file as broken.
+    """
+    if report is None:
+        return {"status": "unknown", "checked": False, "findings": [], "stats": {}}
+    return {
+        "status": report.status,
+        "checked": report.status in (mesh_integrity.STATUS_OK, mesh_integrity.STATUS_PROBLEMS),
+        "findings": report.findings or [],
+        "stats": report.stats or {},
+        "reason": report.reason,
+        "duration_ms": report.duration_ms,
+        "analyzer_version": report.analyzer_version,
+    }
+
+
+@router.get("/mesh-integrity")
+async def list_mesh_integrity(
+    folder_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    _: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_READ_ALL,
+            Permission.LIBRARY_READ_OWN,
+        )
+    ),
+):
+    """Cached integrity results for a folder, keyed by file id.
+
+    One query for the listing rather than a request per card, so a folder of
+    several hundred models still renders its badges in a single round trip.
+    """
+    stmt = LibraryFile.active()
+    if folder_id is not None:
+        stmt = stmt.where(LibraryFile.folder_id == folder_id)
+    files = (await db.execute(stmt)).scalars().all()
+    files = [f for f in files if mesh_integrity.is_supported(f.filename)]
+
+    hashes = {f.file_hash for f in files if f.file_hash}
+    reports: dict[str, LibraryMeshReport] = {}
+    if hashes:
+        rows = (
+            (await db.execute(select(LibraryMeshReport).where(LibraryMeshReport.file_hash.in_(hashes)))).scalars().all()
+        )
+        reports = {r.file_hash: r for r in rows}
+
+    enabled = await mesh_integrity.integrity_enabled(db)
+    # ``path`` rides along because the caller that actually renders these is the
+    # control-plane, joining onto a different index over the same bucket. It has
+    # no way to resolve one of our file ids, and path is the only key the two
+    # indexes share.
+    return {
+        "enabled": enabled,
+        "results": {
+            str(f.id): {
+                "filename": f.filename,
+                "path": f.file_path,
+                **_report_payload(reports.get(f.file_hash) if f.file_hash else None),
+            }
+            for f in files
+        },
+    }
+
+
+@router.get("/files/{file_id}/mesh-integrity")
+async def get_file_mesh_integrity(
+    file_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_READ_ALL,
+            Permission.LIBRARY_READ_OWN,
+        )
+    ),
+):
+    """The cached integrity result for one file, if there is one."""
+    lib_file = (await db.execute(LibraryFile.active().where(LibraryFile.id == file_id))).scalar_one_or_none()
+    if not lib_file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if not mesh_integrity.is_supported(lib_file.filename):
+        return {
+            "file_id": file_id,
+            "status": mesh_integrity.STATUS_UNSUPPORTED,
+            "checked": False,
+            "findings": [],
+            "stats": {},
+            "reason": "not a mesh format",
+        }
+
+    report = None
+    if lib_file.file_hash:
+        report = (
+            await db.execute(select(LibraryMeshReport).where(LibraryMeshReport.file_hash == lib_file.file_hash))
+        ).scalar_one_or_none()
+    return {"file_id": file_id, **_report_payload(report)}
+
+
+@router.post("/files/{file_id}/mesh-integrity")
+async def analyze_file_mesh_integrity(
+    file_id: int,
+    force: bool = False,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
+):
+    """Analyse one file now, whether or not the background pass is enabled.
+
+    The explicit ask always runs: a user who clicked "check this model" has
+    accepted the cost for that one file.
+    """
+    lib_file = (await db.execute(LibraryFile.active().where(LibraryFile.id == file_id))).scalar_one_or_none()
+    if not lib_file:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not mesh_integrity.is_supported(lib_file.filename):
+        raise HTTPException(status_code=400, detail="Not a mesh format")
+
+    report = await mesh_integrity.analyze_library_file(db, lib_file, force=force)
+    if report is None:
+        raise HTTPException(status_code=404, detail="File is not present on disk")
+    await db.commit()
+    return {"file_id": file_id, **_report_payload(report)}
+
+
+@router.post("/mesh-integrity/scan")
+async def start_mesh_integrity_pass(
+    folder_id: int | None = None,
+    limit: int = mesh_integrity.DEFAULT_PASS_LIMIT,
+    force: bool = False,
+    _: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
+):
+    """Kick off a background pass. Returns immediately.
+
+    ``force`` both bypasses the enabled setting and recomputes cached rows, so
+    it is the switch to use after the analyzer itself changes.
+    """
+    folder_ids = [folder_id] if folder_id is not None else None
+    spawn_background_task(
+        mesh_integrity.run_pass(folder_ids, limit=limit, force=force),
+        name=f"mesh-integrity-manual-{folder_id or 'all'}",
+    )
+    return {"status": "started", "folder_id": folder_id, "limit": limit, "force": force}

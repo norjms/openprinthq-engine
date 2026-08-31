@@ -167,6 +167,38 @@ class LibraryFileTag(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class LibraryMeshReport(Base):
+    """Cached mesh integrity result, keyed by file content.
+
+    Keyed on the SHA256 of the bytes rather than on a file id so that the same
+    model uploaded twice, moved, renamed, or rescanned is only ever analysed
+    once. That is the whole cost story for this feature: analysis is expensive,
+    content is stable, and duplicates in a print library are common.
+
+    ``analyzer_version`` is stored alongside so a change to what counts as a
+    problem invalidates old rows without a migration.
+
+    ``status`` is one of the values in
+    :mod:`backend.app.services.mesh_integrity`. Only ``problems`` means the
+    model is actually defective; ``unsupported``, ``unreadable`` and
+    ``too_large`` all mean "not checked" and must never be rendered as a fault.
+    """
+
+    __tablename__ = "library_mesh_reports"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    file_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    analyzer_version: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16))
+    findings: Mapped[list | None] = mapped_column(JSON)
+    stats: Mapped[dict | None] = mapped_column(JSON)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 from backend.app.models.archive import PrintArchive  # noqa: E402, F811
 from backend.app.models.project import Project  # noqa: E402, F811
 from backend.app.models.user import User  # noqa: E402, F811
