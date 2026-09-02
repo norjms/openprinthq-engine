@@ -33,6 +33,7 @@ from backend.app.core.tasks import spawn_background_task
 from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile, LibraryFileTag, LibraryFolder, LibraryMeshReport
 from backend.app.models.print_queue import PrintQueueItem
+from backend.app.models.printer import Printer
 from backend.app.models.project import Project
 from backend.app.models.user import User
 from backend.app.schemas.library import (
@@ -2532,6 +2533,14 @@ async def add_files_to_queue(
     added: list[AddToQueueResult] = []
     errors: list[AddToQueueError] = []
 
+    # A named target has to exist and be active before anything is queued
+    # against it, or the job sits in the queue pointing at nothing and the
+    # scheduler will never pick it up either.
+    if request.printer_id is not None:
+        printer = await db.get(Printer, request.printer_id)
+        if printer is None or not printer.is_active:
+            raise HTTPException(status_code=404, detail="Printer not found")
+
     # Get all requested files
     result = await db.execute(LibraryFile.active().where(LibraryFile.id.in_(request.file_ids)))
     files = {f.id: f for f in result.scalars().all()}
@@ -2571,7 +2580,7 @@ async def add_files_to_queue(
             # Create queue item referencing library file (archive created at print start)
             max_position += 1
             queue_item = PrintQueueItem(
-                printer_id=None,  # Unassigned
+                printer_id=request.printer_id,  # None = unassigned, scheduler picks
                 library_file_id=file_id,
                 position=max_position,
                 status="pending",
