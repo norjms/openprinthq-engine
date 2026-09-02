@@ -6,7 +6,7 @@
 # workflow is additive and never rewrites upstream history or authorship.
 #
 # The image is multi-arch so the arm64 production host can pull the same
-# artifact the amd64 dev/test tiers use.
+# artifact the amd64 test tier uses.
 name: engine-build
 
 on:
@@ -59,7 +59,7 @@ jobs:
           push: true
           provenance: false
           tags: |
-            ghcr.io/${{ github.repository_owner }}/openprinthq-engine:dev
+            ghcr.io/${{ github.repository_owner }}/openprinthq-engine:test
             ghcr.io/${{ github.repository_owner }}/openprinthq-engine:${{ steps.v.outputs.version }}
             ghcr.io/${{ github.repository_owner }}/openprinthq-engine:sha-${{ steps.v.outputs.short }}
           cache-from: type=gha,scope=engine
