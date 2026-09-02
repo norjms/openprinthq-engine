@@ -314,6 +314,12 @@ class AddToQueueRequest(BaseModel):
     """Schema for adding library files to the print queue."""
 
     file_ids: list[int] = Field(..., min_length=1)
+    # Optional target. Omitted, the item is unassigned and the scheduler picks a
+    # printer, which is the long-standing behaviour. Set, the caller already
+    # knows which machine the plate was sliced for: a slicer sending through a
+    # per-printer print host, for one. Filament and slot mapping need that
+    # attribution, and it cannot be recovered later by guessing.
+    printer_id: int | None = None
 
 
 class AddToQueueResult(BaseModel):
