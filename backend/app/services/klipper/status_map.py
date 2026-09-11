@@ -146,6 +146,13 @@ def apply_status_objects(
             if isinstance(tot, int):
                 state.total_layers = tot
 
+        # Extruded length of the current/last job in mm. Klipper keeps it after
+        # the job ends until the next one starts, so it is still correct when
+        # the completion transition fires. Filament accounting reads it there.
+        filament_used = print_stats.get("filament_used")
+        if isinstance(filament_used, (int, float)):
+            state.raw_data["filament_used_mm"] = float(filament_used)
+
         print_duration = print_stats.get("print_duration")
         if print_duration is not None:
             # Stash for the completion handler (duration of the finished job).
