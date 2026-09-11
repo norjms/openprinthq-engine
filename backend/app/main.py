@@ -65,6 +65,7 @@ from backend.app.api.routes import (
     spoolbuddy,
     spoolman,
     spoolman_inventory,
+    spoolman_migration,
     support,
     system,
     updates,
@@ -4062,6 +4063,37 @@ async def on_print_complete(printer_id: int, data: dict):
                 if isinstance(_dur, (int, float)) and _dur > 0:
                     _started_at = _completed_at - timedelta(seconds=float(_dur))
                 _user = _print_user_info or {}
+                # Charge the job to the printer's assigned spool (either inventory
+                # mode). The Bambu tracker below never runs for these printers.
+                if data.get("filament_used_grams") is None and data.get("filament_used_mm"):
+                    from backend.app.services.external_usage import record_external_print_usage
+
+                    async with async_session() as _usage_session:
+                        _usage = await record_external_print_usage(
+                            _usage_session,
+                            printer_id=printer_id,
+                            filament_used_mm=data.get("filament_used_mm"),
+                            print_name=(data.get("filename") or data.get("subtask_name")),
+                            status=_log_status,
+                        )
+                    if _usage:
+                        data = {**data, "filament_used_grams": _usage["grams"]}
+                        try:
+                            await ws_manager.broadcast(
+                                {"type": "spool_usage_logged", "printer_id": printer_id, "usage": [_usage]}
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                    else:
+                        # No spool bound: still record an estimate on the print log.
+                        from backend.app.services.external_usage import density_for, length_to_grams
+
+                        data = {
+                            **data,
+                            "filament_used_grams": round(
+                                length_to_grams(float(data["filament_used_mm"]), density_for(data.get("filament_type"))), 2
+                            ),
+                        }
                 from backend.app.services.print_log import compute_entry_cost as _entry_costs
                 _k_cost, _k_ekwh, _k_ecost = await _entry_costs(
                     _klip_session, data.get("filament_used_grams"), data.get("filament_type"),
@@ -6824,6 +6856,7 @@ app.include_router(notification_templates.router, prefix=app_settings.api_prefix
 app.include_router(user_notifications.router, prefix=app_settings.api_prefix)
 app.include_router(spoolman.router, prefix=app_settings.api_prefix)
 app.include_router(spoolman_inventory.router, prefix=app_settings.api_prefix)
+app.include_router(spoolman_migration.router, prefix=app_settings.api_prefix)
 app.include_router(updates.router, prefix=app_settings.api_prefix)
 app.include_router(sponsor_prompt.router, prefix=app_settings.api_prefix)
 app.include_router(maintenance.router, prefix=app_settings.api_prefix)
