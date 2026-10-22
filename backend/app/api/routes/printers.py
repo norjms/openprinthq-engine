@@ -87,6 +87,7 @@ def _ensure_client_supports(client, method: str, feature: str) -> None:
             },
         )
 
+
 # Seconds the /hms/execute-action route waits for a printer status push
 # confirming the command landed before reporting 502 to the UI. Module-level
 # so tests can monkeypatch a near-zero value instead of mocking asyncio.sleep.
@@ -419,6 +420,7 @@ async def printer_catalog(
     mechanism: str | None = Query(None, description="Filter by comm mechanism"),
     limit: int = Query(1000, ge=1, le=2000),
     db: AsyncSession = Depends(get_db),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
 ):
     """OrcaSlicer-derived printer catalog (control-command framework).
 
@@ -437,47 +439,80 @@ async def printer_catalog(
             conds.append("pt.mechanism_key = :mech")
             params["mech"] = mechanism
         where = (" WHERE " + " AND ".join(conds)) if conds else ""
-        rows = (await db.execute(text(
-            "SELECT pt.id, pt.vendor, pt.model, pt.dialect_key, pt.mechanism_key, "
-            "pt.gcode_flavor, pt.nozzle_count, pt.has_chamber_heater, pt.has_aux_fan, "
-            "pt.is_multi_nozzle, pt.popularity_rank, pt.difficulty, "
-            "(SELECT count(*) FROM ctl_printer_command_support s "
-            " WHERE s.printer_type_id=pt.id AND s.supported) AS supported_commands "
-            f"FROM ctl_printer_type pt{where} "
-            "ORDER BY pt.popularity_rank NULLS LAST, pt.vendor, pt.model LIMIT :lim"
-        ), params)).mappings().all()
+        rows = (
+            (
+                await db.execute(
+                    text(
+                        "SELECT pt.id, pt.vendor, pt.model, pt.dialect_key, pt.mechanism_key, "
+                        "pt.gcode_flavor, pt.nozzle_count, pt.has_chamber_heater, pt.has_aux_fan, "
+                        "pt.is_multi_nozzle, pt.popularity_rank, pt.difficulty, "
+                        "(SELECT count(*) FROM ctl_printer_command_support s "
+                        " WHERE s.printer_type_id=pt.id AND s.supported) AS supported_commands "
+                        f"FROM ctl_printer_type pt{where} "
+                        "ORDER BY pt.popularity_rank NULLS LAST, pt.vendor, pt.model LIMIT :lim"
+                    ),
+                    params,
+                )
+            )
+            .mappings()
+            .all()
+        )
         return {"count": len(rows), "printers": [dict(r) for r in rows]}
     except Exception as e:  # noqa: BLE001
         return {"count": 0, "printers": [], "error": f"catalog unavailable: {e}"}
 
 
 @router.get("/catalog/mechanisms")
-async def printer_catalog_mechanisms(db: AsyncSession = Depends(get_db)):
+async def printer_catalog_mechanisms(
+    db: AsyncSession = Depends(get_db),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+):
     """Comm mechanisms + how many catalog models use each (for add-printer grouping)."""
     try:
-        rows = (await db.execute(text(
-            "SELECT m.key, m.name, m.transport, m.gcode_passthrough, "
-            "(SELECT count(*) FROM ctl_printer_type pt WHERE pt.mechanism_key=m.key) AS models "
-            "FROM ctl_comm_mechanism m ORDER BY models DESC"
-        ))).mappings().all()
+        rows = (
+            (
+                await db.execute(
+                    text(
+                        "SELECT m.key, m.name, m.transport, m.gcode_passthrough, "
+                        "(SELECT count(*) FROM ctl_printer_type pt WHERE pt.mechanism_key=m.key) AS models "
+                        "FROM ctl_comm_mechanism m ORDER BY models DESC"
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
         return {"mechanisms": [dict(r) for r in rows]}
     except Exception as e:  # noqa: BLE001
         return {"mechanisms": [], "error": str(e)}
 
 
 @router.get("/catalog/{catalog_id}/commands")
-async def printer_catalog_commands(catalog_id: int, db: AsyncSession = Depends(get_db)):
+async def printer_catalog_commands(
+    catalog_id: int,
+    db: AsyncSession = Depends(get_db),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+):
     """Supported/UNSUPPORTED control commands for a catalog model + the resolved
     per-mechanism command template. Powers capability display and, later, control."""
     try:
-        rows = (await db.execute(text(
-            "SELECT c.key AS command, c.category, c.display_name, s.status, s.supported, "
-            "COALESCE(s.reason, t.template) AS resolves_to, t.send_method "
-            "FROM ctl_printer_type pt CROSS JOIN ctl_command c "
-            "LEFT JOIN ctl_printer_command_support s ON s.printer_type_id=pt.id AND s.command_key=c.key "
-            "LEFT JOIN ctl_command_template t ON t.dialect_key=pt.dialect_key AND t.command_key=c.key "
-            "WHERE pt.id = :pid ORDER BY c.category, c.key"
-        ), {"pid": catalog_id})).mappings().all()
+        rows = (
+            (
+                await db.execute(
+                    text(
+                        "SELECT c.key AS command, c.category, c.display_name, s.status, s.supported, "
+                        "COALESCE(s.reason, t.template) AS resolves_to, t.send_method "
+                        "FROM ctl_printer_type pt CROSS JOIN ctl_command c "
+                        "LEFT JOIN ctl_printer_command_support s ON s.printer_type_id=pt.id AND s.command_key=c.key "
+                        "LEFT JOIN ctl_command_template t ON t.dialect_key=pt.dialect_key AND t.command_key=c.key "
+                        "WHERE pt.id = :pid ORDER BY c.category, c.key"
+                    ),
+                    {"pid": catalog_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
         if not rows:
             raise HTTPException(404, "catalog printer not found")
         return {"catalog_id": catalog_id, "commands": [dict(r) for r in rows]}
@@ -544,7 +579,9 @@ async def update_printer(
     await db.refresh(printer)
 
     # Reconnect if connection settings changed
-    if any(k in update_data for k in ["ip_address", "access_code", "is_active", "moonraker_port", "endpoint_overrides"]):
+    if any(
+        k in update_data for k in ["ip_address", "access_code", "is_active", "moonraker_port", "endpoint_overrides"]
+    ):
         printer_manager.disconnect_printer(printer_id)
         if printer.is_active:
             await printer_manager.connect_printer(printer)
@@ -1586,7 +1623,9 @@ async def list_printer_files(
     """List files on the printer at the specified path."""
     printer = await _load_printer_or_404(printer_id)
 
-    files = await list_files_async(printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer))
+    files = await list_files_async(
+        printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
 
     # Add full path to each file
     for f in files:
@@ -1607,7 +1646,9 @@ async def download_printer_file(
     """Download a file from the printer."""
     printer = await _load_printer_or_404(printer_id)
 
-    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer))
+    data = await download_file_bytes_async(
+        printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
     if data is None:
         raise HTTPException(404, f"File not found: {path}")
 
@@ -1646,7 +1687,9 @@ async def get_printer_file_gcode(
 
     printer = await _load_printer_or_404(printer_id)
 
-    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer))
+    data = await download_file_bytes_async(
+        printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
     if data is None:
         raise HTTPException(404, f"File not found: {path}")
 
@@ -1693,7 +1736,9 @@ async def get_printer_file_plates(
             "is_multi_plate": False,
         }
 
-    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer))
+    data = await download_file_bytes_async(
+        printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
     if data is None:
         raise HTTPException(404, f"File not found: {path}")
 
@@ -1920,7 +1965,9 @@ async def get_printer_file_plate_thumbnail(
 
     printer = await _load_printer_or_404(printer_id)
 
-    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer))
+    data = await download_file_bytes_async(
+        printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
     if data is None:
         raise HTTPException(404, f"File not found: {path}")
 
@@ -1957,7 +2004,11 @@ async def download_printer_files_as_zip(
         for path in paths:
             try:
                 data = await download_file_bytes_async(
-                    printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+                    printer.ip_address,
+                    printer.access_code,
+                    path,
+                    printer_model=printer.model,
+                    ftp_port=ftp_port_for(printer),
                 )
                 if data:
                     filename = path.split("/")[-1]
@@ -1990,7 +2041,9 @@ async def delete_printer_file(
 
     from backend.app.services.bambu_ftp import DeleteResult
 
-    result = await delete_file_async(printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer))
+    result = await delete_file_async(
+        printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
     if result == DeleteResult.NOT_FOUND:
         raise HTTPException(404, f"File not found on printer: {path}")
     if result == DeleteResult.FAILED:
@@ -2007,7 +2060,9 @@ async def get_printer_storage(
     """Get storage information from the printer."""
     printer = await _load_printer_or_404(printer_id)
 
-    storage_info = await get_storage_info_async(printer.ip_address, printer.access_code, printer_model=printer.model, ftp_port=ftp_port_for(printer))
+    storage_info = await get_storage_info_async(
+        printer.ip_address, printer.access_code, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
 
     return storage_info or {"used_bytes": None, "free_bytes": None}
 
