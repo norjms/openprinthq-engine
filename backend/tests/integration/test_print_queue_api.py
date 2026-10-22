@@ -1662,6 +1662,8 @@ class TestAbortedStatusNormalisation:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.execute = AsyncMock(return_value=mock_result)
+        # No printer row: the completion handler's external-printer (Klipper) check must see None, not a mock.
+        mock_session.get = AsyncMock(return_value=None)
         mock_session.commit = AsyncMock()
 
         tasks_before = set(asyncio.all_tasks())
@@ -1758,6 +1760,8 @@ class TestAbortedStatusNormalisation:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.execute = AsyncMock(return_value=mock_result)
+        # No printer row: the completion handler's external-printer (Klipper) check must see None, not a mock.
+        mock_session.get = AsyncMock(return_value=None)
         mock_session.commit = AsyncMock()
 
         tasks_before = set(asyncio.all_tasks())
