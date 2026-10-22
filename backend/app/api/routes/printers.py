@@ -566,8 +566,7 @@ async def delete_printer(
         delete_archives: If True (default), delete all print archives for this printer.
                         If False, keep archives but remove their printer association.
     """
-    from sqlalchemy import delete as sql_delete
-    from sqlalchemy import update
+    from sqlalchemy import delete as sql_delete, update
 
     from backend.app.models.archive import PrintArchive
     from backend.app.models.maintenance import MaintenanceHistory, PrinterMaintenance
