@@ -93,6 +93,7 @@ async def compute_entry_cost(db, filament_grams, filament_type, duration_seconds
             try:
                 if filament_type:
                     from sqlalchemy import select
+
                     from backend.app.models.filament import Filament
                     primary = str(filament_type).split(",")[0].strip()
                     fil = (await db.execute(select(Filament).where(Filament.type == primary).limit(1))).scalar_one_or_none()

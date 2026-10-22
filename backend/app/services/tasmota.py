@@ -1,8 +1,8 @@
 """Service for communicating with Tasmota devices via HTTP API."""
 
 import ipaddress
-import os
 import logging
+import os
 from typing import TYPE_CHECKING
 
 import httpx
@@ -56,7 +56,7 @@ class TasmotaService:
             # can only change by recreating it.
             try:
                 path = os.environ.get("OPHQ_LAN_PROXY_FILE", "/app/data/lan_proxy.map")
-                with open(path, "r", encoding="utf-8") as fh:
+                with open(path, encoding="utf-8") as fh:
                     mapping = fh.read().strip()
             except OSError:
                 return ip
