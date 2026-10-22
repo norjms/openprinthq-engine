@@ -589,6 +589,34 @@ class TestNotificationProviderTypes:
             assert "source" not in payload
 
     @pytest.mark.asyncio
+    async def test_webhook_signed_delivery(self, service):
+        """With a signing_secret the exact body is HMAC-signed (X-OPHQ-Signature) and the event is named."""
+        import hashlib
+        import hmac
+        import json as _json
+
+        config = {"webhook_url": "http://hub.local/hooks/ophq", "signing_secret": "s3cret"}
+        mock_response = MagicMock()
+        mock_response.status_code = 204
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        with patch.object(service, "_get_client", new_callable=AsyncMock) as mock_get_client:
+            mock_get_client.return_value = mock_client
+            success, _ = await service._send_webhook(
+                config, "Done", "Benchy finished", event_type="print_complete", variables={"printer": "X1C"}
+            )
+        assert success is True
+        kw = mock_client.post.call_args.kwargs
+        body = kw["content"]
+        sig = "sha256=" + hmac.new(b"s3cret", body, hashlib.sha256).hexdigest()
+        assert kw["headers"]["X-OPHQ-Signature"] == sig
+        assert kw["headers"]["X-OPHQ-Event"] == "print_complete"
+        payload = _json.loads(body)
+        assert (
+            payload["event"] == "print_complete" and payload["printer"] == "X1C" and payload["source"] == "OpenPrintHQ"
+        )
+
+    @pytest.mark.asyncio
     async def test_webhook_generic_format_includes_image(self, service):
         """Verify generic webhook includes base64-encoded image when provided."""
         config = {
@@ -2379,9 +2407,13 @@ class TestEmailProvider:
     @staticmethod
     def _fake_smtp_class(captured: dict):
         class FakeSMTP:
-            def __init__(self, host, port):
+            # timeout matches the real smtplib.SMTP/SMTP_SSL signature — the
+            # service passes an explicit timeout so a wedged relay can't hang
+            # the send (#2572).
+            def __init__(self, host, port, timeout=None):
                 captured["host"] = host
                 captured["port"] = port
+                captured["timeout"] = timeout
 
             def starttls(self):
                 captured["starttls"] = True
