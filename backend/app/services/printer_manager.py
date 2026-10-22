@@ -13,10 +13,10 @@ from backend.app.services.printer_capabilities import (
     TRANSPORT_DUET,
     TRANSPORT_FLASHFORGE,
     TRANSPORT_MKS,
-    TRANSPORT_SNAPMAKER,
     TRANSPORT_MOONRAKER,
     TRANSPORT_OBICO,
     TRANSPORT_OCTOPRINT,
+    TRANSPORT_SNAPMAKER,
     transport_of,
 )
 from backend.app.services.printer_client import PrinterClient
