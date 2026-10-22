@@ -87,7 +87,9 @@ async def bambu_queue_item(tmp_path):
 async def _dispatch(ctx):
     scheduler = PrintScheduler()
 
-    async def archive_print(self, *, printer_id, source_file, original_filename, created_by_id=None, project_id=None):
+    async def archive_print(
+        self, *, printer_id, source_file, original_filename, created_by_id=None, project_id=None, **kwargs
+    ):
         from backend.app.models.archive import PrintArchive
 
         archive_rel_path = Path("archives") / f"archive-{ctx.queue_item_id}{Path(original_filename).suffix}"
@@ -114,6 +116,9 @@ async def _dispatch(ctx):
 
     patches = [
         patch.object(scheduler_module.settings, "base_dir", ctx.base_dir),
+        # Upstream 1.2.5 writes dispatch results in fresh short-lived sessions; point them at this test's DB.
+        patch("backend.app.services.print_scheduler.async_session", ctx.session_maker),
+        patch("backend.app.core.database.async_session", ctx.session_maker),
         patch("backend.app.services.archive.ArchiveService.archive_print", new=archive_print),
         patch("backend.app.services.print_scheduler.printer_manager.is_connected", MagicMock(return_value=True)),
         patch("backend.app.services.print_scheduler.printer_manager.get_status", MagicMock(return_value=None)),
