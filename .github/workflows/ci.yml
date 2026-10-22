@@ -42,7 +42,10 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install ruff
-        run: pip install ruff
+        # Install the exact pin from requirements-dev.txt rather than the latest
+        # release, so CI and contributors run the same linter. `pip install ruff`
+        # silently drifted ahead of every local venv.
+        run: pip install "$(grep -E '^ruff==' requirements-dev.txt)"
 
       - name: Run ruff check
         run: ruff check backend/
@@ -65,7 +68,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          # Upgrade setuptools too: the runner's Python toolcache ships an old
+          # setuptools that trips pip-audit (PYSEC-2026-3447, fixed in 83.0.0).
+          # A fix exists, so we upgrade rather than --ignore-vuln.
+          python -m pip install --upgrade pip setuptools
           pip install -r requirements.txt
           pip install pip-audit
 
