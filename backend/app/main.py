@@ -37,6 +37,7 @@ from backend.app.api.routes import (
     github_backup,
     groups,
     inventory,
+    inventory_reconciliation,
     kprofiles,
     labels,
     library,
@@ -7284,6 +7285,7 @@ app.include_router(obico.router, prefix=app_settings.api_prefix)
 app.include_router(metrics.router, prefix=app_settings.api_prefix)
 app.include_router(virtual_printers.router, prefix=app_settings.api_prefix)
 app.include_router(spoolbuddy.router, prefix=app_settings.api_prefix)
+app.include_router(inventory_reconciliation.router, prefix=app_settings.api_prefix)
 app.include_router(ejection_profiles.router, prefix=app_settings.api_prefix)
 app.include_router(failure_events.router, prefix=app_settings.api_prefix)
 
