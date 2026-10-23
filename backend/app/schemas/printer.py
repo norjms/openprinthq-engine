@@ -41,6 +41,7 @@ class PrinterBase(BaseModel):
     )
     model: str | None = None  # Bambu model string, or KlipperProfile key for Klipper rows
     location: str | None = None  # Group/location name
+    installed_plate: str | None = None  # Build plate fitted now; NULL = unknown
     auto_archive: bool = True
     # Klipper/Moonraker connection detail (ignored for Bambu rows). The API key
     # is NOT here — it's a secret and must never be serialised in
@@ -106,6 +107,7 @@ class PrinterUpdate(BaseModel):
     access_code: str | None = None
     model: str | None = None
     location: str | None = None
+    installed_plate: str | None = Field(default=None, max_length=60)
     is_active: bool | None = None
     auto_archive: bool | None = None
     print_hours_offset: float | None = None

@@ -4595,6 +4595,11 @@ async def on_print_complete(printer_id: int, data: dict):
                 item.completed_at = datetime.now(timezone.utc)
                 if queue_status == "failed" and not item.error_message:
                     item.error_message = _format_hms_error_summary(data.get("hms_errors") or [])
+                if queue_status == "failed":
+                    # Farm queue: requeue a copy at the front while retries remain.
+                    from backend.app.services.farm_queue import requeue_failed
+
+                    await requeue_failed(db, item)
 
                 # Bump usage counters on the source library file so admins can
                 # sort by "last printed" and (eventually) auto-purge stale
