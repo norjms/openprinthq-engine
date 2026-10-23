@@ -694,9 +694,7 @@ class PrintScheduler:
                         )
                         # Notifications take a single "what was this aimed at"
                         # string; groups reuse the same field as models.
-                        target_desc = (
-                            item.target_group.name if item.target_group else f"group {item.target_group_id}"
-                        )
+                        target_desc = item.target_group.name if item.target_group else f"group {item.target_group_id}"
                     else:
                         printer_id, waiting_reason = await self._find_idle_printer_for_model(
                             db,
@@ -3518,7 +3516,10 @@ class PrintScheduler:
         item.completed_at = datetime.now(timezone.utc)
         await db.commit()
         logger.info(
-            "Queue item %s: dispatched to Obico on %s (%s) — monitor progress in Obico", item.id, printer.name, remote_name
+            "Queue item %s: dispatched to Obico on %s (%s) — monitor progress in Obico",
+            item.id,
+            printer.name,
+            remote_name,
         )
 
     async def _start_print(self, db: AsyncSession, item: PrintQueueItem):
@@ -3731,7 +3732,29 @@ class PrintScheduler:
                 )
                 if archive:
                     item.archive_id = archive.id
+                    # Other queued items printing the same transient row keep it: deleting it now would
+                    # cascade-delete them on PostgreSQL (ON DELETE CASCADE) or strand them on SQLite.
+                    # The last of them cleans up.
+                    shared_with = 0
                     if item.cleanup_library_after_dispatch and not library_file.is_external:
+                        shared_with = await db.scalar(
+                            select(func.count())
+                            .select_from(PrintQueueItem)
+                            .where(
+                                PrintQueueItem.library_file_id == library_file.id,
+                                PrintQueueItem.id != item.id,
+                                PrintQueueItem.status.in_(("pending", "printing")),
+                            )
+                        )
+                    if item.cleanup_library_after_dispatch and not library_file.is_external and shared_with:
+                        item.library_file_id = None
+                        logger.info(
+                            "Queue item %s: library file %s kept for %s other queued item(s)",
+                            item.id,
+                            library_file.id,
+                            shared_with,
+                        )
+                    elif item.cleanup_library_after_dispatch and not library_file.is_external:
                         item.library_file_id = None
                         cleanup_disk_paths.append(file_path)
                         if library_file.thumbnail_path:
