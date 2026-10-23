@@ -371,6 +371,7 @@ class MoonrakerClient:
             done["last_progress"] = self.state.progress
             done["print_duration"] = self.state.raw_data.get("print_duration")
             done["filament_used_mm"] = self.state.raw_data.get("filament_used_mm")
+            done["klipper_message"] = self.state.raw_data.get("klipper_message") or None
             if self._on_print_complete:
                 self._on_print_complete(done)
 

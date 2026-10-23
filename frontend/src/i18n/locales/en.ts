@@ -425,6 +425,9 @@ export default {
       offline: 'Offline',
     },
     plateStatus: {
+      ejecting: "Ejecting part",
+      failureHold: "Held: failure detected",
+      failureHoldHint: "A print failure was detected. Check the printer, then click to acknowledge and let the queue use it again.",
       markCleared: 'Mark plate as cleared',
       cleared: 'Plate Clear',
       notCleared: 'Plate not Clear',

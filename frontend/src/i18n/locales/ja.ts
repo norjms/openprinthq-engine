@@ -421,6 +421,9 @@ export default {
       offline: 'オフライン',
     },
     plateStatus: {
+      ejecting: "パーツを排出中",
+      failureHold: "保留: 失敗を検出",
+      failureHoldHint: "印刷の失敗が検出されました。プリンターを確認してから、クリックして確認し、キューで再び使えるようにしてください。",
       markCleared: 'プレートをクリア済みにする',
       cleared: 'プレートクリア済み',
       notCleared: 'プレート未クリア',

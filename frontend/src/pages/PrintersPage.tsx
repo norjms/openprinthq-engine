@@ -2225,6 +2225,23 @@ function PrinterCard({
     }
   }, [activePrintName, needsPlateClear, status?.cover_url]);
   const plateStatus = (() => {
+    if (status?.failure_hold) {
+      return {
+        label: t('printers.plateStatus.failureHold'),
+        className: 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400 cursor-pointer',
+        title: t('printers.plateStatus.failureHoldHint'),
+        onClick: async () => {
+          await api.ackPrinterFailures(printer.id);
+          queryClient.invalidateQueries({ queryKey: ['printerStatus', printer.id] });
+        },
+      };
+    }
+    if (status?.ejecting) {
+      return {
+        label: t('printers.plateStatus.ejecting'),
+        className: 'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400',
+      };
+    }
     if (!requirePlateClear || !status?.connected) return null;
     if (isPrintingOrPaused) {
       return {
@@ -2244,9 +2261,20 @@ function PrinterCard({
     };
   })();
   const plateStatusPill = plateStatus ? (
-    <span className={`inline-flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${plateStatus.className}`}>
-      {plateStatus.label}
-    </span>
+    'onClick' in plateStatus && plateStatus.onClick ? (
+      <button
+        type="button"
+        title={plateStatus.title}
+        onClick={plateStatus.onClick}
+        className={`inline-flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${plateStatus.className}`}
+      >
+        {plateStatus.label}
+      </button>
+    ) : (
+      <span className={`inline-flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${plateStatus.className}`}>
+        {plateStatus.label}
+      </span>
+    )
   ) : null;
 
   // Determine if this card should be hidden (use cached connected state to prevent flicker)
