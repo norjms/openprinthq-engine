@@ -12,6 +12,7 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.core import database
 from backend.app.core.auth import (
     RequireCameraStreamTokenIfAuthEnabled,
     RequirePermissionIfAuthEnabled,
@@ -43,6 +44,14 @@ from backend.app.services.camera_profiles import get_camera_profile
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/printers", tags=["camera"])
+
+# Upper bound on waiting for a SIGKILLed ffmpeg to be reaped (#2580). A killed
+# ffmpeg stuck in uninterruptible I/O on a dead RTSP socket can take arbitrarily
+# long to exit — an unbounded post-kill wait() parked the fan-out stream
+# coroutine for 12 hours on a P2S, leaving every viewer attached to a stalled
+# broadcaster. Abandoning the wait is safe: cleanup_orphaned_streams' /proc scan
+# reaps any Bambu ffmpeg not attached to an active stream on its next pass.
+_FFMPEG_KILL_TIMEOUT = 2.0
 
 # Track active ffmpeg processes for cleanup
 _active_streams: dict[str, asyncio.subprocess.Process] = {}
@@ -242,7 +251,17 @@ async def _terminate_ffmpeg(process: asyncio.subprocess.Process, stream_id: str 
         except TimeoutError:
             logger.warning("ffmpeg didn't terminate gracefully, killing (stream_id=%s)", stream_id)
             process.kill()
-            await process.wait()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=_FFMPEG_KILL_TIMEOUT)
+            except TimeoutError:
+                # Do NOT keep waiting (#2580): the caller is the stream
+                # generator, and blocking here pins the fan-out pump forever.
+                # The orphan janitor reaps the process later.
+                logger.error(
+                    "ffmpeg did not exit within %.1fs of SIGKILL; abandoning wait (stream_id=%s)",
+                    _FFMPEG_KILL_TIMEOUT,
+                    stream_id,
+                )
     except ProcessLookupError:
         pass  # Already dead
     except OSError as e:
@@ -609,7 +628,6 @@ async def camera_stream(
     printer_id: int,
     request: Request,
     fps: int = 10,
-    db: AsyncSession = Depends(get_db),
     _: None = RequireCameraStreamTokenIfAuthEnabled,
 ):
     """Stream live video from printer camera as MJPEG.
@@ -628,7 +646,22 @@ async def camera_stream(
         printer_id: Printer ID
         fps: Target frames per second (default: 10, max: 30)
     """
-    printer = await get_printer_or_404(printer_id, db)
+    # Fetch the printer in a short-lived session so the pooled DB connection is
+    # released BEFORE we start streaming. A live MJPEG stream runs for as long
+    # as the browser tab stays open (potentially hours); holding the
+    # Depends(get_db) session across it pinned one pooled connection per open
+    # camera tab per printer — a top contributor to pool exhaustion on large
+    # farms (issue #2572). expire_on_commit=False keeps the printer's already-
+    # loaded columns readable after the session closes, and everything below
+    # reads only scalar attributes (model, ip_address, access_code,
+    # external_camera_*) — no lazy loads.
+    #
+    # Reference async_session via the module (not a top-level import binding) so
+    # the session maker is looked up at call time — that keeps it in sync with
+    # reinitialize_database() and lets the test harness's patch of
+    # backend.app.core.database.async_session take effect here.
+    async with database.async_session() as db:
+        printer = await get_printer_or_404(printer_id, db)
 
     # Check for external camera first
     if printer.external_camera_enabled and printer.external_camera_url:
@@ -814,20 +847,13 @@ async def stop_camera_stream(
             if event:
                 event.set()
             if process.returncode is None:
-                try:
-                    process.terminate()
-                    try:
-                        await asyncio.wait_for(process.wait(), timeout=2.0)
-                    except TimeoutError:
-                        logger.warning("ffmpeg didn't terminate gracefully, killing (stream_id=%s)", stream_id)
-                        process.kill()
-                        await process.wait()
-                    stopped += 1
-                    logger.info("Terminated ffmpeg process for stream %s", stream_id)
-                except ProcessLookupError:
-                    pass  # Process already dead
-                except OSError as e:
-                    logger.warning("Error stopping stream %s: %s", stream_id, e)
+                # Shared helper, not an inline copy: it bounds the post-kill
+                # wait (#2580) — a killed-but-unreaped ffmpeg used to hang this
+                # request forever, exactly when the user hit Stop to recover a
+                # stuck stream.
+                await _terminate_ffmpeg(process, stream_id)
+                stopped += 1
+                logger.info("Terminated ffmpeg process for stream %s", stream_id)
             _spawned_ffmpeg_pids.pop(process.pid, None)
 
     for stream_id in to_remove:
@@ -863,7 +889,6 @@ async def stop_camera_stream(
 @router.get("/{printer_id}/camera/snapshot")
 async def camera_snapshot(
     printer_id: int,
-    db: AsyncSession = Depends(get_db),
     _: None = RequireCameraStreamTokenIfAuthEnabled,
 ):
     """Capture a single frame from the printer camera.
@@ -875,7 +900,15 @@ async def camera_snapshot(
     import tempfile
     from pathlib import Path
 
-    printer = await get_printer_or_404(printer_id, db)
+    # Fetch the printer in a short-lived session and release the pooled DB
+    # connection BEFORE the camera capture below (up to 15s, longer under a
+    # saturated FTP/camera pool). Holding a Depends(get_db) session across the
+    # grab pinned one connection per snapshot — and the cam wall polls this
+    # per tile every 8s — so overlapping captures could pile up connections on
+    # a large farm (issue #2572, sibling of the camera_stream fix). Everything
+    # below reads only already-loaded scalar columns (expire_on_commit=False).
+    async with database.async_session() as db:
+        printer = await get_printer_or_404(printer_id, db)
 
     # Check for external camera first
     if printer.external_camera_enabled and printer.external_camera_url:
@@ -1600,9 +1633,20 @@ async def cleanup_orphaned_streams():
                 event.set()
             try:
                 proc.kill()
-                await proc.wait()
+                # Bounded (#2580): an unreaped SIGKILLed ffmpeg must not hang
+                # the periodic cleanup loop — this janitor is the safety net
+                # that recovers stalled streams, so it can least afford to
+                # block. The /proc scan above retries the kill next pass.
+                await asyncio.wait_for(proc.wait(), timeout=_FFMPEG_KILL_TIMEOUT)
             except (ProcessLookupError, OSError):
                 pass
+            except TimeoutError:
+                logger.error(
+                    "ffmpeg (pid=%d) did not exit within %.1fs of SIGKILL; abandoning wait (stream_id=%s)",
+                    proc.pid,
+                    _FFMPEG_KILL_TIMEOUT,
+                    sid,
+                )
             _active_streams.pop(sid, None)
             _disconnect_events.pop(sid, None)
             _stream_last_frame_times.pop(sid, None)
