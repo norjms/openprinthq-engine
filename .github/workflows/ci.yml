@@ -195,7 +195,9 @@ jobs:
           for i in $(seq 1 30); do docker exec ${{ job.services.postgres.id }} pg_isready -U postgres && break; sleep 1; done
 
       - name: Run tests on PostgreSQL (shard ${{ matrix.shard }}/4)
-        timeout-minutes: 15
+        # Each test gets its own schema and real connections, so the PostgreSQL
+        # shards are slower than SQLite; shard 1 needed more than 15 minutes.
+        timeout-minutes: 30
         run: |
           cd backend
           python -m pytest tests/ \
