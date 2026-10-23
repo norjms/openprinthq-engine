@@ -489,6 +489,154 @@ def render_labels(template: TemplateName, data_list: list[LabelData], *, monochr
     raise ValueError(f"Unknown label template: {template!r}")
 
 
-__all__ = ["LabelData", "TemplateName", "render_labels"]
+# ── Location labels ──────────────────────────────────────────────────────────
+
+LocationTemplateName = Literal["avery5160", "62x29", "62x100"]
+
+_KIND_TITLES = {
+    "storage": "Storage",
+    "drybox": "Dry box",
+    "printer": "Printer",
+    "ams": "AMS unit",
+    "ams_slot": "AMS slot",
+    "external": "External holder",
+    "other": "Location",
+}
+
+
+@dataclass
+class LocationLabelData:
+    """Per-location data for a location label. ``qr_url`` is what the QR encodes."""
+
+    name: str
+    kind: str
+    code: str
+    qr_url: str
+    printer_name: str | None = None
+
+
+def _wrap_lines(c: rl_canvas.Canvas, text: str, font: str, size: float, max_w: float, max_lines: int) -> list[str]:
+    words = (text or "").split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        trial = f"{current} {word}".strip()
+        if c.stringWidth(trial, font, size) <= max_w:
+            current = trial
+            continue
+        if current:
+            lines.append(current)
+        current = word
+        if len(lines) == max_lines:
+            break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    if len(lines) == max_lines and " ".join(lines) != " ".join(words):
+        lines[-1] = _truncate_to_width(c, lines[-1] + " …", font, size, max_w)
+    return [_truncate_to_width(c, ln, font, size, max_w) for ln in lines]
+
+
+def _location_subtitle(data: LocationLabelData) -> str:
+    kind = _KIND_TITLES.get(data.kind, data.kind.replace("_", " ").title() if data.kind else "Location")
+    if data.printer_name and data.kind in ("ams", "ams_slot", "external"):
+        return f"{kind} · {data.printer_name}"
+    return kind
+
+
+def _draw_location_label(c: rl_canvas.Canvas, x: float, y: float, w: float, h: float, data: LocationLabelData) -> None:
+    pad = 1.5 * mm
+    c.setStrokeColor(HexColor(0xCCCCCC))
+    c.setLineWidth(0.4)
+    c.rect(x, y, w, h, stroke=1, fill=0)
+    c.setFillColor(black)
+
+    if h > w:
+        # Portrait (62x100): QR on top, text below.
+        qr_size = min(w - 2 * pad, h * 0.55)
+        qr_x = x + (w - qr_size) / 2
+        qr_y = y + h - pad - qr_size
+        _draw_qr(c, qr_x, qr_y, qr_size, data.qr_url)
+        text_x = x + pad
+        text_w = w - 2 * pad
+        cursor = qr_y - 2 * mm
+        for line in _wrap_lines(c, data.name, "Helvetica-Bold", 12, text_w, 3):
+            cursor -= 12
+            c.setFont("Helvetica-Bold", 12)
+            c.drawString(text_x, cursor, line)
+            cursor -= 2
+        c.setFont("Helvetica", 8)
+        cursor -= 9
+        c.drawString(text_x, cursor, _truncate_to_width(c, _location_subtitle(data), "Helvetica", 8, text_w))
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(text_x, y + pad + 1, _truncate_to_width(c, data.code, "Helvetica-Bold", 16, text_w))
+        return
+
+    # Landscape (62x29, Avery 5160): QR on the left, text on the right.
+    qr_size = h - 2 * pad
+    _draw_qr(c, x + pad, y + pad, qr_size, data.qr_url)
+    text_x = x + pad + qr_size + 1.5 * mm
+    text_w = x + w - pad - text_x
+    if text_w < 8 * mm:
+        return
+    name_size = 9 if h < 30 * mm else 11
+    cursor = y + h - pad
+    for line in _wrap_lines(c, data.name, "Helvetica-Bold", name_size, text_w, 2):
+        cursor -= name_size
+        c.setFont("Helvetica-Bold", name_size)
+        c.drawString(text_x, cursor, line)
+        cursor -= 1.2
+    c.setFont("Helvetica", 6.5)
+    cursor -= 6.5
+    c.drawString(text_x, cursor, _truncate_to_width(c, _location_subtitle(data), "Helvetica", 6.5, text_w))
+    code_size = 12
+    c.setFont("Helvetica-Bold", code_size)
+    c.drawString(text_x, y + pad + 0.5, _truncate_to_width(c, data.code, "Helvetica-Bold", code_size, text_w))
+
+
+_LOCATION_SINGLE_SIZES_MM: dict[str, tuple[float, float]] = {
+    "62x29": (62.0, 29.0),
+    "62x100": (62.0, 100.0),
+}
+
+
+def render_location_labels(template: LocationTemplateName, data_list: list[LocationLabelData]) -> bytes:
+    """Render location labels to a PDF (Avery 5160 sheet or 62 mm continuous tape)."""
+    buf = io.BytesIO()
+    if template in _LOCATION_SINGLE_SIZES_MM:
+        w_mm, h_mm = _LOCATION_SINGLE_SIZES_MM[template]
+        page_w, page_h = w_mm * mm, h_mm * mm
+        c = rl_canvas.Canvas(buf, pagesize=(page_w, page_h))
+        c.setTitle(f"Location labels ({template})")
+        for data in data_list:
+            _draw_location_label(c, 0, 0, page_w, page_h, data)
+            c.showPage()
+        c.save()
+        return buf.getvalue()
+    if template == "avery5160":
+        page_size, w_mm, h_mm, cols, rows, top_mm, left_mm, col_gap_mm, row_gap_mm = _SHEET_TEMPLATES["avery_5160"]
+        page_w, page_h = page_size
+        c = rl_canvas.Canvas(buf, pagesize=page_size)
+        c.setTitle("Location labels (avery5160)")
+        per_page = cols * rows
+        for start in range(0, len(data_list), per_page):
+            for idx, data in enumerate(data_list[start : start + per_page]):
+                row, col = idx // cols, idx % cols
+                lx = left_mm * mm + col * (w_mm * mm + col_gap_mm * mm)
+                ly = page_h - top_mm * mm - (row + 1) * h_mm * mm - row * row_gap_mm * mm
+                _draw_location_label(c, lx, ly, w_mm * mm, h_mm * mm, data)
+            c.showPage()
+        c.save()
+        return buf.getvalue()
+    raise ValueError(f"Unknown location label template: {template!r}")
+
+
+__all__ = [
+    "LabelData",
+    "LocationLabelData",
+    "LocationTemplateName",
+    "TemplateName",
+    "render_labels",
+    "render_location_labels",
+]
 # white re-exported for completeness; future templates may need a paper-tone variant.
 _ = white

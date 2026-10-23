@@ -28,3 +28,4 @@ class SpoolmanSlotAssignmentEnriched(BaseModel):
     tray_id: int
     spoolman_spool_id: int
     ams_label: str | None
+    extruder_index: int | None = None

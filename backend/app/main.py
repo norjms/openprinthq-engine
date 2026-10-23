@@ -60,6 +60,7 @@ from backend.app.api.routes import (
     print_log,
     print_queue,
     printer_groups,
+    printer_hardware,
     printer_sensor_history,
     printers,
     projects,
@@ -1140,6 +1141,15 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
         await farm_analytics.observe(printer_id, state, printer_manager.is_awaiting_plate_clear(printer_id))
     except Exception as e:  # noqa: BLE001
         logging.getLogger(__name__).debug("farm analytics: %s", e)
+    # Persist decoded nozzle hardware (source='mqtt') when it changes. The
+    # service keeps an in-memory snapshot, so this is a dict compare on the
+    # hot path and only touches the database on an actual change.
+    try:
+        from backend.app.services.printer_hardware import observe_live_nozzles
+
+        await observe_live_nozzles(printer_id, state)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger(__name__).debug("nozzle observe: %s", e)
     # Connected-edge reconciliation (#1542 follow-up). When the printer
     # transitions disconnected → connected — which covers both Bambuddy
     # startup (no prior connection) and a mid-session MQTT reconnect — fire
@@ -7249,6 +7259,7 @@ app.include_router(bug_report.router, prefix=app_settings.api_prefix)
 app.include_router(users.router, prefix=app_settings.api_prefix)
 app.include_router(groups.router, prefix=app_settings.api_prefix)
 app.include_router(printers.router, prefix=app_settings.api_prefix)
+app.include_router(printer_hardware.router, prefix=app_settings.api_prefix)
 app.include_router(printer_groups.router, prefix=app_settings.api_prefix)
 app.include_router(archives.router, prefix=app_settings.api_prefix)
 app.include_router(filaments.router, prefix=app_settings.api_prefix)
