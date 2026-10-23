@@ -24,6 +24,10 @@ concurrency:
 permissions:
   contents: read
 
+# OpenPrintHQ: upstream skips CI on the repository owner's own PRs (the
+# maintainer pushes straight to the branch). In this fork every change arrives
+# as an owner PR, so the repository variable CI_ON_OWNER_PRS=true turns the
+# jobs back on for them; without it the behaviour is upstream's.
 jobs:
   # ============================================================================
   # Backend Checks
@@ -32,7 +36,7 @@ jobs:
   backend-lint:
     name: Backend Lint
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner
+    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner || vars.CI_ON_OWNER_PRS == 'true'
     steps:
       - uses: actions/checkout@v6
 
@@ -56,7 +60,7 @@ jobs:
   backend-security:
     name: Backend Security
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner
+    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner || vars.CI_ON_OWNER_PRS == 'true'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
@@ -92,7 +96,7 @@ jobs:
   backend-tests:
     name: Backend Tests (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner
+    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner || vars.CI_ON_OWNER_PRS == 'true'
     needs: backend-lint
     strategy:
       # Don't cancel sibling shards if one fails — we want every shard's
@@ -145,7 +149,7 @@ jobs:
   backend-tests-postgres:
     name: Backend Tests on PostgreSQL (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner
+    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner || vars.CI_ON_OWNER_PRS == 'true'
     needs: backend-lint
     strategy:
       fail-fast: false
@@ -191,7 +195,9 @@ jobs:
           for i in $(seq 1 30); do docker exec ${{ job.services.postgres.id }} pg_isready -U postgres && break; sleep 1; done
 
       - name: Run tests on PostgreSQL (shard ${{ matrix.shard }}/4)
-        timeout-minutes: 15
+        # Each test gets its own schema and real connections, so the PostgreSQL
+        # shards are slower than SQLite; shard 1 needed more than 15 minutes.
+        timeout-minutes: 30
         run: |
           cd backend
           python -m pytest tests/ \
@@ -207,7 +213,7 @@ jobs:
   frontend-lint:
     name: Frontend Lint
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner
+    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner || vars.CI_ON_OWNER_PRS == 'true'
     steps:
       - uses: actions/checkout@v6
 
@@ -229,7 +235,7 @@ jobs:
   frontend-security:
     name: Frontend Security
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner
+    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner || vars.CI_ON_OWNER_PRS == 'true'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
@@ -275,7 +281,7 @@ jobs:
   frontend-typecheck:
     name: Frontend Type Check
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner
+    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner || vars.CI_ON_OWNER_PRS == 'true'
     steps:
       - uses: actions/checkout@v6
 
@@ -297,7 +303,7 @@ jobs:
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner
+    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner || vars.CI_ON_OWNER_PRS == 'true'
     needs: [frontend-lint, frontend-typecheck]
     steps:
       - uses: actions/checkout@v6
@@ -321,7 +327,7 @@ jobs:
   frontend-build:
     name: Frontend Build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner
+    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner || vars.CI_ON_OWNER_PRS == 'true'
     needs: [frontend-tests]
     steps:
       - uses: actions/checkout@v6
@@ -355,7 +361,7 @@ jobs:
   docker-backend-tests:
     name: Docker Backend Tests (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner
+    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner || vars.CI_ON_OWNER_PRS == 'true'
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -398,7 +404,7 @@ jobs:
   docker-test:
     name: Docker Build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner
+    if: github.event_name == 'push' || github.event.pull_request.user.login != github.repository_owner || vars.CI_ON_OWNER_PRS == 'true'
     timeout-minutes: 20
     needs: [backend-tests, frontend-build]
     steps:

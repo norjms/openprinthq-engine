@@ -164,8 +164,13 @@ class BrokerShim:
         self._listeners[loopback_port] = _Listener(server, spec)
         log.info(
             "broker shim: %s:%d -> %s:%d (printer %s, tunnel via %s:%d)",
-            _LOOPBACK, loopback_port, _LOOPBACK, loopback_port,  # readable
-            spec["printer_id"], spec["client_host"], spec["client_port"],
+            _LOOPBACK,
+            loopback_port,
+            _LOOPBACK,
+            loopback_port,  # readable
+            spec["printer_id"],
+            spec["client_host"],
+            spec["client_port"],
         )
 
     async def _close_listener(self, loopback_port: int) -> None:
@@ -194,9 +199,7 @@ class BrokerShim:
                 asyncio.open_connection(spec["client_host"], spec["client_port"]),
                 timeout=15.0,
             )
-            preamble = (
-                f"OPHQ1 {spec['token']} {spec['printer_id']} {spec['target_port']}\n"
-            ).encode("ascii")
+            preamble = (f"OPHQ1 {spec['token']} {spec['printer_id']} {spec['target_port']}\n").encode("ascii")
             cli_writer.write(preamble)
             await cli_writer.drain()
             await asyncio.gather(

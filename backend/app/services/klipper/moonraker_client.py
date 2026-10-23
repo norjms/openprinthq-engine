@@ -87,10 +87,10 @@ class MoonrakerClient:
         # by a grace window for routed printers so a fast reconnect doesn't oscillate
         # the card. Routed sessions target the control-plane relay host, not a LAN IP.
         import os as _os
+
         _relay_host = _os.environ.get("OPHQ_RELAY_HOST", "")
-        self._is_routed = (
-            str(self.ip_address).startswith("openprinthq-")
-            or (bool(_relay_host) and str(self.ip_address) == _relay_host)
+        self._is_routed = str(self.ip_address).startswith("openprinthq-") or (
+            bool(_relay_host) and str(self.ip_address) == _relay_host
         )
         # Seconds to keep 'connected' true after a ws drop while reconnecting.
         self._offline_grace_s = 12.0 if self._is_routed else 0.0
@@ -149,6 +149,7 @@ class MoonrakerClient:
         flip offline here."""
         if self._offline_grace_s > 0.0 and self.state.connected and self._disconnected_at > 0.0:
             import time as _t
+
             if (_t.time() - self._disconnected_at) > self._offline_grace_s and self._ws is None:
                 self.state.connected = False
                 self.state.state = "unknown"
@@ -216,6 +217,7 @@ class MoonrakerClient:
                     # card offline. If we reconnect within the window (loop top sets
                     # connected=True again), the user never sees a blip.
                     import time as _t
+
                     if self._offline_grace_s > 0.0:
                         self._disconnected_at = _t.time()
                     else:

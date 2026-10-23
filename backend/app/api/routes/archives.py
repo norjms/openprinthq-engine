@@ -2300,7 +2300,11 @@ async def scan_timelapse(
     for timelapse_path in ["/timelapse", "/timelapse/video", "/record", "/recording"]:
         try:
             files = await list_files_async(
-                printer.ip_address, printer.access_code, timelapse_path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+                printer.ip_address,
+                printer.access_code,
+                timelapse_path,
+                printer_model=printer.model,
+                ftp_port=ftp_port_for(printer),
             )
             if files:
                 break
@@ -2483,7 +2487,11 @@ async def select_timelapse(
     for timelapse_dir in ["/timelapse", "/timelapse/video", "/record", "/recording"]:
         try:
             files = await list_files_async(
-                printer.ip_address, printer.access_code, timelapse_dir, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+                printer.ip_address,
+                printer.access_code,
+                timelapse_dir,
+                printer_model=printer.model,
+                ftp_port=ftp_port_for(printer),
             )
             for f in files:
                 if f.get("name") == filename:

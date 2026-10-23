@@ -100,9 +100,7 @@ class OctoPrintClient:
         attempt = 0
         while not self._stop:
             try:
-                async with httpx.AsyncClient(
-                    timeout=10.0, headers=self._headers(), verify=False
-                ) as client:
+                async with httpx.AsyncClient(timeout=10.0, headers=self._headers(), verify=False) as client:
                     await self._poll_once(client)  # initial — raises if unreachable
                     self.state.connected = True
                     attempt = 0
@@ -287,7 +285,9 @@ class PrusaLinkClient(OctoPrintClient):
             },
         }
         job_json = {
-            "job": {"file": {"name": (job.get("file") or {}).get("display_name") or (job.get("file") or {}).get("name")}},
+            "job": {
+                "file": {"name": (job.get("file") or {}).get("display_name") or (job.get("file") or {}).get("name")}
+            },
             "progress": {
                 "completion": job.get("progress"),
                 "printTimeLeft": job.get("time_remaining"),

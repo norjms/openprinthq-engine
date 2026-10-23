@@ -78,8 +78,13 @@ async def _moonraker_firmware(printer) -> dict:
     Bambu-only."""
     import httpx
 
-    empty = {"latest_version": None, "update_available": False, "download_url": None,
-             "release_notes": None, "available_versions": []}
+    empty = {
+        "latest_version": None,
+        "update_available": False,
+        "download_url": None,
+        "release_notes": None,
+        "available_versions": [],
+    }
     url = f"http://{printer.ip_address}:{printer.moonraker_port or 7125}/machine/update/status"
     headers = {}
     if getattr(printer, "moonraker_api_key", None):
@@ -108,8 +113,13 @@ async def _moonraker_firmware(printer) -> dict:
             outdated.append(f"{name} → {rv}")
     if not outdated:
         return empty
-    return {"latest_version": ", ".join(outdated), "update_available": True, "download_url": None,
-            "release_notes": "Update via Mainsail/Fluidd → Update Manager.", "available_versions": []}
+    return {
+        "latest_version": ", ".join(outdated),
+        "update_available": True,
+        "download_url": None,
+        "release_notes": "Update via Mainsail/Fluidd → Update Manager.",
+        "available_versions": [],
+    }
 
 
 async def _firmware_info_for(printer, current_version, firmware_service) -> dict:
@@ -122,8 +132,13 @@ async def _firmware_info_for(printer, current_version, firmware_service) -> dict
         return await firmware_service.check_for_update(printer.model or "Unknown", current_version or "")
     # PrusaLink / OctoPrint / Duet / etc.: no update feed wired yet — show the
     # running version but don't claim an update is (un)available.
-    return {"latest_version": None, "update_available": False, "download_url": None,
-            "release_notes": None, "available_versions": []}
+    return {
+        "latest_version": None,
+        "update_available": False,
+        "download_url": None,
+        "release_notes": None,
+        "available_versions": [],
+    }
 
 
 @router.get("/updates", response_model=FirmwareUpdatesResponse)

@@ -206,9 +206,7 @@ class DuetClient:
                     if self._mode == "dsf":
                         await client.post(f"{self.base_url}machine/code", content=cmd, headers=self._headers())
                     else:
-                        await client.get(
-                            f"{self.base_url}rr_gcode?gcode={quote(cmd)}", headers=self._headers()
-                        )
+                        await client.get(f"{self.base_url}rr_gcode?gcode={quote(cmd)}", headers=self._headers())
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[%s] Duet gcode %r failed: %s", self.serial_number, cmd, exc)
 

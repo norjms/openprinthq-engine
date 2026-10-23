@@ -58,10 +58,35 @@ from backend.tests._testdb import make_test_engine
 UPLOAD_SECONDS = 0.15
 
 
+def _farm_engine(tmp_path):
+    """The database for one concurrency test.
+
+    The scheduler's pool workers each open their own session and commit while
+    the others are mid-transaction. On in-memory SQLite every session shares the
+    one connection the pool holds, so one worker's commit or rollback lands in
+    another's transaction and the test fails at random ("Could not refresh
+    instance", items left pending). A file database with a connection per
+    session gives each worker its own transaction, as production has. On
+    PostgreSQL (TEST_DATABASE_URL) make_test_engine already does that.
+    """
+    from backend.tests._testdb import POSTGRES
+
+    if POSTGRES:
+        return make_test_engine(echo=False)
+    from sqlalchemy.pool import NullPool
+
+    return create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'farm.db'}",
+        echo=False,
+        poolclass=NullPool,
+        connect_args={"timeout": 30},
+    )
+
+
 @pytest.fixture
 async def farm(tmp_path):
     """Build a farm of N printers, each with one pending queue item."""
-    engine = make_test_engine(echo=False)
+    engine = _farm_engine(tmp_path)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -530,7 +555,7 @@ class TestSharedLibraryRow:
 
         Nothing here mutates the library row, so all four must upload at once.
         """
-        engine = make_test_engine(echo=False)
+        engine = _farm_engine(tmp_path)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -552,7 +577,7 @@ class TestSharedLibraryRow:
         Each of these deletes the library row and unlinks the 3MF when done.
         Exactly one may go per pass; the rest stay pending for a later one.
         """
-        engine = make_test_engine(echo=False)
+        engine = _farm_engine(tmp_path)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -584,7 +609,7 @@ async def test_library_print_without_a_parseable_print_time_does_not_crash(tmp_p
     dispatch. Two printers here: if the first one's dispatch blows up, the second
     must still go out.
     """
-    engine = make_test_engine(echo=False)
+    engine = _farm_engine(tmp_path)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
