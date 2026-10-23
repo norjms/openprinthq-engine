@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from backend.app.core.database import _migrate_rename_user_print_template_names
+from backend.tests._testdb import make_test_engine
 
 
 @pytest.fixture
@@ -31,7 +32,7 @@ async def engine():
     """
     from backend.app.models.notification_template import NotificationTemplate
 
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(NotificationTemplate.__table__.create)
     try:

@@ -22,11 +22,12 @@ from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.services.print_scheduler import PrintScheduler
+from backend.tests._testdb import make_test_engine
 
 
 @pytest.fixture
 async def bambu_queue_item(tmp_path):
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -59,13 +60,13 @@ async def bambu_queue_item(tmp_path):
                 printer_id=printer.id,
                 library_file_id=library_file.id,
                 status="pending",
-                bed_levelling=True,
-                flow_cali=False,
+                bed_levelling="on",
+                flow_cali="off",
                 vibration_cali=True,
                 layer_inspect=False,
                 timelapse=False,
                 use_ams=True,
-                nozzle_offset_cali=True,
+                nozzle_offset_cali="on",
             )
             db.add(item)
             await db.commit()
