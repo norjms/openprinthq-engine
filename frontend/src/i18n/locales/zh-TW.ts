@@ -5465,8 +5465,13 @@ export default {
       discord: 'Discord',
       webhook: 'Webhook',
       homeassistant: 'Home Assistant',
+      webpush: '瀏覽器推播',
     },
     // Provider descriptions
+    webpushSubscribe: '訂閱此瀏覽器',
+    webpushSubscribed: '此瀏覽器已訂閱',
+    webpushUnsupported: '此瀏覽器無法接收推播通知 (需要 HTTPS 與 Service Worker)',
+    webpushDenied: '通知權限遭拒',
     providerDescriptions: {
       email: 'SMTP 電子郵件通知',
       telegram: '透過 Telegram 機器人傳送通知',
@@ -5476,6 +5481,7 @@ export default {
       callmebot: '透過 CallMeBot 免費傳送 WhatsApp 通知',
       webhook: '通用 HTTP POST 到任意 URL',
       homeassistant: 'Home Assistant 儀表板中的持久通知',
+      webpush: '傳送到下方已訂閱的瀏覽器與已安裝的網頁應用程式',
     },
     // NotificationProviderCard
     lastSuccess: '上次：{{date}}',

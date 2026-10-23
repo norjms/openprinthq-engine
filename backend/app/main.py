@@ -63,6 +63,7 @@ from backend.app.api.routes import (
     printer_sensor_history,
     printers,
     projects,
+    push,
     settings as settings_routes,
     slice_jobs,
     slicer_pipelines,
@@ -7323,6 +7324,7 @@ app.include_router(ejection_profiles.router, prefix=app_settings.api_prefix)
 app.include_router(failure_events.router, prefix=app_settings.api_prefix)
 app.include_router(farm_stats.router, prefix=app_settings.api_prefix)
 app.include_router(library_uploads.router, prefix=app_settings.api_prefix)
+app.include_router(push.router, prefix=app_settings.api_prefix)
 
 
 # Serve static files (React build)
