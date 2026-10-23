@@ -35,7 +35,7 @@ async def upload_gcode(
     flavor: str = "octoprint",
     use_https: bool = False,
     start_print: bool = False,
-    storage: str = "local",
+    storage: str | None = None,
 ) -> str:
     """Upload a local g-code file. Returns the remote filename. Raises on failure."""
     if not os.path.isfile(local_path):
@@ -46,6 +46,9 @@ async def upload_gcode(
 
     async with httpx.AsyncClient(timeout=_UPLOAD_TIMEOUT_SECONDS, verify=False) as client:
         if flavor == "prusalink":
+            # Buddy-firmware printers (MK4/MK4S/MK3.9/MINI/XL) only have "usb";
+            # older PrusaLink hosts have "local". Ask the printer unless told.
+            storage = storage or await prusalink_storage(client, base, api_key)
             with open(local_path, "rb") as fh:
                 headers = {
                     **_headers(api_key),
@@ -64,6 +67,23 @@ async def upload_gcode(
 
     logger.info("OctoPrint/%s upload OK: %s -> %s (%s)", flavor, local_path, name, base)
     return name
+
+
+async def prusalink_storage(client: httpx.AsyncClient, base: str, api_key: str | None) -> str:
+    """The first writable, available storage a PrusaLink printer reports
+    (``GET /api/v1/storage``), e.g. ``usb`` on an MK4S. Falls back to ``usb``,
+    which every current Buddy-firmware printer has, when the call fails."""
+    try:
+        r = await client.get(f"{base}/api/v1/storage", headers=_headers(api_key))
+        r.raise_for_status()
+        for st in (r.json() or {}).get("storage_list") or []:
+            if st.get("available", True) and not st.get("read_only", False):
+                name = (st.get("path") or st.get("name") or "").strip("/")
+                if name:
+                    return name
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PrusaLink storage lookup failed at %s: %s", base, exc)
+    return "usb"
 
 
 async def get_webcam_snapshot_url(ip_address: str, port: int, *, api_key: str | None = None) -> str | None:

@@ -261,6 +261,48 @@ class PrusaLinkClient(OctoPrintClient):
 
     flavor = "prusalink"
 
+    # -- native PrusaLink v1 job control ----------------------------------------
+    # The OctoPrint-compatible /api/job is a legacy shim on Buddy firmware; v1
+    # addresses the running job by id: PUT /api/v1/job/{id}/pause|resume and
+    # DELETE /api/v1/job/{id}. Fire-and-forget on the client loop, like _post.
+    def _job_action(self, action: str) -> bool:
+        if not self._loop:
+            return False
+
+        async def _do() -> None:
+            try:
+                async with httpx.AsyncClient(timeout=10.0, headers=self._headers(), verify=False) as client:
+                    r = await client.get(f"{self.base_url}/api/v1/job")
+                    if r.status_code == 204 or r.status_code >= 400:
+                        logger.warning("[%s] PrusaLink: no job to %s (%s)", self.serial_number, action, r.status_code)
+                        return
+                    job_id = (r.json() or {}).get("id")
+                    if job_id is None:
+                        logger.warning("[%s] PrusaLink: job has no id, cannot %s", self.serial_number, action)
+                        return
+                    url = f"{self.base_url}/api/v1/job/{job_id}"
+                    resp = await (client.delete(url) if action == "stop" else client.put(f"{url}/{action}"))
+                    if resp.status_code >= 400:
+                        logger.warning("[%s] PrusaLink %s -> %s", self.serial_number, action, resp.status_code)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[%s] PrusaLink %s failed: %s", self.serial_number, action, exc)
+
+        try:
+            asyncio.run_coroutine_threadsafe(_do(), self._loop)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[%s] PrusaLink schedule %s failed: %s", self.serial_number, action, exc)
+            return False
+
+    def stop_print(self) -> bool:
+        return self._job_action("stop")
+
+    def pause_print(self) -> bool:
+        return self._job_action("pause")
+
+    def resume_print(self) -> bool:
+        return self._job_action("resume")
+
     async def _fetch_status(self, client: httpx.AsyncClient) -> tuple[dict, dict]:
         # Translate PrusaLink /api/v1/status into the OctoPrint shape our mapper
         # expects, so the same status_map applies.

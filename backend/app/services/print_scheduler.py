@@ -3218,8 +3218,14 @@ class PrintScheduler:
         lib_path = Path(library_file.file_path)
         file_path = lib_path if lib_path.is_absolute() else settings.base_dir / library_file.file_path
         filename = library_file.filename
-        if not filename.lower().endswith(".gcode"):
-            _fail("OctoPrint printers can only print plain .gcode files")
+        # PrusaLink printers also take binary G-code (.bgcode, the MK4 default).
+        allowed = (".gcode", ".bgcode") if printer.connection_type == "prusalink" else (".gcode",)
+        if not filename.lower().endswith(allowed):
+            _fail(
+                "PrusaLink printers can only print .gcode or .bgcode files"
+                if printer.connection_type == "prusalink"
+                else "OctoPrint printers can only print plain .gcode files"
+            )
             await db.commit()
             await self._power_off_if_needed(db, item)
             return
