@@ -22,6 +22,7 @@ from backend.app.api.routes import (
     api_keys,
     archive_purge,
     archives,
+    audit_log,
     auth,
     bug_report,
     camera,
@@ -6419,12 +6420,14 @@ async def lifespan(app: FastAPI):
     # Failure detection: re-hold printers with unacknowledged failures, and start
     # the stall check (it does nothing until failure_stall_minutes is set).
     try:
+        from backend.app.services.audit import purge_loop as _audit_purge
         from backend.app.services.failure_detection import load_holds, stall_loop
 
         await load_holds()
         from backend.app.core.tasks import spawn_background_task as _spawn
 
         _spawn(stall_loop(), name="failure-stall-check")
+        _spawn(_audit_purge(), name="audit-log-purge")
     except Exception as e:  # noqa: BLE001
         logging.getLogger(__name__).warning("[FAILURE] startup failed: %s", e)
 
@@ -7216,7 +7219,32 @@ async def trace_id_middleware(request, call_next):
 
 
 # API routes
+@app.middleware("http")
+async def audit_log_middleware(request, call_next):
+    """Record every change made through the API (services/audit.py).
+
+    Registered after the auth and trace middlewares, so it runs outermost and
+    also records refused writes (401/403). Never stores bodies or query strings.
+    """
+    import time as _time
+
+    from backend.app.services import audit
+
+    started = _time.monotonic()
+    response = await call_next(request)
+    try:
+        entry = audit.record_request(request, response.status_code, started)
+        if entry:
+            # One small insert, awaited: no task can outlive the request (and the
+            # test client's database). write() swallows its own errors.
+            await audit.write(entry)
+    except Exception as e:  # noqa: BLE001 - the audit log must never break a request
+        logging.getLogger(__name__).warning("audit log: %s", e)
+    return response
+
+
 app.include_router(auth.router, prefix=app_settings.api_prefix)
+app.include_router(audit_log.router, prefix=app_settings.api_prefix)
 app.include_router(mfa.router, prefix=app_settings.api_prefix)
 app.include_router(bug_report.router, prefix=app_settings.api_prefix)
 app.include_router(users.router, prefix=app_settings.api_prefix)
