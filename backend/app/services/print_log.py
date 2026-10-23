@@ -88,6 +88,7 @@ async def compute_entry_cost(db, filament_grams, filament_type, duration_seconds
     cost = energy_kwh = energy_cost = None
     try:
         from backend.app.api.routes.settings import get_setting
+
         if filament_grams:
             cpk = None
             try:
@@ -95,8 +96,11 @@ async def compute_entry_cost(db, filament_grams, filament_type, duration_seconds
                     from sqlalchemy import select
 
                     from backend.app.models.filament import Filament
+
                     primary = str(filament_type).split(",")[0].strip()
-                    fil = (await db.execute(select(Filament).where(Filament.type == primary).limit(1))).scalar_one_or_none()
+                    fil = (
+                        await db.execute(select(Filament).where(Filament.type == primary).limit(1))
+                    ).scalar_one_or_none()
                     if fil and getattr(fil, "cost_per_kg", None):
                         cpk = float(fil.cost_per_kg)
             except Exception:

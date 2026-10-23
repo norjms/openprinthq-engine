@@ -55,9 +55,7 @@ async def upload_gcode(
         body = fh.read()
     remote_path = f"0:/user/{name}"
 
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(ip_address, port), timeout=_CONNECT_TIMEOUT_SECONDS
-    )
+    reader, writer = await asyncio.wait_for(asyncio.open_connection(ip_address, port), timeout=_CONNECT_TIMEOUT_SECONDS)
     try:
         await _command(reader, writer, "M601 S1")
         await _command(reader, writer, f"M28 {len(body)} {remote_path}")

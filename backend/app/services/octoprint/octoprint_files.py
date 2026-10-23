@@ -59,9 +59,7 @@ async def upload_gcode(
             with open(local_path, "rb") as fh:
                 files = {"file": (name, fh, "application/octet-stream")}
                 data = {"select": "true" if start_print else "false", "print": "true" if start_print else "false"}
-                resp = await client.post(
-                    f"{base}/api/files/local", headers=_headers(api_key), files=files, data=data
-                )
+                resp = await client.post(f"{base}/api/files/local", headers=_headers(api_key), files=files, data=data)
             resp.raise_for_status()
 
     logger.info("OctoPrint/%s upload OK: %s -> %s (%s)", flavor, local_path, name, base)

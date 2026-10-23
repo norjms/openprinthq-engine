@@ -255,6 +255,4 @@ async def get_klipper_discovered_printers(
     _: User | None = RequirePermissionIfAuthEnabled(Permission.DISCOVERY_SCAN),
 ):
     """List Klipper/Moonraker printers found by the most recent scan."""
-    return [
-        DiscoveredPrinterResponse(**p.to_dict()) for p in moonraker_scanner.discovered_printers
-    ]
+    return [DiscoveredPrinterResponse(**p.to_dict()) for p in moonraker_scanner.discovered_printers]

@@ -7,6 +7,7 @@ shows an authorization dialog the user accepts once; subsequent calls carry
 ``?token=``. We poll /api/v1/status on an interval and map into the shared
 ``PrinterState``. Satisfies ``PrinterClient``.
 """
+
 from __future__ import annotations
 
 import asyncio
