@@ -32,6 +32,7 @@ from backend.app.api.routes import (
     ejection_profiles,
     external_links,
     failure_events,
+    farm_stats,
     filaments,
     firmware,
     github_backup,
@@ -43,6 +44,7 @@ from backend.app.api.routes import (
     library,
     library_tags,
     library_trash,
+    library_uploads,
     local_backup,
     local_presets,
     maintenance,
@@ -1128,6 +1130,14 @@ async def _maybe_notify_printer_offline(printer_id: int) -> None:
 
 async def on_printer_status_change(printer_id: int, state: PrinterState):
     """Handle printer status changes - broadcast via WebSocket."""
+    # Farm analytics: an interval is written only when the printer's bucket
+    # (printing / paused / waiting_plate / idle / offline) changes.
+    try:
+        from backend.app.services import farm_analytics
+
+        await farm_analytics.observe(printer_id, state, printer_manager.is_awaiting_plate_clear(printer_id))
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger(__name__).debug("farm analytics: %s", e)
     # Connected-edge reconciliation (#1542 follow-up). When the printer
     # transitions disconnected → connected — which covers both Bambuddy
     # startup (no prior connection) and a mid-session MQTT reconnect — fire
@@ -7311,6 +7321,8 @@ app.include_router(spoolbuddy.router, prefix=app_settings.api_prefix)
 app.include_router(inventory_reconciliation.router, prefix=app_settings.api_prefix)
 app.include_router(ejection_profiles.router, prefix=app_settings.api_prefix)
 app.include_router(failure_events.router, prefix=app_settings.api_prefix)
+app.include_router(farm_stats.router, prefix=app_settings.api_prefix)
+app.include_router(library_uploads.router, prefix=app_settings.api_prefix)
 
 
 # Serve static files (React build)

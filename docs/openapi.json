@@ -21071,6 +21071,45 @@
     "title": "ScheduleType",
     "type": "string"
    },
+   "SessionOut": {
+    "properties": {
+     "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+     },
+     "filename": {
+      "title": "Filename",
+      "type": "string"
+     },
+     "id": {
+      "title": "Id",
+      "type": "string"
+     },
+     "max_piece": {
+      "default": 67108864,
+      "title": "Max Piece",
+      "type": "integer"
+     },
+     "received": {
+      "title": "Received",
+      "type": "integer"
+     },
+     "total_size": {
+      "title": "Total Size",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "id",
+     "filename",
+     "total_size",
+     "received",
+     "expires_at"
+    ],
+    "title": "SessionOut",
+    "type": "object"
+   },
    "SetCalibrationFactorRequest": {
     "properties": {
      "known_weight_grams": {
@@ -26119,6 +26158,44 @@
      "url"
     ],
     "title": "SpoolmanStatus",
+    "type": "object"
+   },
+   "StartBody": {
+    "properties": {
+     "filename": {
+      "maxLength": 255,
+      "minLength": 1,
+      "title": "Filename",
+      "type": "string"
+     },
+     "folder_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Folder Id"
+     },
+     "generate_stl_thumbnails": {
+      "default": true,
+      "title": "Generate Stl Thumbnails",
+      "type": "boolean"
+     },
+     "total_size": {
+      "maximum": 8589934592.0,
+      "minimum": 1.0,
+      "title": "Total Size",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "filename",
+     "total_size"
+    ],
+    "title": "StartBody",
     "type": "object"
    },
    "StartLoggingResponse": {
@@ -44259,6 +44336,242 @@
     "summary": "Restore From Trash",
     "tags": [
      "library-trash"
+    ]
+   }
+  },
+  "/api/v1/library/uploads": {
+   "post": {
+    "operationId": "library_start_upload",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/StartBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SessionOut"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Start Upload",
+    "tags": [
+     "library"
+    ]
+   }
+  },
+  "/api/v1/library/uploads/{session_id}": {
+   "delete": {
+    "operationId": "library_abandon_upload",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "session_id",
+      "required": true,
+      "schema": {
+       "title": "Session Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Abandon Upload",
+    "tags": [
+     "library"
+    ]
+   },
+   "get": {
+    "operationId": "library_upload_status",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "session_id",
+      "required": true,
+      "schema": {
+       "title": "Session Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SessionOut"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Upload Status",
+    "tags": [
+     "library"
+    ]
+   },
+   "put": {
+    "operationId": "library_upload_piece",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "session_id",
+      "required": true,
+      "schema": {
+       "title": "Session Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "offset",
+      "required": true,
+      "schema": {
+       "minimum": 0,
+       "title": "Offset",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SessionOut"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Upload Piece",
+    "tags": [
+     "library"
+    ]
+   }
+  },
+  "/api/v1/library/uploads/{session_id}/complete": {
+   "post": {
+    "operationId": "library_complete_upload",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "session_id",
+      "required": true,
+      "schema": {
+       "title": "Session Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Complete Upload",
+    "tags": [
+     "library"
     ]
    }
   },
@@ -62457,6 +62770,55 @@
     "summary": "Sync Printer Ams",
     "tags": [
      "spoolman"
+    ]
+   }
+  },
+  "/api/v1/stats/farm": {
+   "get": {
+    "description": "Hours each printer spent printing, paused, waiting for the plate to be\ncleared, idle and offline; utilization (printing out of connected time);\nand queue items completed per day.",
+    "operationId": "stats_farm_stats",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "days",
+      "required": false,
+      "schema": {
+       "default": 7,
+       "maximum": 365,
+       "minimum": 1,
+       "title": "Days",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Farm Stats",
+    "tags": [
+     "stats"
     ]
    }
   },

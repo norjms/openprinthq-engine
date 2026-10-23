@@ -27,6 +27,7 @@ from backend.app.models.print_batch import PrintBatch
 from backend.app.models.printer import Printer
 from backend.app.models.printer_group import PrinterGroup, printer_group_members
 from backend.app.models.printer_sensor_history import PrinterSensorHistory
+from backend.app.models.printer_state_interval import PrinterStateInterval
 from backend.app.models.project import Project
 from backend.app.models.settings import Settings
 from backend.app.models.slicer_pipeline import SlicerPipeline
@@ -39,6 +40,7 @@ from backend.app.models.spool_catalog import SpoolCatalogEntry
 from backend.app.models.spool_k_profile import SpoolKProfile
 from backend.app.models.spool_usage_history import SpoolUsageHistory
 from backend.app.models.spoolbuddy_device import SpoolBuddyDevice
+from backend.app.models.upload_session import UploadSession
 from backend.app.models.user import User
 from backend.app.models.user_email_pref import UserEmailPreference
 from backend.app.models.user_otp_code import UserOTPCode
@@ -96,6 +98,8 @@ __all__ = [
     "AuthEphemeralToken",
     "AuthRateLimitEvent",
     "LongLivedToken",
+    "UploadSession",
+    "PrinterStateInterval",
     "FilamentReconciliation",
     "AuditLogEntry",
     "EjectionProfile",
