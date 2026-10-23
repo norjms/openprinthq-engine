@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -33,6 +34,11 @@ from backend.app.models.audit_log import AuditLogEntry
 from backend.app.models.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+# OPHQ_AUDIT_LOG=0 turns the log off. The test suite does: its in-memory SQLite
+# shares one connection between sessions, so an audit insert can land inside a
+# background job's open transaction (tests that need the log turn it back on).
+ENABLED = os.environ.get("OPHQ_AUDIT_LOG", "1") != "0"
 
 SKIP_METHODS = {"GET", "HEAD", "OPTIONS"}
 # High-frequency, state-free calls that would drown the log.
@@ -77,7 +83,7 @@ async def write(entry: dict) -> None:
 def record_request(request, status: int, started: float) -> dict | None:
     """Build the entry for a finished request, or None when it is not logged."""
     path = request.url.path
-    if not should_log(request.method, path):
+    if not ENABLED or not should_log(request.method, path):
         return None
     actor, kind = actor_of(request.headers)
     route = getattr(request.scope.get("route"), "path", None)

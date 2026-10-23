@@ -16,6 +16,9 @@ import pytest
 # IMPORTANT: Set environment variables BEFORE any app imports
 # This must happen before settings/config are loaded
 os.environ["LOG_TO_FILE"] = "false"
+# The audit log is off for the suite (see services/audit.py); test_audit_log.py
+# turns it on for itself.
+os.environ.setdefault("OPHQ_AUDIT_LOG", "0")
 
 # PostgreSQL when TEST_DATABASE_URL says so (tests/_testdb.py); must run before the app reads DATABASE_URL.
 from backend.tests._testdb import (  # noqa: E402
