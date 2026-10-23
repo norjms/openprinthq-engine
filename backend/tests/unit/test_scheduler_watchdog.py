@@ -20,6 +20,7 @@ import pytest
 
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.services.print_scheduler import DISPATCH_MAX_ATTEMPTS, PrintScheduler
+from backend.tests._testdb import make_test_engine
 
 
 @pytest.fixture
@@ -30,12 +31,20 @@ async def db_session():
     import backend.app.models  # noqa: F401  — populate Base.metadata
     from backend.app.core.database import Base
 
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_maker() as db:
+        # The rows the item points at (PostgreSQL enforces the foreign keys SQLite ignores).
+        from backend.app.models.archive import PrintArchive
+        from backend.app.models.printer import Printer
+
+        db.add(Printer(id=42, name="Watchdog printer", serial_number="WD-42", ip_address="10.9.0.42", access_code="x"))
+        await db.flush()
+        db.add(PrintArchive(id=99, printer_id=42, filename="wd.3mf", file_path="archives/wd.3mf", file_size=1))
+        await db.flush()
         db.add(PrintQueueItem(id=1, printer_id=42, archive_id=99, status="printing"))
         await db.commit()
 

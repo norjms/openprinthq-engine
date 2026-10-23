@@ -16,6 +16,7 @@ from backend.app.core.database import Base, run_migrations
 from backend.app.models.archive import PrintArchive
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
+from backend.tests._testdb import make_test_engine
 
 
 @pytest.fixture
@@ -48,7 +49,7 @@ _BACKFILL_SQL = (
 
 @pytest.fixture
 async def sm():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     try:
@@ -168,7 +169,7 @@ async def test_run_migrations_adds_column_and_backfills_in_order(force_sqlite_di
         virtual_printer,
     )
 
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

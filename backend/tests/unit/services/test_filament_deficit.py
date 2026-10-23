@@ -595,9 +595,7 @@ class TestFilamentDeficitBackupAware:
         )
         short = await _spool(db_session, label_weight=1000, weight_used=990.0, color="#000000", slicer_filament="GFA00")
         # Same colour but expressed with explicit alpha.
-        peer = await _spool(
-            db_session, label_weight=1000, weight_used=500.0, color="#000000FF", slicer_filament="GFA00"
-        )
+        peer = await _spool(db_session, label_weight=1000, weight_used=500.0, color="000000FF", slicer_filament="GFA00")
         await _assign(db_session, printer_id=printer.id, spool_id=short.id, ams_id=0, tray_id=0)
         await _assign(db_session, printer_id=printer.id, spool_id=peer.id, ams_id=1, tray_id=0)
         item = await _queue_item(

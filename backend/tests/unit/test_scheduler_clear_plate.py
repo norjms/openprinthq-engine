@@ -7,6 +7,7 @@ import pytest
 
 from backend.app.services.print_scheduler import PrintScheduler
 from backend.app.services.printer_manager import PrinterManager
+from backend.tests._testdb import make_test_engine
 
 
 class TestPrinterManagerPlateCleared:
@@ -69,7 +70,7 @@ class TestAwaitingPlateClearPersistence:
         from backend.app.core.database import Base
         from backend.app.models.printer import Printer
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        engine = make_test_engine(echo=False)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -117,7 +118,7 @@ class TestAwaitingPlateClearPersistence:
         from backend.app.core.database import Base
         from backend.app.models.printer import Printer
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        engine = make_test_engine(echo=False)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -160,7 +161,7 @@ class TestAwaitingPlateClearPersistence:
         import backend.app.models  # noqa: F401
         from backend.app.core.database import Base
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        engine = make_test_engine(echo=False)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -301,7 +302,7 @@ class TestPlateGateDefaultsOffWhenUnset:
         import backend.app.models  # noqa: F401
         from backend.app.core.database import Base
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        engine = make_test_engine(echo=False)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -362,7 +363,7 @@ class TestPlateGateEndToEnd:
         from backend.app.core.database import Base
         from backend.app.models.settings import Settings
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        engine = make_test_engine(echo=False)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
