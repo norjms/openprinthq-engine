@@ -257,6 +257,26 @@ export function ScheduleOptionsPanel({
         </label>
       </div>
 
+      {/* Retry a failed print (farm queue) */}
+      <div className="flex items-center gap-2">
+        <label htmlFor="maxRetries" className="text-sm text-bambu-gray">
+          {t('printModal.maxRetries')}
+        </label>
+        <select
+          id="maxRetries"
+          value={options.maxRetries}
+          onChange={(e) => onChange({ ...options, maxRetries: Number(e.target.value) })}
+          className="px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-sm text-white focus:border-bambu-green focus:outline-none"
+        >
+          <option value={0}>{t('printModal.maxRetriesNone')}</option>
+          {[1, 2, 3, 5].map((n) => (
+            <option key={n} value={n}>
+              {t('printModal.maxRetriesCount', { count: n })}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {/* Auto power off */}
       <div className="flex items-center gap-2">
         <input

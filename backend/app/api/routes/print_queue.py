@@ -5,9 +5,11 @@ import logging
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 import defusedxml.ElementTree as ET
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -198,6 +200,9 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
         "require_previous_success": item.require_previous_success,
         "auto_off_after": item.auto_off_after,
         "manual_start": item.manual_start,
+        "max_retries": item.max_retries or 0,
+        "retry_count": item.retry_count or 0,
+        "retry_of_id": item.retry_of_id,
         "filament_short": bool(item.filament_short),
         "skip_filament_check": bool(item.skip_filament_check),
         "ams_mapping": ams_mapping_parsed,
@@ -677,6 +682,7 @@ async def add_to_queue(
             require_previous_success=data.require_previous_success,
             auto_off_after=data.auto_off_after,
             manual_start=data.manual_start,
+            max_retries=data.max_retries,
             skip_filament_check=data.skip_filament_check,
             ams_mapping=ams_mapping_json,
             plate_id=data.plate_id,
@@ -1046,6 +1052,23 @@ async def _build_batch_response(db: AsyncSession, batch: PrintBatch) -> PrintBat
         failed_count=status_counts.get("failed", 0),
         cancelled_count=status_counts.get("cancelled", 0),
     )
+
+
+# ---------------------------------------------------------------- farm queue
+
+
+@router.get("/stats")
+async def queue_stats_route(
+    days: int = Query(30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_READ_ALL),
+):
+    """Queue throughput over the last ``days`` days: items by status, success rate
+    (completed / (completed + failed)), average wait before start, average print time,
+    how many items were automatic retries, and the same counts per printer."""
+    from backend.app.services.farm_queue import queue_stats
+
+    return await queue_stats(db, days)
 
 
 @router.get("/{item_id}", response_model=PrintQueueItemResponse)
@@ -1553,3 +1576,157 @@ async def start_queue_item(
         skip_filament_check,
     )
     return _enrich_response(item)
+
+
+class QueueItemMark(BaseModel):
+    outcome: Literal["completed", "failed"]
+    note: str | None = Field(default=None, max_length=2000)
+    retry: bool = False  # with "failed": queue a fresh copy at the front
+
+
+@router.post("/{item_id}/mark", response_model=PrintQueueItemResponse)
+async def mark_queue_item(
+    item_id: int,
+    body: QueueItemMark,
+    db: AsyncSession = Depends(get_db),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.QUEUE_UPDATE_ALL,
+            Permission.QUEUE_UPDATE_OWN,
+        )
+    ),
+):
+    """Record how a printing item ended when the engine could not tell (a print
+    finished while the printer was offline, a stuck "printing" row). Only changes the
+    queue record; it does not send anything to the printer. With outcome "failed" and
+    retry, a fresh copy goes to the front of the queue (it still waits for the plate
+    to be cleared)."""
+    from backend.app.services.farm_queue import requeue_failed
+
+    user, can_modify_all = auth_result
+    item = (await db.execute(select(PrintQueueItem).where(PrintQueueItem.id == item_id))).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Queue item not found")
+    if not can_modify_all and user is not None and item.created_by_id != user.id:
+        raise HTTPException(403, "You can only change your own queue items")
+    if item.status != "printing":
+        raise HTTPException(409, f"Only a printing item can be marked; this one is '{item.status}'")
+    item.status = body.outcome
+    item.completed_at = datetime.now(timezone.utc)
+    if body.outcome == "failed":
+        item.error_message = body.note or item.error_message or "Marked failed by hand"
+        if body.retry and (item.max_retries or 0) <= (item.retry_count or 0):
+            item.max_retries = (item.retry_count or 0) + 1
+        await requeue_failed(db, item)
+    await db.commit()
+    logger.info("Queue item %s marked %s by hand", item_id, body.outcome)
+    result = await db.execute(
+        select(PrintQueueItem)
+        .options(
+            selectinload(PrintQueueItem.archive),
+            selectinload(PrintQueueItem.printer),
+            selectinload(PrintQueueItem.library_file),
+            selectinload(PrintQueueItem.created_by),
+            selectinload(PrintQueueItem.batch),
+        )
+        .where(PrintQueueItem.id == item_id)
+    )
+    return _enrich_response(result.scalar_one())
+
+
+@router.get("/{item_id}/preflight")
+async def preflight_queue_item(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.QUEUE_READ_ALL,
+            Permission.QUEUE_READ_OWN,
+        )
+    ),
+):
+    """Which printers could take this item right now, and why each other one can't:
+    offline, busy, plate not cleared, missing filament, hardware (nozzle size,
+    hardened nozzle for abrasive filament, build plate) or a file sliced for an
+    incompatible model. Uses the same checks as the dispatcher."""
+    from backend.app.services.farm_match import hardware_mismatch, job_hardware
+    from backend.app.services.print_scheduler import scheduler
+    from backend.app.services.printer_manager import printer_manager
+
+    current_user, can_read_all = auth_result
+    item = (
+        await db.execute(
+            select(PrintQueueItem)
+            .options(
+                selectinload(PrintQueueItem.archive),
+                selectinload(PrintQueueItem.library_file),
+                selectinload(PrintQueueItem.target_group),
+            )
+            .where(PrintQueueItem.id == item_id)
+        )
+    ).scalar_one_or_none()
+    if not item or (current_user is not None and not can_read_all and item.created_by_id != current_user.id):
+        raise HTTPException(404, "Queue item not found")
+
+    if item.printer_id:
+        printers = list((await db.execute(select(Printer).where(Printer.id == item.printer_id))).scalars())
+        target = {"printer_id": item.printer_id}
+    elif item.target_group_id:
+        group = (
+            await db.execute(select(PrinterGroup).where(PrinterGroup.id == item.target_group_id))
+        ).scalar_one_or_none()
+        printers = [p for p in (group.printers if group else []) if p.is_active]
+        target = {"group_id": item.target_group_id, "group": group.name if group else None}
+    elif item.target_model:
+        model = normalize_printer_model(item.target_model) or item.target_model
+        q = select(Printer).where(func.lower(Printer.model) == model.lower()).where(Printer.is_active == True)  # noqa: E712
+        if item.target_location:
+            q = q.where(Printer.location == item.target_location)
+        printers = list((await db.execute(q)).scalars())
+        target = {"model": model, "location": item.target_location}
+    else:
+        printers, target = [], {}
+
+    try:
+        types = json.loads(item.required_filament_types) if item.required_filament_types else []
+    except json.JSONDecodeError:
+        types = []
+    try:
+        overrides = json.loads(item.filament_overrides) if item.filament_overrides else []
+    except json.JSONDecodeError:
+        overrides = []
+    types = sorted(set(types) | {o["type"] for o in overrides if isinstance(o, dict) and o.get("type")})
+    job = job_hardware(item, types)
+    sliced_for = None
+    if item.archive:
+        sliced_for = item.archive.sliced_for_model
+    elif item.library_file and item.library_file.file_metadata:
+        sliced_for = item.library_file.file_metadata.get("sliced_for_model")
+
+    out = []
+    for p in printers:
+        reasons: list[str] = []
+        if not printer_manager.is_connected(p.id):
+            reasons.append("offline")
+        else:
+            status = printer_manager.get_status(p.id)
+            reasons += [f"needs {r}" for r in hardware_mismatch(job, status, p.installed_plate)]
+            if not scheduler._is_printer_idle(p.id, require_plate_clear=False):
+                reasons.append("busy")
+            elif printer_manager.is_awaiting_plate_clear(p.id):
+                reasons.append("plate not cleared")
+            if types and not item.skip_filament_check:
+                missing = scheduler._get_missing_filament_types(p.id, types)
+                if missing:
+                    reasons.append(f"missing filament: {', '.join(missing)}")
+        if sliced_for and not is_gcode_compatible(sliced_for, p.model):
+            reasons.append(f"file sliced for {sliced_for}")
+        out.append({"printer_id": p.id, "name": p.name, "model": p.model, "eligible": not reasons, "reasons": reasons})
+    return {
+        "item_id": item.id,
+        "status": item.status,
+        "target": target,
+        "needs": {**job, "filament_types": types, "sliced_for_model": sliced_for},
+        "waiting_reason": item.waiting_reason,
+        "printers": out,
+    }

@@ -87,6 +87,7 @@ export interface ScheduleOptions {
   scheduledTime: string;
   requireManualStart: boolean;
   requirePreviousSuccess: boolean;
+  maxRetries: number;
   autoOffAfter: boolean;
   gcodeInjection: boolean;
   staggerEnabled: boolean;
@@ -102,6 +103,7 @@ export const DEFAULT_SCHEDULE_OPTIONS: ScheduleOptions = {
   scheduledTime: '',
   requireManualStart: false,
   requirePreviousSuccess: false,
+  maxRetries: 0,
   autoOffAfter: false,
   gcodeInjection: false,
   staggerEnabled: false,
