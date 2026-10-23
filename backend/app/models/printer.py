@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, String, func
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -79,6 +79,12 @@ class Printer(Base):
     show_filament_panel: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
     # show_bed_ejection: opt-in — show the bed-ejection & continuous-printing panel.
     show_bed_ejection: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Server-side bed ejection (services/bed_ejection.py): run this profile after a
+    # successful print and clear the plate gate when it worked. consecutive_ejects
+    # counts automatic ejects since a person last cleared the plate.
+    auto_eject: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    ejection_profile_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    consecutive_ejects: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

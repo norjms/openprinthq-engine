@@ -126,6 +126,25 @@ export default {
   },
 
   // Printers page
+  ejection: {
+    title: "熱床出件設定檔",
+    description: "設定檔是把列印完成的零件推離熱床的 G 代碼。開啟自動出件後，引擎會在列印成功後執行它，等待印表機重新閒置，然後清除熱床狀態，讓下一個排隊工作開始。任何問題都會讓熱床等待人工處理。",
+    summary: "低於 {{temp}} C 時出件，最多連續 {{cap}} 次",
+    none: "尚無設定檔。",
+    add: "新增設定檔",
+    saved: "設定檔已儲存",
+    confirmDelete: "刪除設定檔 {{name}}？使用它的印表機將不再自動出件。",
+    name: "名稱",
+    gcode: "出件 G 代碼",
+    gcodeHelp: "Klipper 巨集名稱或 G 代碼行。請先手動測試：錯誤的序列可能讓列印頭撞上零件。",
+    maxBedTemp: "等待熱床降到 (C) 以下",
+    maxConsecutive: "人工檢查前的連續出件次數 (0 = 不限)",
+    timeout: "超過此時間放棄 (秒)",
+    settle: "傳送後等待多久再檢查閒置 (秒)",
+    allowedPlates: "僅限這些列印板 (以逗號分隔)",
+    allowedPlatesHelp: "留空 = 任何列印板。與印表機已安裝的列印板比較。",
+    verifyWithCamera: "清除熱床狀態前用攝影機確認熱床已空",
+  },
   printers: {
     addPreflight: {
       checking: '正在檢查連線...',
@@ -492,6 +511,10 @@ export default {
       moonrakerApiKeyPlaceholder: '開放區域網路請留空',
       moonrakerApiKeyHelp: '僅當 Moonraker 需要驗證時才需填寫。開放區域網路可留空。',
       klipperProfile: '印表機設定檔',
+      autoEject: "列印成功後自動出件",
+      ejectionProfile: "出件設定檔",
+      ejectionProfileNone: "無",
+      manageProfiles: "管理設定檔",
       saveChanges: '儲存更改',
     },
     // Skip objects

@@ -126,6 +126,25 @@ export default {
   },
 
   // Printers page
+  ejection: {
+    title: "Perfiles de expulsión",
+    description: "Un perfil es el G-code que empuja una pieza terminada fuera de la cama. Con la expulsión automática, el motor lo ejecuta tras una impresión correcta, espera a que la impresora vuelva a estar inactiva y libera la placa para que empiece el siguiente trabajo. Ante cualquier problema la placa espera a una persona.",
+    summary: "Expulsar por debajo de {{temp}} C, como máximo {{cap}} seguidas",
+    none: "Aún no hay perfiles.",
+    add: "Añadir perfil",
+    saved: "Perfil guardado",
+    confirmDelete: "¿Eliminar el perfil {{name}}? Las impresoras que lo usan dejarán de expulsar automáticamente.",
+    name: "Nombre",
+    gcode: "G-code de expulsión",
+    gcodeHelp: "Un nombre de macro de Klipper o líneas de G-code. Pruébalo primero a mano: una secuencia errónea puede llevar el cabezal contra la pieza.",
+    maxBedTemp: "Esperar hasta que la cama esté a (C) o menos",
+    maxConsecutive: "Expulsiones seguidas antes de que una persona revise (0 = sin límite)",
+    timeout: "Abandonar tras (segundos)",
+    settle: "Esperar tras enviar antes de comprobar inactividad (segundos)",
+    allowedPlates: "Solo con estas placas (separadas por comas)",
+    allowedPlatesHelp: "Vacío = cualquier placa. Se compara con la placa instalada en la impresora.",
+    verifyWithCamera: "Comprobar con la cámara que la cama está vacía antes de liberar la placa",
+  },
   printers: {
     addPreflight: {
       checking: 'Comprobando la conexión...',
@@ -492,6 +511,10 @@ export default {
       moonrakerApiKeyPlaceholder: 'Dejar vacío para LAN abierta',
       moonrakerApiKeyHelp: 'Solo es necesario si Moonraker requiere autenticación. En LAN abierta, déjelo en blanco.',
       klipperProfile: 'Perfil de impresora',
+      autoEject: "Expulsar automáticamente tras una impresión correcta",
+      ejectionProfile: "Perfil de expulsión",
+      ejectionProfileNone: "Ninguno",
+      manageProfiles: "Gestionar perfiles",
       saveChanges: 'Guardar cambios',
     },
     // Skip objects

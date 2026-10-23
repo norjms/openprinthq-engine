@@ -99,6 +99,7 @@ import { Button } from '../components/Button';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { BulkPrinterToolbar, type PrinterState } from '../components/BulkPrinterToolbar';
 import { FileManagerModal } from '../components/FileManagerModal';
+import { EjectionProfilesModal } from '../components/EjectionProfilesModal';
 import { EmbeddedCameraViewer } from '../components/EmbeddedCameraViewer';
 import { CameraWall } from '../components/CameraWall';
 import { MQTTDebugModal } from '../components/MQTTDebugModal';
@@ -7561,7 +7562,11 @@ function EditPrinterModal({
     installed_plate: printer.installed_plate || '',
     auto_archive: printer.auto_archive,
     is_active: printer.is_active,
+    auto_eject: !!printer.auto_eject,
+    ejection_profile_id: printer.ejection_profile_id ?? null,
   });
+  const [showEjectionProfiles, setShowEjectionProfiles] = useState(false);
+  const ejectionProfilesQuery = useQuery({ queryKey: ['ejection-profiles'], queryFn: api.getEjectionProfiles });
 
   // Setup-time pre-flight — same warn-on-save as the Add-Printer dialog, so an
   // edit that breaks connectivity (e.g. a mistyped IP) is caught before save.
@@ -7596,6 +7601,8 @@ function EditPrinterModal({
       installed_plate: form.installed_plate || null,
       auto_archive: form.auto_archive,
       is_active: form.is_active,
+      auto_eject: form.auto_eject && form.ejection_profile_id != null,
+      ejection_profile_id: form.ejection_profile_id,
     };
     // Only include access_code if it was changed
     if (form.access_code) {
@@ -7746,6 +7753,45 @@ function EditPrinterModal({
               </select>
               <p className="text-xs text-bambu-gray mt-1">{t('printers.modal.installedPlateHelp')}</p>
             </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="edit_ejection_profile" className="block text-sm text-bambu-gray">
+                  {t('printers.modal.ejectionProfile')}
+                </label>
+                <button
+                  type="button"
+                  className="text-xs text-bambu-green hover:underline"
+                  onClick={() => setShowEjectionProfiles(true)}
+                >
+                  {t('printers.modal.manageProfiles')}
+                </button>
+              </div>
+              <select
+                id="edit_ejection_profile"
+                className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                value={form.ejection_profile_id ?? ''}
+                onChange={(e) =>
+                  setForm({ ...form, ejection_profile_id: e.target.value === '' ? null : Number(e.target.value) })
+                }
+              >
+                <option value="">{t('printers.modal.ejectionProfileNone')}</option>
+                {(ejectionProfilesQuery.data || []).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <label className="flex items-center gap-2 mt-2 text-sm text-bambu-gray">
+                <input
+                  type="checkbox"
+                  checked={form.auto_eject}
+                  disabled={form.ejection_profile_id == null}
+                  onChange={(e) => setForm({ ...form, auto_eject: e.target.checked })}
+                  className="rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
+                />
+                {t('printers.modal.autoEject')}
+              </label>
+            </div>
             <div className="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -7826,6 +7872,7 @@ function EditPrinterModal({
           </form>
         </CardContent>
       </Card>
+      {showEjectionProfiles && <EjectionProfilesModal onClose={() => setShowEjectionProfiles(false)} />}
     </div>
   );
 }
