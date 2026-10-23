@@ -3116,7 +3116,11 @@ async def on_print_start(printer_id: int, data: dict):
                     break
                 try:
                     dir_files = await list_files_async(
-                        printer.ip_address, printer.access_code, search_dir, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+                        printer.ip_address,
+                        printer.access_code,
+                        search_dir,
+                        printer_model=printer.model,
+                        ftp_port=ftp_port_for(printer),
                     )
                     threemf_files = [f.get("name") for f in dir_files if f.get("name", "").endswith(".3mf")]
                     if threemf_files:
@@ -3519,7 +3523,11 @@ async def _list_timelapse_videos(printer) -> tuple[list[dict], str | None]:
     for timelapse_path in ["/timelapse", "/timelapse/video", "/record", "/recording"]:
         try:
             found_files = await list_files_async(
-                printer.ip_address, printer.access_code, timelapse_path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+                printer.ip_address,
+                printer.access_code,
+                timelapse_path,
+                printer_model=printer.model,
+                ftp_port=ftp_port_for(printer),
             )
             if found_files:
                 video_files = [
@@ -3696,7 +3704,11 @@ async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[
                 )
 
                 timelapse_data = await download_file_bytes_async(
-                    printer.ip_address, printer.access_code, remote_path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+                    printer.ip_address,
+                    printer.access_code,
+                    remote_path,
+                    printer_model=printer.model,
+                    ftp_port=ftp_port_for(printer),
                 )
                 if timelapse_data:
                     # Write phase: attach in a fresh short-lived session.
@@ -3744,7 +3756,11 @@ async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[
                     logger.info("[TIMELAPSE] Name-match fallback: '%s' matches '%s'", base_name, fname)
 
                     timelapse_data = await download_file_bytes_async(
-                        printer.ip_address, printer.access_code, remote_path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+                        printer.ip_address,
+                        printer.access_code,
+                        remote_path,
+                        printer_model=printer.model,
+                        ftp_port=ftp_port_for(printer),
                     )
                     if timelapse_data:
                         # Write phase: attach in a fresh short-lived session.
@@ -4288,13 +4304,20 @@ async def on_print_complete(printer_id: int, data: dict):
                         data = {
                             **data,
                             "filament_used_grams": round(
-                                length_to_grams(float(data["filament_used_mm"]), density_for(data.get("filament_type"))), 2
+                                length_to_grams(
+                                    float(data["filament_used_mm"]), density_for(data.get("filament_type"))
+                                ),
+                                2,
                             ),
                         }
                 from backend.app.services.print_log import compute_entry_cost as _entry_costs
+
                 _k_cost, _k_ekwh, _k_ecost = await _entry_costs(
-                    _klip_session, data.get("filament_used_grams"), data.get("filament_type"),
-                    (_completed_at - _started_at).total_seconds() if (_started_at and _completed_at) else None)
+                    _klip_session,
+                    data.get("filament_used_grams"),
+                    data.get("filament_type"),
+                    (_completed_at - _started_at).total_seconds() if (_started_at and _completed_at) else None,
+                )
                 await write_log_entry(
                     _klip_session,
                     status=_log_status,
@@ -4954,6 +4977,7 @@ async def on_print_complete(printer_id: int, data: dict):
                 _run_ekwh = _run_ecost = None
                 try:
                     from backend.app.services.print_log import compute_entry_cost as _entry_costs
+
                     if archive.started_at and archive.completed_at:
                         _bd = (archive.completed_at - archive.started_at).total_seconds()
                         _tmpc, _run_ekwh, _run_ecost = await _entry_costs(db, None, None, _bd)
@@ -6646,6 +6670,7 @@ async def lifespan(app: FastAPI):
     # printers a loopback address the engine dials unchanged, tunnelling to the
     # client's ONE gateway port. Per-tenant (one engine container per user).
     from backend.app.services.broker_shim import start_broker_shim
+
     start_broker_shim()
 
     # Initialize virtual printer manager and sync from DB
@@ -6999,16 +7024,17 @@ async def auth_middleware(request, call_next):
             from backend.app.core.auth import is_auth_enabled
 
             auth_enabled = await is_auth_enabled(db)
-
-        if not auth_enabled:
-            # Auth disabled, allow all requests
-            return await call_next(request)
     except Exception:
         logging.getLogger(__name__).exception("auth_middleware: failing closed on auth-probe error from %s", path)
         return JSONResponse(
             status_code=503,
             content={"detail": "Authentication service temporarily unavailable"},
         )
+
+    if not auth_enabled:
+        # Auth disabled, allow all requests. Outside the probe's try: an error in the route itself is the
+        # route's (a 500 with its own traceback), not an "authentication unavailable" 503.
+        return await call_next(request)
 
     # Auth is enabled - require valid token
     auth_header = request.headers.get("Authorization")
