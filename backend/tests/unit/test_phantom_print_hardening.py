@@ -15,6 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.sql import ClauseElement
 
 from backend.app.models.archive import PrintArchive
+from backend.tests._testdb import make_test_engine
 
 
 class TestArchiveMatchQueryShape:
@@ -231,7 +232,7 @@ class TestBusyPrinterSeedingFromPrintingItems:
         from backend.app.core.database import Base
         from backend.app.models.print_queue import PrintQueueItem
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        engine = make_test_engine(echo=False)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -268,7 +269,7 @@ class TestBusyPrinterSeedingFromPrintingItems:
         from backend.app.core.database import Base
         from backend.app.models.print_queue import PrintQueueItem
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        engine = make_test_engine(echo=False)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -310,7 +311,7 @@ class TestBusyPrinterSeedingFromPrintingItems:
         from backend.app.models.print_queue import PrintQueueItem
         from backend.app.services.print_scheduler import PrintScheduler
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        engine = make_test_engine(echo=False)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

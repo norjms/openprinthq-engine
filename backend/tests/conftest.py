@@ -16,6 +16,17 @@ import pytest
 # IMPORTANT: Set environment variables BEFORE any app imports
 # This must happen before settings/config are loaded
 os.environ["LOG_TO_FILE"] = "false"
+
+# PostgreSQL when TEST_DATABASE_URL says so (tests/_testdb.py); must run before the app reads DATABASE_URL.
+from backend.tests._testdb import (  # noqa: E402
+    drop_test_schema,
+    drop_worker_database,
+    make_test_engine,
+    setup_worker_database,
+    test_schema,
+)
+
+setup_worker_database()
 os.environ["DEBUG"] = "false"
 
 from httpx import ASGITransport, AsyncClient  # noqa: E402
@@ -40,9 +51,12 @@ def _cleanup_test_plate_cal_dir():
 atexit.register(_cleanup_test_plate_cal_dir)
 
 from backend.app.core.database import Base  # noqa: E402
+from backend.tests._testdb import init_app_database  # noqa: E402
+
+init_app_database()
 
 # Use in-memory SQLite for tests
-TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+from backend.tests._testdb import WORKER_URL as TEST_DATABASE_URL  # noqa: E402,F401  (kept for tests that read it)
 
 
 @pytest.fixture(autouse=True)
@@ -128,7 +142,7 @@ def event_loop():
 @pytest.fixture
 async def test_engine():
     """Create a test database engine."""
-    engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+    engine = make_test_engine(echo=False)
 
     # Import all models to register them
     from backend.app.models import (
@@ -176,8 +190,11 @@ async def test_engine():
 
     yield engine
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+    if test_schema(engine):
+        await drop_test_schema(engine)
+    else:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
     # Allow aiosqlite's background thread to finish processing the close
     # response before the per-function event loop shuts down, preventing
@@ -729,3 +746,46 @@ def assert_no_log_errors(capture_logs):
     errors = capture_logs.get_errors()
     if errors:
         pytest.fail(f"Unexpected log errors:\n{capture_logs.format_errors()}")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Drop this worker's PostgreSQL test database (no-op on SQLite)."""
+    drop_worker_database()
+
+
+def pytest_collection_modifyitems(config, items):
+    """On PostgreSQL, skip the tests that exercise SQLite itself: the migration tests (they build SQLite
+    databases and run the SQLite branch of the migrations) and the dialect tests (they assert the SQLite
+    default). They still run in the default, SQLite pass."""
+    from backend.tests._testdb import POSTGRES
+
+    if not POSTGRES:
+        return
+    skip = pytest.mark.skip(reason="SQLite-specific (migrations, dialect detection); runs without TEST_DATABASE_URL")
+    orphan = pytest.mark.skip(
+        reason="needs a row PostgreSQL refuses (a missing parent, an over-long value); runs on SQLite"
+    )
+    for item in items:
+        name = item.path.name
+        if "_migration" in name or name == "test_db_dialect.py" or "migration" in item.name:
+            item.add_marker(skip)
+        elif item.name.split("[")[0] in _ORPHAN_ROW_TESTS:
+            item.add_marker(orphan)
+
+
+# Tests that build rows whose foreign key points at nothing, on purpose (they cover defensive code for data a
+# deleted parent left behind, possible on SQLite where foreign keys are off) or by shortcut (a mocked parent).
+_ORPHAN_ROW_TESTS = {
+    "test_list_oidc_links_returns_deleted_marker_for_orphan_provider",
+    "test_deleted_queue_entry_rolls_up_as_cancelled",
+    "test_noop_when_user_row_missing",
+    "test_start_preserves_existing_owner",
+    "test_proxy_vp_falls_back_to_self_generated_when_target_missing",
+    "test_auto_assign_kprofile_takes_priority_over_live_cali_idx",
+    # queue items for printers and archives the test never makes
+    "test_seed_query_returns_printers_with_printing_items",
+    "test_seed_query_empty_when_no_printing_items",
+    "test_check_queue_skips_printer_with_existing_printing_item",
+    # a '#RRGGBBAA' colour (9 characters) in the 8-character rgba column
+    "test_backup_on_color_alpha_normalized",
+}

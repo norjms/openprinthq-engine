@@ -2,6 +2,17 @@
 
 All notable changes to Bambuddy will be documented in this file.
 
+## [Unreleased] - OpenPrintHQ engine
+
+### Fixed
+- **Queued jobs that share a self-deleting library file vanished on PostgreSQL** — A queue item can be set to delete its library file once it has been sent to a printer (`cleanup_library_after_dispatch`). When several queued items used the same file, the first dispatch deleted it, and on PostgreSQL the foreign key from the queue to the library (`ON DELETE CASCADE`) then deleted every other queued item for that file, silently. On SQLite, where foreign keys are off, they stayed queued but pointed at a file that no longer existed. OpenPrintHQ runs every engine on PostgreSQL, so this affected production. The scheduler now keeps the file while other pending or printing items still use it, and the last of them cleans it up. Found by running the test suite on PostgreSQL.
+
+- **Importing a project failed on PostgreSQL when the export had no priority** — Exports without a priority sent `0` for a text column (low, normal, high, urgent); SQLite stored it, PostgreSQL refused it. An import now uses the export's priority when it is one of those words, and `normal` otherwise.
+- **An error inside a route answered "Authentication service temporarily unavailable" (503) when auth was off** — With authentication disabled, the auth middleware called the route from inside the try block meant for its own database check, so any exception the route raised was reported as an auth outage. The route now runs after that check; auth-check failures still fail closed with 503.
+
+### Changed
+- **The test suite runs on PostgreSQL as well as SQLite** — Set `TEST_DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/name` and the suite runs on PostgreSQL, the database OpenPrintHQ runs in production: each xdist worker gets its own database and each test engine its own schema (`backend/tests/_testdb.py`). Unset, it uses in-memory SQLite as before. CI runs both, and now also runs on pull requests to the OpenPrintHQ trunk. Tests that exercise SQLite itself (migrations, dialect detection) or that need rows pointing at a missing parent (which PostgreSQL's foreign keys refuse) run on SQLite only. The PostgreSQL timezone handling the app applies to its own engine is now a shared helper (`install_postgres_listeners`), used by the tests' engines too; the app's behaviour is unchanged.
+
 ## [1.2.5] - 2026-07-24
 
 ### Added

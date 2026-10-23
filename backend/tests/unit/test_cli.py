@@ -14,11 +14,12 @@ from backend.app.core.auth import _validate_api_key
 from backend.app.core.database import Base
 from backend.app.models.api_key import APIKey
 from backend.app.models.settings import Settings
+from backend.tests._testdb import make_test_engine
 
 
 @pytest_asyncio.fixture
 async def session_maker() -> AsyncGenerator[async_sessionmaker, None]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    engine = make_test_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
