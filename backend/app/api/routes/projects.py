@@ -1832,7 +1832,9 @@ async def import_project_file(
         notes=data.get("notes"),
         tags=data.get("tags"),
         due_date=datetime.fromisoformat(data["due_date"]) if data.get("due_date") else None,
-        priority=data.get("priority", 0),
+        # priority is a word (low, normal, high, urgent); exports without one used to send 0, which
+        # PostgreSQL rejects for this text column (SQLite stored it).
+        priority=data.get("priority") if data.get("priority") in ("low", "normal", "high", "urgent") else "normal",
         budget=data.get("budget"),
     )
     db.add(project)
