@@ -3,7 +3,7 @@ import logging
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
@@ -28,7 +28,12 @@ from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spool_catalog import SpoolCatalogEntry
 from backend.app.models.spool_k_profile import SpoolKProfile
 from backend.app.models.user import User
-from backend.app.schemas.location import LocationCreate, LocationResponse, LocationUpdate
+from backend.app.schemas.location import (
+    LocationCreate,
+    LocationResponse,
+    LocationUpdate,
+    LocationWithSpoolsResponse,
+)
 from backend.app.schemas.spool import (
     SpoolAssignmentCreate,
     SpoolAssignmentResponse,
@@ -597,21 +602,69 @@ def _location_to_response(location: Location, spool_count: int) -> LocationRespo
         id=location.id,
         name=location.name,
         identifier=location.identifier,
+        kind=location.kind or "storage",
+        parent_id=location.parent_id,
+        printer_id=location.printer_id,
+        ams_id=location.ams_id,
+        tray_id=location.tray_id,
+        code=location.code,
+        note=location.note,
         spool_count=spool_count,
         created_at=location.created_at,
         updated_at=location.updated_at,
     )
 
 
+async def _ensure_location_codes(db: AsyncSession, locations: list[Location]) -> None:
+    """Give any code-less row (created by raw SQL or before the migration) a code."""
+    from backend.app.utils.location_codes import generate_location_code
+
+    changed = False
+    for loc in locations:
+        if not loc.code:
+            loc.code = generate_location_code()
+            changed = True
+    if changed:
+        await db.commit()
+        for loc in locations:
+            await db.refresh(loc)
+
+
+async def _validate_location_links(db: AsyncSession, location_id: int | None, parent_id: int | None) -> None:
+    if parent_id is None:
+        return
+    if location_id is not None and parent_id == location_id:
+        raise HTTPException(status_code=422, detail="A location cannot be its own parent")
+    parent = await get_location_by_id(db, parent_id)
+    if parent is None:
+        raise HTTPException(status_code=422, detail="Parent location not found")
+    # Walk up to refuse cycles.
+    seen: set[int] = set()
+    cursor: Location | None = parent
+    while cursor is not None and cursor.parent_id is not None:
+        if cursor.parent_id == location_id or cursor.parent_id in seen:
+            raise HTTPException(status_code=422, detail="Parent would create a cycle")
+        seen.add(cursor.parent_id)
+        cursor = await get_location_by_id(db, cursor.parent_id)
+
+
 @router.get("/locations", response_model=list[LocationResponse])
 async def list_locations(
+    kind: str | None = Query(None, description="Only locations of this kind"),
+    printer_id: int | None = Query(None, description="Only locations bound to this printer"),
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
 ):
-    """List all storage locations with spool counts."""
+    """List storage locations with spool counts, optionally filtered by kind/printer."""
     settings = await _load_settings_map(db)
-    result = await db.execute(select(Location).order_by(Location.name))
+    query = select(Location).order_by(Location.name)
+    if kind:
+        query = query.where(Location.kind == kind)
+    if printer_id is not None:
+        query = query.where(Location.printer_id == printer_id)
+    result = await db.execute(query)
     locations = list(result.scalars().all())
+    await _ensure_location_codes(db, locations)
     counts = await _spool_counts_for_locations(db, locations, settings)
     return [_location_to_response(loc, counts.get(loc.id, 0)) for loc in locations]
 
@@ -626,7 +679,22 @@ async def create_location(
     existing = await get_location_by_name(db, data.name)
     if existing:
         raise HTTPException(status_code=409, detail=DUPLICATE_LOCATION_NAME)
-    location = Location(identifier=data.identifier)
+    if data.code:
+        clash = await db.execute(select(Location.id).where(Location.code == data.code))
+        if clash.first() is not None:
+            raise HTTPException(status_code=409, detail="Location code already in use")
+    await _validate_location_links(db, None, data.parent_id)
+    location = Location(
+        identifier=data.identifier,
+        kind=data.kind,
+        parent_id=data.parent_id,
+        printer_id=data.printer_id,
+        ams_id=data.ams_id,
+        tray_id=data.tray_id,
+        note=data.note,
+    )
+    if data.code:
+        location.code = data.code
     assign_location_name(location, data.name)
     db.add(location)
     try:
@@ -654,6 +722,22 @@ async def update_location(
     old_name = location.name
     if data.identifier is not None:
         location.identifier = data.identifier or None
+    fields = data.model_fields_set
+    if "parent_id" in fields:
+        await _validate_location_links(db, location.id, data.parent_id)
+        location.parent_id = data.parent_id
+    if "kind" in fields and data.kind is not None:
+        location.kind = data.kind
+    for attr in ("printer_id", "ams_id", "tray_id"):
+        if attr in fields:
+            setattr(location, attr, getattr(data, attr))
+    if "note" in fields:
+        location.note = data.note or None
+    if "code" in fields and data.code and data.code != location.code:
+        clash = await db.execute(select(Location.id).where(Location.code == data.code, Location.id != location.id))
+        if clash.first() is not None:
+            raise HTTPException(status_code=409, detail="Location code already in use")
+        location.code = data.code
 
     if data.name is not None and data.name != old_name:
         try:
@@ -694,6 +778,150 @@ async def update_location(
     counts = await _spool_counts_for_locations(db, [location], settings)
     await ws_manager.broadcast({"type": "inventory_changed"})
     return _location_to_response(location, counts.get(location.id, 0))
+
+
+@router.get("/locations/by-code/{code}", response_model=LocationWithSpoolsResponse)
+async def get_location_by_code(
+    code: str,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
+):
+    """Resolve a scanned location code (case-insensitive) to the location and its spools."""
+    from backend.app.models.printer import Printer
+    from backend.app.utils.location_codes import normalize_location_code
+
+    normalized = normalize_location_code(code)
+    result = await db.execute(select(Location).where(Location.code.in_({normalized, code.strip().upper()})))
+    location = result.scalars().first()
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+
+    settings = await _load_settings_map(db)
+    spool_ids: list[int] = []
+    source = "internal"
+    if _spoolman_is_enabled(settings):
+        source = "spoolman"
+        client = await _ensure_spoolman_client(settings)
+        if client:
+            try:
+                spools = await client.get_all_spools(allow_archived=False)
+            except Exception:
+                logger.warning("Failed to fetch Spoolman spools for location %s", location.id, exc_info=True)
+                spools = []
+            for sp in spools:
+                raw = sp.get("location")
+                if not raw or not isinstance(raw, str) or not raw.strip():
+                    continue
+                try:
+                    if location_name_key(raw) == location.name_key:
+                        spool_ids.append(int(sp.get("id")))
+                except (TypeError, ValueError):
+                    continue
+    else:
+        rows = await db.execute(
+            select(Spool.id).where(Spool.location_id == location.id, Spool.archived_at.is_(None)).order_by(Spool.id)
+        )
+        spool_ids = [r[0] for r in rows.all()]
+
+    printer_name = None
+    if location.printer_id is not None:
+        printer = await db.get(Printer, location.printer_id)
+        printer_name = printer.name if printer else None
+
+    base = _location_to_response(location, len(spool_ids))
+    return LocationWithSpoolsResponse(
+        **base.model_dump(), spool_source=source, spools=spool_ids, printer_name=printer_name
+    )
+
+
+@router.post("/locations/sync-printers", response_model=list[LocationResponse])
+async def sync_printer_locations(
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+):
+    """Create printer, AMS unit, AMS slot and external-holder locations.
+
+    Idempotent: rows are matched on (kind, printer_id, ams_id, tray_id), so
+    running it again only adds what is new (e.g. an AMS plugged in since) and
+    re-links parents. Names are ``<printer>``, ``<printer> - AMS A``,
+    ``<printer> - AMS A slot 2``, ``<printer> - External left`` and so on.
+    Returns every printer-bound location.
+    """
+    from backend.app.models.printer import Printer
+    from backend.app.services import printer_hardware as hw
+
+    printers = list((await db.execute(select(Printer).order_by(Printer.id))).scalars().all())
+    existing_rows = list((await db.execute(select(Location).where(Location.printer_id.is_not(None)))).scalars().all())
+    by_key: dict[tuple, Location] = {(loc.kind, loc.printer_id, loc.ams_id, loc.tray_id): loc for loc in existing_rows}
+
+    async def _unique_name(base: str) -> str:
+        candidate = base
+        n = 2
+        while await get_location_by_name(db, candidate) is not None:
+            candidate = f"{base} ({n})"
+            n += 1
+        return candidate
+
+    async def _upsert(kind: str, printer_id: int, ams_id, tray_id, name: str, parent: Location | None) -> Location:
+        key = (kind, printer_id, ams_id, tray_id)
+        loc = by_key.get(key)
+        if loc is None:
+            loc = Location(kind=kind, printer_id=printer_id, ams_id=ams_id, tray_id=tray_id)
+            assign_location_name(loc, await _unique_name(name))
+            db.add(loc)
+            by_key[key] = loc
+        loc.parent_id = parent.id if parent is not None else None
+        await db.flush()
+        return loc
+
+    for printer in printers:
+        printer_loc = await _upsert("printer", printer.id, None, None, printer.name, None)
+        paths = await hw.compute_filament_paths(db, printer)
+        count = paths["nozzle_count"]
+        unit_locs: dict[int, Location] = {}
+        for slot in paths["slots"]:
+            ams_id, tray_id = slot["ams_id"], slot["tray_id"]
+            if ams_id == hw.EXTERNAL_AMS_ID:
+                await _upsert(
+                    "external",
+                    printer.id,
+                    ams_id,
+                    tray_id,
+                    f"{printer.name} - {hw.slot_label(ams_id, tray_id, count)}",
+                    printer_loc,
+                )
+                continue
+            unit = unit_locs.get(ams_id)
+            if unit is None:
+                unit = await _upsert(
+                    "ams", printer.id, ams_id, None, f"{printer.name} - {hw.unit_label(ams_id)}", printer_loc
+                )
+                unit_locs[ams_id] = unit
+            await _upsert(
+                "ams_slot",
+                printer.id,
+                ams_id,
+                tray_id,
+                f"{printer.name} - {hw.slot_label(ams_id, tray_id, count)}",
+                unit,
+            )
+
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Location name collision during sync; retry") from exc
+
+    rows = list(
+        (await db.execute(select(Location).where(Location.printer_id.is_not(None)).order_by(Location.name)))
+        .scalars()
+        .all()
+    )
+    await _ensure_location_codes(db, rows)
+    settings = await _load_settings_map(db)
+    counts = await _spool_counts_for_locations(db, rows, settings)
+    await ws_manager.broadcast({"type": "inventory_changed"})
+    return [_location_to_response(loc, counts.get(loc.id, 0)) for loc in rows]
 
 
 @router.delete("/locations/{location_id}")
@@ -1699,6 +1927,27 @@ async def assign_spool(
     if spool.archived_at:
         raise HTTPException(400, "Cannot assign an archived spool")
 
+    # 1b. Resolve which extruder this slot feeds. A requested extruder must be
+    # on the slot's filament path (409 with the allowed list otherwise); with
+    # none requested, a single-path slot stores its only extruder.
+    from backend.app.models.printer import Printer
+    from backend.app.services.printer_hardware import (
+        ExtruderNotAllowed,
+        find_slot_location,
+        resolve_assignment_extruder,
+    )
+
+    extruder_index = data.extruder_index
+    printer_row = await db.get(Printer, data.printer_id)
+    if printer_row is not None:
+        try:
+            extruder_index = await resolve_assignment_extruder(
+                db, printer_row, data.ams_id, data.tray_id, data.extruder_index
+            )
+        except ExtruderNotAllowed as exc:
+            return JSONResponse(status_code=409, content={"detail": str(exc), "allowed": exc.allowed})
+    slot_location = await find_slot_location(db, data.printer_id, data.ams_id, data.tray_id)
+
     # 2. Get current AMS tray state for fingerprint + existing filament ID.
     # tray_state: Bambu firmware reports 11=loaded, 9=empty, 10=spool present
     # but filament not in feeder. Captured here so the empty-slot heuristic
@@ -1767,8 +2016,14 @@ async def assign_spool(
         tray_id=data.tray_id,
         fingerprint_color=fingerprint_color,
         fingerprint_type=fingerprint_type,
+        extruder_index=extruder_index,
     )
     db.add(assignment)
+    # Installing a spool moves it to the slot's location row when one exists
+    # (see POST /inventory/locations/sync-printers). Un-assigning leaves it.
+    if slot_location is not None:
+        spool.location_id = slot_location.id
+        spool.storage_location = slot_location.name
     await db.commit()
     await db.refresh(assignment)
 
