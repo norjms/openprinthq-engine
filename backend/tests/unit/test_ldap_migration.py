@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.app.core.database import run_migrations
+from backend.tests._testdb import make_test_engine
 
 
 @pytest.fixture(autouse=True)
@@ -70,7 +71,7 @@ async def legacy_engine():
         virtual_printer,
     )
 
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # Drop the users table created from the current (nullable) model and replace it

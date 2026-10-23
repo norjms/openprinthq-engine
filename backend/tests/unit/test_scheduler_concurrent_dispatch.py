@@ -53,6 +53,7 @@ from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.models.settings import Settings
 from backend.app.services.print_scheduler import PrintScheduler
+from backend.tests._testdb import make_test_engine
 
 UPLOAD_SECONDS = 0.15
 
@@ -60,7 +61,7 @@ UPLOAD_SECONDS = 0.15
 @pytest.fixture
 async def farm(tmp_path):
     """Build a farm of N printers, each with one pending queue item."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -529,7 +530,7 @@ class TestSharedLibraryRow:
 
         Nothing here mutates the library row, so all four must upload at once.
         """
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        engine = make_test_engine(echo=False)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -551,7 +552,7 @@ class TestSharedLibraryRow:
         Each of these deletes the library row and unlinks the 3MF when done.
         Exactly one may go per pass; the rest stay pending for a later one.
         """
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        engine = make_test_engine(echo=False)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -583,7 +584,7 @@ async def test_library_print_without_a_parseable_print_time_does_not_crash(tmp_p
     dispatch. Two printers here: if the first one's dispatch blows up, the second
     must still go out.
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -594,12 +595,14 @@ async def test_library_print_without_a_parseable_print_time_does_not_crash(tmp_p
         async with session_maker() as db:
             db.add(Settings(key="queue_max_concurrent_uploads", value="2"))
             for n in range(2):
-                src = base_dir / "library" / f"job-{n}.gcode"
+                # A sliced .gcode.3mf with no print time in it (a raw .gcode never reaches a Bambu
+                # printer: the trunk's guard rejects it before dispatch).
+                src = base_dir / "library" / f"job-{n}.gcode.3mf"
                 src.write_bytes(b"G28\n")
                 lib = LibraryFile(
-                    filename=f"job-{n}.gcode",
+                    filename=f"job-{n}.gcode.3mf",
                     file_path=str(src),
-                    file_type="gcode",
+                    file_type="gcode.3mf",
                     file_size=src.stat().st_size,
                 )
                 db.add(lib)
