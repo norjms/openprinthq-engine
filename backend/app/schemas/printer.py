@@ -441,6 +441,8 @@ class PrinterStatus(BaseModel):
     # Queue: printer is awaiting the user to acknowledge the build plate is cleared
     # after a finished/failed print. Persisted across restarts (#961).
     awaiting_plate_clear: bool = False
+    ejecting: bool = False  # a bed eject is running (services/bed_ejection.py)
+    failure_hold: bool = False  # held after a detected failure (services/failure_detection.py)
     # AMS drying support
     supports_drying: bool = False
     # AMS "Print While Drying" — drying mid-print. Verified per Bambu wiki release notes;

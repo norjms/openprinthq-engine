@@ -2128,6 +2128,14 @@ class PrintScheduler:
             logger.debug("Printer %d: not idle - ejecting the last part", printer_id)
             return False
 
+        # A detected failure holds the printer until someone acknowledges it
+        # (services/failure_detection.py, setting failure_hold_printer).
+        from backend.app.services.failure_detection import is_held
+
+        if is_held(printer_id):
+            logger.debug("Printer %d: not idle - held after a detected failure", printer_id)
+            return False
+
         # Plate-clear gate: if the printer finished/failed a previous print and the user
         # hasn't acknowledged the plate was cleared, the queue must not dispatch the next
         # job — even if the printer currently reports IDLE. After Auto Off cycles the

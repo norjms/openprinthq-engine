@@ -422,6 +422,9 @@ export default {
       offline: '离线',
     },
     plateStatus: {
+      ejecting: "正在出件",
+      failureHold: "已暂停使用：检测到失败",
+      failureHoldHint: "检测到打印失败。请检查打印机，然后点击确认，让队列可以再次使用它。",
       markCleared: '将打印板标记为已清理',
       cleared: '打印板已清理',
       notCleared: '打印板未清理',

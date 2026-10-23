@@ -1022,6 +1022,8 @@ async def get_printer_status(
         developer_mode=state.developer_mode if state else None,
         ams_filament_backup=state.ams_filament_backup if state else None,
         awaiting_plate_clear=printer_manager.is_awaiting_plate_clear(printer_id),
+        ejecting=_is_ejecting(printer_id),
+        failure_hold=_is_held(printer_id),
         supports_drying=supports_drying(printer.model, state.firmware_version),
         supports_drying_while_printing=supports_drying_while_printing(printer.model, state.firmware_version),
         drying_screen_only=drying_screen_only(printer.model),
@@ -3697,6 +3699,18 @@ async def klipper_console(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Could not reach Moonraker: {exc}") from exc
     return data
+
+
+def _is_ejecting(printer_id: int) -> bool:
+    from backend.app.services.bed_ejection import is_ejecting
+
+    return is_ejecting(printer_id)
+
+
+def _is_held(printer_id: int) -> bool:
+    from backend.app.services.failure_detection import is_held
+
+    return is_held(printer_id)
 
 
 @router.post("/{printer_id}/gcode")

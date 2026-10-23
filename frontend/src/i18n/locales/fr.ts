@@ -422,6 +422,9 @@ export default {
       offline: 'Hors ligne',
     },
     plateStatus: {
+      ejecting: "Éjection de la pièce",
+      failureHold: "Retenue : échec détecté",
+      failureHoldHint: "Un échec d'impression a été détecté. Vérifiez l'imprimante, puis cliquez pour confirmer et la rendre à la file d'attente.",
       markCleared: 'Marquer le plateau comme dégagé',
       cleared: 'Plateau dégagé',
       notCleared: 'Plateau non dégagé',

@@ -30,6 +30,7 @@ from backend.app.api.routes import (
     discovery,
     ejection_profiles,
     external_links,
+    failure_events,
     filaments,
     firmware,
     github_backup,
@@ -1334,6 +1335,21 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
             # Get the actual new errors for the notification
             # Filter to severity >= 2 (skip informational/status messages like H2D sends)
             new_errors = [e for e in current_hms_errors if f"{e.attr:08x}" in new_error_codes and e.severity >= 2]
+
+            # The printer's AI monitor (spaghetti, nozzle clumping) goes on the
+            # failure timeline too (services/failure_detection.py).
+            try:
+                from backend.app.services.failure_detection import on_bambu_hms
+
+                await on_bambu_hms(
+                    printer_id,
+                    [
+                        f"{(e.attr >> 16) & 0xFFFF:04X}_{(int(e.code.replace('0x', ''), 16) if e.code else 0) & 0xFFFF:04X}"
+                        for e in new_errors
+                    ],
+                )
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger(__name__).warning("[FAILURE] could not record HMS detection: %s", e)
 
             try:
                 from backend.app.models.printer import Printer
@@ -4256,6 +4272,13 @@ async def on_print_complete(printer_id: int, data: dict):
             await maybe_start_after_print(printer_id, _final_status)
         except Exception as e:  # noqa: BLE001
             logger.warning("[EJECT] printer %s: could not start auto-eject: %s", printer_id, e)
+    if _final_status == "failed" and data.get("klipper_message"):
+        try:
+            from backend.app.services.failure_detection import record_event
+
+            await record_event(printer_id, "klipper", str(data["klipper_message"]))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[FAILURE] printer %s: could not record the Klipper error: %s", printer_id, e)
 
     # Klipper / Moonraker printers are live-only (no 3MF archive pipeline).
     # Record a lightweight Print Log entry and stop here — everything below is
@@ -6393,6 +6416,18 @@ async def lifespan(app: FastAPI):
     # Rehydrate persisted awaiting-plate-clear gate (#961) so prompts survive restarts
     await printer_manager.load_awaiting_plate_clear_from_db()
 
+    # Failure detection: re-hold printers with unacknowledged failures, and start
+    # the stall check (it does nothing until failure_stall_minutes is set).
+    try:
+        from backend.app.services.failure_detection import load_holds, stall_loop
+
+        await load_holds()
+        from backend.app.core.tasks import spawn_background_task as _spawn
+
+        _spawn(stall_loop(), name="failure-stall-check")
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger(__name__).warning("[FAILURE] startup failed: %s", e)
+
     # Layer change callback for external camera timelapse
     async def on_layer_change(printer_id: int, layer_num: int):
         """Capture timelapse frame on layer change + first layer notification."""
@@ -7240,6 +7275,7 @@ app.include_router(metrics.router, prefix=app_settings.api_prefix)
 app.include_router(virtual_printers.router, prefix=app_settings.api_prefix)
 app.include_router(spoolbuddy.router, prefix=app_settings.api_prefix)
 app.include_router(ejection_profiles.router, prefix=app_settings.api_prefix)
+app.include_router(failure_events.router, prefix=app_settings.api_prefix)
 
 
 # Serve static files (React build)

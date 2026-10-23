@@ -131,6 +131,12 @@ def apply_status_objects(
         if raw_state is not None:
             state.state = map_print_state(raw_state)
 
+        # Klipper's own explanation when a job ends in error ("Heater extruder
+        # not heating at expected rate", "MCU 'mcu' shutdown: ..."). Kept for the
+        # completion handler, which records it as a failure event.
+        if "message" in print_stats:
+            state.raw_data["klipper_message"] = print_stats.get("message") or ""
+
         if "filename" in print_stats:
             fname = print_stats["filename"] or None
             state.gcode_file = fname
