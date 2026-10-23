@@ -6802,10 +6802,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=app_settings.app_name,
-    description="OpenPrintHQ — self-hosted multi-vendor 3D print management",
+    description="OpenPrintHQ - self-hosted multi-vendor 3D print management",
     version=APP_VERSION,
     lifespan=lifespan,
 )
+
+# Stable operationIds, security schemes, no alias duplicates (core/openapi_spec.py).
+from backend.app.core.openapi_spec import install as _install_openapi  # noqa: E402
+
+_install_openapi(app)
 
 
 # =============================================================================
@@ -7339,7 +7344,7 @@ if app_settings.static_dir.exists() and any(app_settings.static_dir.iterdir()):
         )
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 async def serve_frontend():
     """Serve the React frontend."""
     index_file = app_settings.static_dir / "index.html"
@@ -7375,7 +7380,7 @@ async def health_check():
 # `curl -I` use HEAD; FastAPI's @app.get only registers GET, so HEAD answers
 # with 405 Method Not Allowed and shows up as a "broken manifest" red herring
 # in deployment debugging.
-@app.api_route("/manifest.json", methods=["GET", "HEAD"])
+@app.api_route("/manifest.json", methods=["GET", "HEAD"], include_in_schema=False)
 async def serve_manifest():
     """Serve PWA manifest."""
     manifest_file = app_settings.static_dir / "manifest.json"
@@ -7384,7 +7389,7 @@ async def serve_manifest():
     return {"error": "Manifest not found"}
 
 
-@app.api_route("/sw.js", methods=["GET", "HEAD"])
+@app.api_route("/sw.js", methods=["GET", "HEAD"], include_in_schema=False)
 async def serve_service_worker():
     """Serve service worker."""
     sw_file = app_settings.static_dir / "sw.js"
@@ -7397,7 +7402,7 @@ async def serve_service_worker():
     return {"error": "Service worker not found"}
 
 
-@app.api_route("/sw-register.js", methods=["GET", "HEAD"])
+@app.api_route("/sw-register.js", methods=["GET", "HEAD"], include_in_schema=False)
 async def serve_sw_register():
     """Serve the service-worker registration bootstrap script.
 
@@ -7441,7 +7446,7 @@ def _gcode_viewer_response(rel: str) -> FileResponse:
     raise _HTTPException(status_code=404)
 
 
-@app.get("/gcode-viewer/")
+@app.get("/gcode-viewer/", include_in_schema=False)
 async def serve_gcode_viewer_index() -> FileResponse:
     """Raw PrettyGCode viewer for the iframe. The bare ``/gcode-viewer``
     (no trailing slash) intentionally falls through to the SPA catch-all so a
@@ -7450,13 +7455,13 @@ async def serve_gcode_viewer_index() -> FileResponse:
     return _gcode_viewer_response("index.html")
 
 
-@app.get("/gcode-viewer/{file_path:path}")
+@app.get("/gcode-viewer/{file_path:path}", include_in_schema=False)
 async def serve_gcode_viewer_file(file_path: str) -> FileResponse:
     return _gcode_viewer_response(file_path)
 
 
 # Catch-all route for React Router (must be last)
-@app.get("/{full_path:path}")
+@app.get("/{full_path:path}", include_in_schema=False)
 async def serve_spa(full_path: str):
     """Serve React app for client-side routing."""
     # Don't intercept API routes - raise proper 404 so FastAPI can handle redirects

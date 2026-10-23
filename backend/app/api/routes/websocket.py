@@ -28,7 +28,7 @@ from backend.app.models.user import User
 from backend.app.services.printer_manager import printer_manager, printer_state_to_dict
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["websocket"])
 
 # 4401 mirrors the WebSocket "unauthorised" application close code
 # convention used by Sec-WebSocket-Protocol authors (private-use range
