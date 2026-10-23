@@ -125,6 +125,25 @@ export default {
     right: '右',
   },
   // Printers page
+  ejection: {
+    title: "ベッド排出プロファイル",
+    description: "プロファイルは、完成したパーツをベッドから押し出すGコードです。自動排出をオンにすると、印刷が成功した後にエンジンがこれを実行し、プリンターが再びアイドルになるのを待ってからプレートをクリアし、次のジョブを開始できるようにします。問題があればプレートは人の確認を待ちます。",
+    summary: "{{temp}} C以下で排出、連続最大{{cap}}回",
+    none: "プロファイルはまだありません。",
+    add: "プロファイルを追加",
+    saved: "プロファイルを保存しました",
+    confirmDelete: "プロファイル {{name}} を削除しますか？使用中のプリンターは自動排出しなくなります。",
+    name: "名前",
+    gcode: "排出Gコード",
+    gcodeHelp: "Klipperのマクロ名またはGコード行。まず手動でテストしてください。誤ったシーケンスはツールヘッドをパーツに衝突させる可能性があります。",
+    maxBedTemp: "ベッドが次の温度以下になるまで待つ (C)",
+    maxConsecutive: "人が確認するまでの連続排出回数 (0 = 無制限)",
+    timeout: "次の時間で中止 (秒)",
+    settle: "送信後、アイドル確認までの待機 (秒)",
+    allowedPlates: "これらのプレートのみ (カンマ区切り)",
+    allowedPlatesHelp: "空欄 = すべてのプレート。プリンターの装着プレートと比較します。",
+    verifyWithCamera: "プレートをクリアする前にカメラでベッドが空か確認する",
+  },
   printers: {
     addPreflight: {
       checking: '接続を確認しています...',
@@ -491,6 +510,10 @@ export default {
       moonrakerApiKeyPlaceholder: 'オープン LAN の場合は空欄',
       moonrakerApiKeyHelp: 'Moonraker が認証を必要とする場合のみ入力します。オープン LAN では空欄のままにできます。',
       klipperProfile: 'プリンタープロファイル',
+      autoEject: "印刷成功後に自動で排出する",
+      ejectionProfile: "排出プロファイル",
+      ejectionProfileNone: "なし",
+      manageProfiles: "プロファイルを管理",
       saveChanges: '変更を保存',
     },
     // Skip objects

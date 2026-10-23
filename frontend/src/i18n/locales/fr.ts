@@ -126,6 +126,25 @@ export default {
   },
 
   // Printers page
+  ejection: {
+    title: "Profils d'éjection",
+    description: "Un profil est le G-code qui pousse une pièce terminée hors du plateau. Avec l'éjection automatique, le moteur l'exécute après une impression réussie, attend que l'imprimante soit de nouveau inactive puis libère le plateau pour que le travail suivant démarre. Au moindre problème, le plateau attend une personne.",
+    summary: "Éjecter sous {{temp}} C, au plus {{cap}} d'affilée",
+    none: "Aucun profil pour l'instant.",
+    add: "Ajouter un profil",
+    saved: "Profil enregistré",
+    confirmDelete: "Supprimer le profil {{name}} ? Les imprimantes qui l'utilisent n'éjecteront plus automatiquement.",
+    name: "Nom",
+    gcode: "G-code d'éjection",
+    gcodeHelp: "Un nom de macro Klipper ou des lignes de G-code. Testez-le d'abord à la main : une mauvaise séquence peut envoyer la tête dans la pièce.",
+    maxBedTemp: "Attendre que le plateau soit à (C) ou moins",
+    maxConsecutive: "Éjections d'affilée avant vérification par une personne (0 = sans limite)",
+    timeout: "Abandonner après (secondes)",
+    settle: "Attendre après l'envoi avant de vérifier l'inactivité (secondes)",
+    allowedPlates: "Uniquement avec ces plateaux (séparés par des virgules)",
+    allowedPlatesHelp: "Vide = tout plateau. Comparé au plateau installé sur l'imprimante.",
+    verifyWithCamera: "Vérifier à la caméra que le plateau est vide avant de le libérer",
+  },
   printers: {
     addPreflight: {
       checking: 'Vérification de la connexion...',
@@ -492,6 +511,10 @@ export default {
       moonrakerApiKeyPlaceholder: 'Laisser vide pour un réseau local ouvert',
       moonrakerApiKeyHelp: 'Nécessaire uniquement si Moonraker exige une authentification. Laissez vide en réseau local ouvert.',
       klipperProfile: "Profil d'imprimante",
+      autoEject: "Éjecter automatiquement après une impression réussie",
+      ejectionProfile: "Profil d'éjection",
+      ejectionProfileNone: "Aucun",
+      manageProfiles: "Gérer les profils",
       saveChanges: 'Enregistrer les modifications',
     },
     // Skip objects

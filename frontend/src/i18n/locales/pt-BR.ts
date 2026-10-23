@@ -126,6 +126,25 @@ export default {
   },
 
   // Printers page
+  ejection: {
+    title: "Perfis de ejeção",
+    description: "Um perfil é o G-code que empurra uma peça pronta para fora da mesa. Com a ejeção automática, o motor o executa após uma impressão bem-sucedida, espera a impressora ficar ociosa de novo e então libera a placa para o próximo trabalho começar. Qualquer problema deixa a placa esperando por uma pessoa.",
+    summary: "Ejetar abaixo de {{temp}} C, no máximo {{cap}} seguidas",
+    none: "Nenhum perfil ainda.",
+    add: "Adicionar perfil",
+    saved: "Perfil salvo",
+    confirmDelete: "Excluir o perfil {{name}}? As impressoras que o usam deixam de ejetar automaticamente.",
+    name: "Nome",
+    gcode: "G-code de ejeção",
+    gcodeHelp: "Um nome de macro do Klipper ou linhas de G-code. Teste à mão primeiro: uma sequência errada pode levar o cabeçote contra a peça.",
+    maxBedTemp: "Esperar a mesa chegar a (C) ou menos",
+    maxConsecutive: "Ejeções seguidas antes de uma pessoa verificar (0 = sem limite)",
+    timeout: "Desistir após (segundos)",
+    settle: "Esperar após enviar antes de verificar ociosidade (segundos)",
+    allowedPlates: "Somente com estas placas (separadas por vírgula)",
+    allowedPlatesHelp: "Vazio = qualquer placa. Comparado com a placa instalada na impressora.",
+    verifyWithCamera: "Verificar com a câmera que a mesa está vazia antes de liberar a placa",
+  },
   printers: {
     addPreflight: {
       checking: 'Verificando a conexão...',
@@ -492,6 +511,10 @@ export default {
       moonrakerApiKeyPlaceholder: 'Deixe vazio para LAN aberta',
       moonrakerApiKeyHelp: 'Necessário apenas se o Moonraker exigir autenticação. Em LAN aberta, deixe em branco.',
       klipperProfile: 'Perfil da impressora',
+      autoEject: "Ejetar automaticamente após uma impressão bem-sucedida",
+      ejectionProfile: "Perfil de ejeção",
+      ejectionProfileNone: "Nenhum",
+      manageProfiles: "Gerenciar perfis",
       saveChanges: 'Salvar alterações',
     },
     // Skip objects

@@ -3277,6 +3277,10 @@ async def clear_plate(
         )
 
     printer_manager.set_awaiting_plate_clear(printer_id, False)
+    # A person looked at the bed: the automatic-eject run starts counting again.
+    if getattr(printer, "consecutive_ejects", 0):
+        printer.consecutive_ejects = 0
+        await db.commit()
 
     return {"success": True, "message": "Plate cleared, next print will start shortly"}
 

@@ -1,4 +1,4 @@
-# Farm queue: hardware matching, retries, preflight and stats
+# Farm queue: hardware matching, retries, preflight, stats and bed ejection
 
 These features make the queue behave like a print farm's dispatcher. They apply to queue items aimed at a
 printer model (`target_model`) or a printer group (`target_group_id`); an item pinned to one printer keeps
@@ -73,6 +73,37 @@ works on items in `printing` and records how the print ended. It only changes th
  "success_rate": 0.923, "avg_wait_seconds": 1840, "avg_print_seconds": 7310, "retried_items": 5,
  "printers": [{"printer_id": 1, "completed": 50, "failed": 3, "cancelled": 1, "success_rate": 0.943}]}
 ```
+
+## Bed ejection (continuous printing)
+
+A printer can push a finished part off the bed itself and start the next job without anyone at it. Set an
+**ejection profile** on the printer (Printers, edit, Ejection profile) and tick **Eject automatically after a
+successful print**. Profiles live under `GET/POST /api/v1/ejection-profiles` and `PATCH/DELETE
+/api/v1/ejection-profiles/{id}`.
+
+After a print the plate-clear gate goes up as always. Then, only when the print **completed** (never after a
+failure or a cancel, which may have left a mess on the bed):
+
+1. The installed plate must be one the profile allows (`allowed_plates`, compared loosely like hardware
+   matching; empty means any plate).
+2. Fewer than `max_consecutive` automatic ejects in a row (0 = no limit). Clearing the plate by hand resets the
+   count, so a person looks at the bed every N parts.
+3. The engine waits until the bed is at or below `max_bed_temp_c` (parts release from a cold plate), up to
+   `timeout_s`.
+4. It sends the profile's `gcode` (a Klipper macro name or G-code lines) through the printer client.
+5. After `settle_s` it waits for the printer to report idle again, up to `timeout_s`.
+6. With `verify_with_camera`, the camera plate detector must see an empty bed (needs plate detection
+   calibrated).
+7. Only then is the gate cleared, so the queue can start the next job.
+
+Any refusal, timeout or error leaves the gate up: the printer waits for a person exactly as without
+auto-eject, and `GET /api/v1/printers/{id}/eject` says why (`last.reason`). While an eject runs the printer
+is busy to the scheduler whatever `require_plate_clear` says, so a job can never start under a moving
+toolhead. `POST /api/v1/printers/{id}/eject` runs the profile by hand on an idle printer (needs
+`printers:control`; the plate and count limits don't apply because a person decided).
+
+Test a profile by hand before turning it on: a wrong sequence can drive the toolhead into the part. Bambu
+printers take the G-code over MQTT (`gcode_line`), which suits short sequences.
 
 ## Permissions and API keys
 
