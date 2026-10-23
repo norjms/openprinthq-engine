@@ -28,6 +28,7 @@ from backend.app.services.print_scheduler import (
     _installed_nozzle_diameters,
     _nozzle_mismatch_message,
 )
+from backend.tests._testdb import make_test_engine
 
 
 def _state(*diameters: str):
@@ -121,7 +122,7 @@ def test_adjacent_sizes_are_distinguished():
 @pytest.fixture
 async def archive_case(tmp_path):
     """Build an archive-based queue item on a real in-memory DB + on-disk 3MF."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)

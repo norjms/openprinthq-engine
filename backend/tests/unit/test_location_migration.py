@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from backend.app.core.database import run_migrations
+from backend.tests._testdb import make_test_engine
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +46,7 @@ async def engine_with_case_variant_spools():
     from backend.app.core.database import Base
 
     _register_all_models()
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.execute(text("DELETE FROM locations"))
@@ -100,7 +101,7 @@ async def engine_with_null_storage_location():
     from backend.app.core.database import Base
 
     _register_all_models()
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.execute(text("DELETE FROM locations"))
@@ -150,7 +151,7 @@ async def engine_with_legacy_null_name_key_location():
     from backend.app.core.database import Base
 
     _register_all_models()
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # Drop the model-shaped locations table (which has NOT NULL on

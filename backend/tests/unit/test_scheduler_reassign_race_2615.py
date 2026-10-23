@@ -22,11 +22,12 @@ from backend.app.core.database import Base
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.services.print_scheduler import PrintScheduler
+from backend.tests._testdb import make_test_engine
 
 
 @pytest.fixture
 async def ctx():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     sm = async_sessionmaker(engine, expire_on_commit=False)

@@ -27,6 +27,7 @@ from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.services.print_scheduler import PrintScheduler
 from backend.app.utils.printer_models import is_gcode_compatible
+from backend.tests._testdb import make_test_engine
 
 # ---------------------------------------------------------------------------
 # is_gcode_compatible
@@ -86,7 +87,7 @@ def test_internal_codes_resolve_to_short_names():
 @pytest.fixture
 async def queue_db():
     """In-memory DB seeded with one idle H2D printer."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)

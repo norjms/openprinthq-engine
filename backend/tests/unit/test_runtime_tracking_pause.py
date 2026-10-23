@@ -19,6 +19,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from backend.tests._testdb import make_test_engine
+
 
 async def _build_db_with_printer(*, runtime_seconds: int, last_runtime_update: datetime | None):
     """Spin up an in-memory DB with one active printer in the requested state."""
@@ -26,7 +28,7 @@ async def _build_db_with_printer(*, runtime_seconds: int, last_runtime_update: d
     from backend.app.core.database import Base
     from backend.app.models.printer import Printer
 
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine(echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
