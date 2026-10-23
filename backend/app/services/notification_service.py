@@ -17,6 +17,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.core.branding import APP_NAME
 from backend.app.models.notification import NotificationDigestQueue, NotificationLog, NotificationProvider
 from backend.app.models.notification_template import NotificationTemplate
 from backend.app.services import webpush
@@ -186,7 +187,7 @@ class NotificationService:
         """Build notification title and body from template."""
         # Add common variables
         variables["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-        variables["app_name"] = "OpenPrintHQ"
+        variables["app_name"] = APP_NAME
 
         template = await self._get_template(db, event_type)
         if not template:
@@ -206,7 +207,7 @@ class NotificationService:
         if db:
             title, message = await self._build_message_from_template(db, "test", {})
         else:
-            title = "Bambuddy Test"
+            title = f"{APP_NAME} Test"
             message = "This is a test notification. If you see this, notifications are working!"
 
         try:
@@ -483,7 +484,7 @@ class NotificationService:
                 msg = MIMEMultipart("related")
                 msg["From"] = from_email
                 msg["To"] = to_email
-                msg["Subject"] = f"[Bambuddy] {subject}"
+                msg["Subject"] = f"[{APP_NAME}] {subject}"
 
                 alt = MIMEMultipart("alternative")
                 alt.attach(MIMEText(body, "plain"))
@@ -512,7 +513,7 @@ class NotificationService:
                 msg = MIMEMultipart()
                 msg["From"] = from_email
                 msg["To"] = to_email
-                msg["Subject"] = f"[Bambuddy] {subject}"
+                msg["Subject"] = f"[{APP_NAME}] {subject}"
                 msg.attach(MIMEText(body, "plain"))
 
             # smtplib is synchronous and blocking: a wedged / greylisting /
