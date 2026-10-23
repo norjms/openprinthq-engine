@@ -7,7 +7,12 @@ Two endpoints, one per inventory backend:
 
 Both accept ``{spool_ids: [int], template: str}`` and return a PDF stream.
 The QR code on each label deep-links to ``/inventory?spool=<id>`` so a phone
-scan jumps straight back into Bambuddy at that spool's row.
+scan jumps straight back into Bambuddy at that spool's row. With
+``code_style: "hub"`` and a ``base_url`` the QR encodes ``{base_url}/l/S<id>``
+instead, for a companion app that resolves scan codes.
+
+- ``POST /inventory/labels/locations`` renders location labels whose QR encodes
+  ``{base_url}/l/<location code>``.
 """
 
 from __future__ import annotations
@@ -26,9 +31,17 @@ from backend.app.api.routes.settings import get_setting
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.models.location import Location
+from backend.app.models.printer import Printer
 from backend.app.models.spool import Spool
 from backend.app.models.user import User
-from backend.app.services.label_renderer import LabelData, TemplateName, render_labels
+from backend.app.services.label_renderer import (
+    LabelData,
+    LocationLabelData,
+    TemplateName,
+    render_labels,
+    render_location_labels,
+)
 from backend.app.services.spoolman import get_spoolman_client
 from backend.app.utils.http import build_content_disposition
 
@@ -63,6 +76,24 @@ class LabelRequest(BaseModel):
     # Black-and-white thermal printers: drop the colour swatch (prints as a
     # muddy grey block) and widen the text column instead (#1870).
     monochrome: bool = False
+    # "hub": the QR encodes ``{base_url}/l/S<spool id>`` (scan-code format used
+    # by a companion app) instead of the in-app inventory deep link.
+    code_style: Literal["default", "hub"] = "default"
+    base_url: str | None = Field(default=None, max_length=500, pattern=r"^https?://\S+$")
+
+
+class LocationLabelRequest(BaseModel):
+    location_ids: list[int] = Field(..., min_length=1, max_length=MAX_LABELS_PER_REQUEST)
+    template: Literal["avery5160", "62x29", "62x100"]
+    # QR payload is ``{base_url}/l/{code}``; defaults to this server's base URL.
+    base_url: str | None = Field(default=None, max_length=500, pattern=r"^https?://\S+$")
+
+
+def _spool_qr_url(body: LabelRequest, spool_id: int, deeplink_base: str) -> str:
+    if body.code_style == "hub":
+        base = (body.base_url or deeplink_base).rstrip("/")
+        return f"{base}/l/S{spool_id}"
+    return f"{deeplink_base}/inventory?spool={spool_id}"
 
 
 def _split_extra_colors(raw: str | None) -> list[str] | None:
@@ -172,6 +203,8 @@ async def render_local_inventory_labels(
 
     deeplink_base = await _resolve_deeplink_base(request, db)
     data_list = [_spool_to_label_data(s, deeplink_base) for s in ordered]
+    for d in data_list:
+        d.deeplink_url = _spool_qr_url(body, d.spool_id, deeplink_base)
 
     pdf = render_labels(body.template, data_list, monochrome=body.monochrome)
     filename = f"bambuddy-labels-{body.template}.pdf"
@@ -216,7 +249,54 @@ async def render_spoolman_labels(
 
     deeplink_base = await _resolve_deeplink_base(request, db)
     data_list = [_spoolman_dict_to_label_data(by_id[sid], deeplink_base) for sid in body.spool_ids]
+    for d in data_list:
+        d.deeplink_url = _spool_qr_url(body, d.spool_id, deeplink_base)
 
     pdf = render_labels(body.template, data_list, monochrome=body.monochrome)
     filename = f"bambuddy-labels-spoolman-{body.template}.pdf"
     return _stream_pdf(pdf, filename)
+
+
+@router.post("/inventory/labels/locations")
+async def render_location_labels_route(
+    body: LocationLabelRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
+) -> StreamingResponse:
+    """Render labels for locations. The QR encodes ``{base_url}/l/{code}``."""
+    from backend.app.utils.location_codes import generate_location_code
+
+    result = await db.execute(select(Location).where(Location.id.in_(body.location_ids)))
+    locations = {loc.id: loc for loc in result.scalars().all()}
+    missing = [lid for lid in body.location_ids if lid not in locations]
+    if missing:
+        raise HTTPException(404, f"Location(s) not found: {missing}")
+
+    changed = False
+    for loc in locations.values():
+        if not loc.code:
+            loc.code = generate_location_code()
+            changed = True
+    if changed:
+        await db.commit()
+
+    printer_ids = {loc.printer_id for loc in locations.values() if loc.printer_id is not None}
+    printer_names: dict[int, str] = {}
+    if printer_ids:
+        rows = await db.execute(select(Printer.id, Printer.name).where(Printer.id.in_(printer_ids)))
+        printer_names = dict(rows.all())
+
+    base = (body.base_url or await _resolve_deeplink_base(request, db)).rstrip("/")
+    data_list = [
+        LocationLabelData(
+            name=locations[lid].name,
+            kind=locations[lid].kind or "storage",
+            code=locations[lid].code or "",
+            qr_url=f"{base}/l/{locations[lid].code}",
+            printer_name=printer_names.get(locations[lid].printer_id) if locations[lid].printer_id else None,
+        )
+        for lid in body.location_ids
+    ]
+    pdf = render_location_labels(body.template, data_list)
+    return _stream_pdf(pdf, f"location-labels-{body.template}.pdf")

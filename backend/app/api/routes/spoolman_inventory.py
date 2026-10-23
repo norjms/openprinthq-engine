@@ -423,6 +423,9 @@ class SpoolSlotAssignmentRequest(BaseModel):
     # ams_id 0–7 for physical AMS units; 255 = external/virtual spool extruder slot
     ams_id: int = Field(..., ge=0, le=255)
     tray_id: int = Field(..., ge=0, le=3)
+    # Device extruder the slot should feed (0 = main/right on Bambu dual-nozzle).
+    # Optional: inferred when the slot can only feed one extruder.
+    extruder_index: int | None = Field(default=None, ge=0, le=15)
 
 
 # ---------------------------------------------------------------------------
@@ -1270,6 +1273,7 @@ async def get_all_spoolman_slot_assignments(
                 tray_id=s.tray_id,
                 spoolman_spool_id=s.spoolman_spool_id,
                 ams_label=_ams_label_for(s.printer_id, s.ams_id),
+                extruder_index=s.extruder_index,
             )
         )
     return enriched
@@ -1408,10 +1412,13 @@ async def assign_spoolman_slot(
     db: AsyncSession = Depends(get_db),
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
 ) -> dict:
-    """Assign a Spoolman spool to a printer AMS slot (stored in local DB only).
+    """Assign a Spoolman spool to a printer AMS slot (stored in local DB).
 
-    Raises 404 if the printer does not exist or the spool is not found in Spoolman.
-    Spoolman's own ``spool.location`` field is NOT touched — it is user-managed.
+    Raises 404 if the printer does not exist or the spool is not found in Spoolman,
+    and 409 (with ``allowed``) when ``extruder_index`` is not on the slot's
+    filament path. When the slot has a bound location row (created by
+    ``POST /inventory/locations/sync-printers``) the spool's Spoolman
+    ``location`` text is set to that location's name; otherwise it is untouched.
     """
 
     client = await _get_client(db)
@@ -1419,6 +1426,17 @@ async def assign_spoolman_slot(
     printer = result.scalar_one_or_none()
     if not printer:
         raise HTTPException(status_code=404, detail="Printer not found")
+
+    from backend.app.services.printer_hardware import (
+        ExtruderNotAllowed,
+        find_slot_location,
+        resolve_assignment_extruder,
+    )
+
+    try:
+        extruder_index = await resolve_assignment_extruder(db, printer, body.ams_id, body.tray_id, body.extruder_index)
+    except ExtruderNotAllowed as exc:
+        return JSONResponse(status_code=409, content={"detail": str(exc), "allowed": exc.allowed})
 
     # Verify the Spoolman spool exists before committing to local DB.
     # This prevents ghost rows pointing at non-existent spool IDs.
@@ -1431,16 +1449,18 @@ async def assign_spoolman_slot(
         await db.execute(
             text(
                 "INSERT INTO spoolman_slot_assignments"
-                " (printer_id, ams_id, tray_id, spoolman_spool_id)"
-                " VALUES (:printer_id, :ams_id, :tray_id, :spool_id)"
+                " (printer_id, ams_id, tray_id, spoolman_spool_id, extruder_index)"
+                " VALUES (:printer_id, :ams_id, :tray_id, :spool_id, :extruder_index)"
                 " ON CONFLICT(printer_id, ams_id, tray_id)"
-                " DO UPDATE SET spoolman_spool_id = excluded.spoolman_spool_id"
+                " DO UPDATE SET spoolman_spool_id = excluded.spoolman_spool_id,"
+                " extruder_index = excluded.extruder_index"
             ),
             {
                 "printer_id": body.printer_id,
                 "ams_id": body.ams_id,
                 "tray_id": body.tray_id,
                 "spool_id": body.spoolman_spool_id,
+                "extruder_index": extruder_index,
             },
         )
         await db.commit()
@@ -1463,6 +1483,19 @@ async def assign_spoolman_slot(
         )
 
     mapped = _map_spoolman_spool(spool)
+
+    # Move the spool to the slot's location row when one exists.
+    slot_location = await find_slot_location(db, body.printer_id, body.ams_id, body.tray_id)
+    if slot_location is not None:
+        try:
+            await client.update_spool(spool_id=body.spoolman_spool_id, location=slot_location.name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Spoolman location update to %r failed for spool %d: %s",
+                slot_location.name,
+                body.spoolman_spool_id,
+                exc,
+            )
 
     # Fetch K-profiles before the MQTT try block so we can use async DB access.
     kp_rows_result = await db.execute(
@@ -1685,7 +1718,10 @@ async def assign_spoolman_slot(
             body.tray_id,
         )
 
-    return mapped
+    response = dict(mapped)
+    response["extruder_index"] = extruder_index
+    response["slot_location_id"] = slot_location.id if slot_location is not None else None
+    return response
 
 
 @router.delete("/slot-assignments/{spoolman_spool_id}")

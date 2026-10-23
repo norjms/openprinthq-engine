@@ -21,6 +21,8 @@ class SpoolmanSlotAssignment(Base):
     ams_id: Mapped[int] = mapped_column(Integer)
     tray_id: Mapped[int] = mapped_column(Integer)
     spoolman_spool_id: Mapped[int] = mapped_column(Integer)
+    # Device extruder this slot feeds (0 = main/right on Bambu dual-nozzle). NULL = unknown/any.
+    extruder_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     assigned_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     printer: Mapped["Printer"] = relationship()

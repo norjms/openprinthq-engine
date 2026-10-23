@@ -8082,6 +8082,80 @@
     "title": "FilamentCreate",
     "type": "object"
    },
+   "FilamentPathSlot": {
+    "properties": {
+     "ams_id": {
+      "maximum": 255.0,
+      "minimum": 0.0,
+      "title": "Ams Id",
+      "type": "integer"
+     },
+     "extruders": {
+      "items": {
+       "type": "integer"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "title": "Extruders",
+      "type": "array"
+     },
+     "tray_id": {
+      "anyOf": [
+       {
+        "maximum": 3.0,
+        "minimum": 0.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tray Id"
+     }
+    },
+    "required": [
+     "ams_id",
+     "extruders"
+    ],
+    "title": "FilamentPathSlot",
+    "type": "object"
+   },
+   "FilamentPathsUpdate": {
+    "properties": {
+     "slots": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/components/schemas/FilamentPathSlot"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Slots"
+     },
+     "track_switch_mode": {
+      "anyOf": [
+       {
+        "enum": [
+         "auto",
+         "installed",
+         "absent"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Track Switch Mode"
+     }
+    },
+    "title": "FilamentPathsUpdate",
+    "type": "object"
+   },
    "FilamentResponse": {
     "properties": {
      "bed_temp_max": {
@@ -11612,6 +11686,28 @@
    },
    "LabelRequest": {
     "properties": {
+     "base_url": {
+      "anyOf": [
+       {
+        "maxLength": 500,
+        "pattern": "^https?://\\S+$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Base Url"
+     },
+     "code_style": {
+      "default": "default",
+      "enum": [
+       "default",
+       "hub"
+      ],
+      "title": "Code Style",
+      "type": "string"
+     },
      "monochrome": {
       "default": false,
       "title": "Monochrome",
@@ -12237,6 +12333,30 @@
    },
    "LocationCreate": {
     "properties": {
+     "ams_id": {
+      "anyOf": [
+       {
+        "maximum": 255.0,
+        "minimum": 0.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ams Id"
+     },
+     "code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Code"
+     },
      "identifier": {
       "anyOf": [
        {
@@ -12249,11 +12369,72 @@
       ],
       "title": "Identifier"
      },
+     "kind": {
+      "default": "storage",
+      "enum": [
+       "storage",
+       "drybox",
+       "printer",
+       "ams",
+       "ams_slot",
+       "external",
+       "other"
+      ],
+      "title": "Kind",
+      "type": "string"
+     },
      "name": {
       "maxLength": 255,
       "minLength": 1,
       "title": "Name",
       "type": "string"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "maxLength": 500,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     },
+     "parent_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Parent Id"
+     },
+     "printer_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Printer Id"
+     },
+     "tray_id": {
+      "anyOf": [
+       {
+        "maximum": 3.0,
+        "minimum": 0.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tray Id"
      }
     },
     "required": [
@@ -12262,8 +12443,71 @@
     "title": "LocationCreate",
     "type": "object"
    },
+   "LocationLabelRequest": {
+    "properties": {
+     "base_url": {
+      "anyOf": [
+       {
+        "maxLength": 500,
+        "pattern": "^https?://\\S+$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Base Url"
+     },
+     "location_ids": {
+      "items": {
+       "type": "integer"
+      },
+      "maxItems": 500,
+      "minItems": 1,
+      "title": "Location Ids",
+      "type": "array"
+     },
+     "template": {
+      "enum": [
+       "avery5160",
+       "62x29",
+       "62x100"
+      ],
+      "title": "Template",
+      "type": "string"
+     }
+    },
+    "required": [
+     "location_ids",
+     "template"
+    ],
+    "title": "LocationLabelRequest",
+    "type": "object"
+   },
    "LocationResponse": {
     "properties": {
+     "ams_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ams Id"
+     },
+     "code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Code"
+     },
      "created_at": {
       "format": "date-time",
       "title": "Created At",
@@ -12284,14 +12528,63 @@
       ],
       "title": "Identifier"
      },
+     "kind": {
+      "default": "storage",
+      "title": "Kind",
+      "type": "string"
+     },
      "name": {
       "title": "Name",
       "type": "string"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     },
+     "parent_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Parent Id"
+     },
+     "printer_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Printer Id"
      },
      "spool_count": {
       "default": 0,
       "title": "Spool Count",
       "type": "integer"
+     },
+     "tray_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tray Id"
      },
      "updated_at": {
       "format": "date-time",
@@ -12309,7 +12602,32 @@
     "type": "object"
    },
    "LocationUpdate": {
+    "description": "Partial update. Only fields present in the request body are applied, so\n``{\"parent_id\": null}`` clears the parent while omitting it leaves it.",
     "properties": {
+     "ams_id": {
+      "anyOf": [
+       {
+        "maximum": 255.0,
+        "minimum": 0.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ams Id"
+     },
+     "code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Code"
+     },
      "identifier": {
       "anyOf": [
        {
@@ -12321,6 +12639,26 @@
        }
       ],
       "title": "Identifier"
+     },
+     "kind": {
+      "anyOf": [
+       {
+        "enum": [
+         "storage",
+         "drybox",
+         "printer",
+         "ams",
+         "ams_slot",
+         "external",
+         "other"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Kind"
      },
      "name": {
       "anyOf": [
@@ -12334,9 +12672,201 @@
        }
       ],
       "title": "Name"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "maxLength": 500,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     },
+     "parent_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Parent Id"
+     },
+     "printer_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Printer Id"
+     },
+     "tray_id": {
+      "anyOf": [
+       {
+        "maximum": 3.0,
+        "minimum": 0.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tray Id"
      }
     },
     "title": "LocationUpdate",
+    "type": "object"
+   },
+   "LocationWithSpoolsResponse": {
+    "description": "A location plus the spools stored at it.\n\n``spools`` holds internal spool ids in local-inventory mode and Spoolman\nspool ids in Spoolman mode (``spool_source`` says which).",
+    "properties": {
+     "ams_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ams Id"
+     },
+     "code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Code"
+     },
+     "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+     },
+     "id": {
+      "title": "Id",
+      "type": "integer"
+     },
+     "identifier": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Identifier"
+     },
+     "kind": {
+      "default": "storage",
+      "title": "Kind",
+      "type": "string"
+     },
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     },
+     "parent_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Parent Id"
+     },
+     "printer_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Printer Id"
+     },
+     "printer_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Printer Name"
+     },
+     "spool_count": {
+      "default": 0,
+      "title": "Spool Count",
+      "type": "integer"
+     },
+     "spool_source": {
+      "default": "internal",
+      "enum": [
+       "internal",
+       "spoolman"
+      ],
+      "title": "Spool Source",
+      "type": "string"
+     },
+     "spools": {
+      "items": {
+       "type": "integer"
+      },
+      "title": "Spools",
+      "type": "array"
+     },
+     "tray_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tray Id"
+     },
+     "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "name",
+     "created_at",
+     "updated_at"
+    ],
+    "title": "LocationWithSpoolsResponse",
     "type": "object"
    },
    "LogEntry": {
@@ -14587,6 +15117,47 @@
      }
     },
     "title": "NozzleRackSlot",
+    "type": "object"
+   },
+   "NozzleUpdate": {
+    "properties": {
+     "diameter_mm": {
+      "exclusiveMinimum": 0.0,
+      "maximum": 5.0,
+      "title": "Diameter Mm",
+      "type": "number"
+     },
+     "nozzle_type": {
+      "enum": [
+       "hardened_steel",
+       "stainless_steel",
+       "tungsten_carbide",
+       "brass",
+       "E3D",
+       "undefine"
+      ],
+      "title": "Nozzle Type",
+      "type": "string"
+     },
+     "volume_type": {
+      "default": "Standard",
+      "enum": [
+       "Standard",
+       "High Flow",
+       "TPU High Flow",
+       "E3D High Flow",
+       "Hybrid",
+       "Extra High Flow"
+      ],
+      "title": "Volume Type",
+      "type": "string"
+     }
+    },
+    "required": [
+     "diameter_mm",
+     "nozzle_type"
+    ],
+    "title": "NozzleUpdate",
     "type": "object"
    },
    "OIDCAuthorizeResponse": {
@@ -24190,6 +24761,19 @@
       "title": "Ams Id",
       "type": "integer"
      },
+     "extruder_index": {
+      "anyOf": [
+       {
+        "maximum": 15.0,
+        "minimum": 0.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Extruder Index"
+     },
      "printer_id": {
       "title": "Printer Id",
       "type": "integer"
@@ -24238,6 +24822,17 @@
       "format": "date-time",
       "title": "Created At",
       "type": "string"
+     },
+     "extruder_index": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Extruder Index"
      },
      "fingerprint_color": {
       "anyOf": [
@@ -25174,6 +25769,19 @@
       "minimum": 0.0,
       "title": "Ams Id",
       "type": "integer"
+     },
+     "extruder_index": {
+      "anyOf": [
+       {
+        "maximum": 15.0,
+        "minimum": 0.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Extruder Index"
      },
      "printer_id": {
       "exclusiveMinimum": 0.0,
@@ -26116,6 +26724,17 @@
        }
       ],
       "title": "Ams Label"
+     },
+     "extruder_index": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Extruder Index"
      },
      "printer_id": {
       "title": "Printer Id",
@@ -40028,10 +40647,93 @@
     ]
    }
   },
+  "/api/v1/inventory/labels/locations": {
+   "post": {
+    "description": "Render labels for locations. The QR encodes ``{base_url}/l/{code}``.",
+    "operationId": "labels_render_location_labels_route",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LocationLabelRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Render Location Labels Route",
+    "tags": [
+     "labels"
+    ]
+   }
+  },
   "/api/v1/inventory/locations": {
    "get": {
-    "description": "List all storage locations with spool counts.",
+    "description": "List storage locations with spool counts, optionally filtered by kind/printer.",
     "operationId": "inventory_list_locations",
+    "parameters": [
+     {
+      "description": "Only locations of this kind",
+      "in": "query",
+      "name": "kind",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Only locations of this kind",
+       "title": "Kind"
+      }
+     },
+     {
+      "description": "Only locations bound to this printer",
+      "in": "query",
+      "name": "printer_id",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Only locations bound to this printer",
+       "title": "Printer Id"
+      }
+     }
+    ],
     "responses": {
      "200": {
       "content": {
@@ -40109,6 +40811,95 @@
      }
     ],
     "summary": "Create Location",
+    "tags": [
+     "inventory"
+    ]
+   }
+  },
+  "/api/v1/inventory/locations/by-code/{code}": {
+   "get": {
+    "description": "Resolve a scanned location code (case-insensitive) to the location and its spools.",
+    "operationId": "inventory_get_location_by_code",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "code",
+      "required": true,
+      "schema": {
+       "title": "Code",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LocationWithSpoolsResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Get Location By Code",
+    "tags": [
+     "inventory"
+    ]
+   }
+  },
+  "/api/v1/inventory/locations/sync-printers": {
+   "post": {
+    "description": "Create printer, AMS unit, AMS slot and external-holder locations.\n\nIdempotent: rows are matched on (kind, printer_id, ams_id, tray_id), so\nrunning it again only adds what is new (e.g. an AMS plugged in since) and\nre-links parents. Names are ``<printer>``, ``<printer> - AMS A``,\n``<printer> - AMS A slot 2``, ``<printer> - External left`` and so on.\nReturns every printer-bound location.",
+    "operationId": "inventory_sync_printer_locations",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/LocationResponse"
+         },
+         "title": "Response Sync Printer Locations Api V1 Inventory Locations Sync Printers Post",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Sync Printer Locations",
     "tags": [
      "inventory"
     ]
@@ -52055,6 +52846,114 @@
     ]
    }
   },
+  "/api/v1/printers/{printer_id}/filament-paths": {
+   "get": {
+    "description": "Which extruders each known slot can feed, and the track-switch state.",
+    "operationId": "printers_get_printer_filament_paths",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "printer_id",
+      "required": true,
+      "schema": {
+       "title": "Printer Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Printer Filament Paths Api V1 Printers  Printer Id  Filament Paths Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Get Printer Filament Paths",
+    "tags": [
+     "printers"
+    ]
+   },
+   "put": {
+    "description": "Replace the manual filament-path rows and/or set the track-switch mode.",
+    "operationId": "printers_put_printer_filament_paths",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "printer_id",
+      "required": true,
+      "schema": {
+       "title": "Printer Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FilamentPathsUpdate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Put Printer Filament Paths Api V1 Printers  Printer Id  Filament Paths Put",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Put Printer Filament Paths",
+    "tags": [
+     "printers"
+    ]
+   }
+  },
   "/api/v1/printers/{printer_id}/files": {
    "delete": {
     "description": "Delete a file from the printer.",
@@ -53399,6 +54298,56 @@
     ]
    }
   },
+  "/api/v1/printers/{printer_id}/loaded": {
+   "get": {
+    "description": "What is installed: per slot the assigned spool, its extruder and live tray data.",
+    "operationId": "printers_get_printer_loaded",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "printer_id",
+      "required": true,
+      "schema": {
+       "title": "Printer Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Printer Loaded Api V1 Printers  Printer Id  Loaded Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Get Printer Loaded",
+    "tags": [
+     "printers"
+    ]
+   }
+  },
   "/api/v1/printers/{printer_id}/logging": {
    "delete": {
     "description": "Clear MQTT message logs for a printer.",
@@ -53576,6 +54525,186 @@
      }
     ],
     "summary": "Enable Mqtt Logging",
+    "tags": [
+     "printers"
+    ]
+   }
+  },
+  "/api/v1/printers/{printer_id}/nozzles": {
+   "get": {
+    "description": "Nozzles per extruder with their merge source, plus H2C rack docks.",
+    "operationId": "printers_get_printer_nozzles",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "printer_id",
+      "required": true,
+      "schema": {
+       "title": "Printer Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Printer Nozzles Api V1 Printers  Printer Id  Nozzles Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Get Printer Nozzles",
+    "tags": [
+     "printers"
+    ]
+   }
+  },
+  "/api/v1/printers/{printer_id}/nozzles/{extruder_index}": {
+   "delete": {
+    "description": "Drop the manual override; live/stored MQTT values take over again.",
+    "operationId": "printers_delete_printer_nozzle",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "printer_id",
+      "required": true,
+      "schema": {
+       "title": "Printer Id",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "path",
+      "name": "extruder_index",
+      "required": true,
+      "schema": {
+       "maximum": 15,
+       "minimum": 0,
+       "title": "Extruder Index",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Delete Printer Nozzle Api V1 Printers  Printer Id  Nozzles  Extruder Index  Delete",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Delete Printer Nozzle",
+    "tags": [
+     "printers"
+    ]
+   },
+   "put": {
+    "description": "Set a manual nozzle override for one extruder. Returns the merged nozzle view.",
+    "operationId": "printers_put_printer_nozzle",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "printer_id",
+      "required": true,
+      "schema": {
+       "title": "Printer Id",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "path",
+      "name": "extruder_index",
+      "required": true,
+      "schema": {
+       "maximum": 15,
+       "minimum": 0,
+       "title": "Extruder Index",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/NozzleUpdate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Put Printer Nozzle Api V1 Printers  Printer Id  Nozzles  Extruder Index  Put",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Put Printer Nozzle",
     "tags": [
      "printers"
     ]
@@ -61303,7 +62432,7 @@
     ]
    },
    "post": {
-    "description": "Assign a Spoolman spool to a printer AMS slot (stored in local DB only).\n\nRaises 404 if the printer does not exist or the spool is not found in Spoolman.\nSpoolman's own ``spool.location`` field is NOT touched \u2014 it is user-managed.",
+    "description": "Assign a Spoolman spool to a printer AMS slot (stored in local DB).\n\nRaises 404 if the printer does not exist or the spool is not found in Spoolman,\nand 409 (with ``allowed``) when ``extruder_index`` is not on the slot's\nfilament path. When the slot has a bound location row (created by\n``POST /inventory/locations/sync-printers``) the spool's Spoolman\n``location`` text is set to that location's name; otherwise it is untouched.",
     "operationId": "spoolman_inventory_assign_spoolman_slot",
     "requestBody": {
      "content": {

@@ -18,6 +18,8 @@ class SpoolAssignment(Base):
     tray_id: Mapped[int] = mapped_column(Integer)  # 0-3
     fingerprint_color: Mapped[str | None] = mapped_column(String(8))  # tray_color snapshot
     fingerprint_type: Mapped[str | None] = mapped_column(String(50))  # tray_type snapshot
+    # Device extruder this slot feeds (0 = main/right on Bambu dual-nozzle). NULL = unknown/any.
+    extruder_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     spool: Mapped["Spool"] = relationship(back_populates="assignments")
