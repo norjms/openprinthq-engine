@@ -35,6 +35,8 @@ class Printer(Base):
     # when this is set; NULL means "unknown, don't check".
     installed_plate: Mapped[str | None] = mapped_column(String(60), nullable=True)
     nozzle_count: Mapped[int] = mapped_column(default=1)  # 1 or 2, auto-detected from MQTT
+    # Filament Track Switch: "auto" follows MQTT fila_switch, "installed"/"absent" force it.
+    track_switch_mode: Mapped[str] = mapped_column(String(20), default="auto", server_default="auto")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_archive: Mapped[bool] = mapped_column(Boolean, default=True)
     print_hours_offset: Mapped[float] = mapped_column(Float, default=0.0)  # Baseline hours to add

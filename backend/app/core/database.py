@@ -276,6 +276,7 @@ async def init_db():
         print_queue,
         printer,
         printer_group,
+        printer_hardware,
         printer_sensor_history,
         project,
         project_bom,
@@ -3844,6 +3845,38 @@ async def run_migrations(conn):
         await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN auto_eject BOOLEAN DEFAULT false")
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN ejection_profile_id INTEGER")
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN consecutive_ejects INTEGER DEFAULT 0")
+
+    # Migration: nozzles, filament paths and printer-bound locations. The
+    # printer_nozzles and printer_filament_paths tables come from create_all;
+    # existing installs get the new columns here. The spoolman_slot_assignments
+    # SQLite rebuild (_migrate_widen_spoolman_slot_ams_id_range) runs earlier in
+    # this function, so the extruder_index column added below is never lost by it.
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN track_switch_mode VARCHAR(20) DEFAULT 'auto'")
+    await _safe_execute(conn, "ALTER TABLE spool_assignment ADD COLUMN extruder_index INTEGER")
+    await _safe_execute(conn, "ALTER TABLE spoolman_slot_assignments ADD COLUMN extruder_index INTEGER")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN kind VARCHAR(20) DEFAULT 'storage'")
+    await _safe_execute(
+        conn, "ALTER TABLE locations ADD COLUMN parent_id INTEGER REFERENCES locations(id) ON DELETE SET NULL"
+    )
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN printer_id INTEGER")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN ams_id INTEGER")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN tray_id INTEGER")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN code VARCHAR(16)")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN note VARCHAR(500)")
+    await _safe_execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ix_locations_code ON locations (code)")
+    await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_locations_parent_id ON locations (parent_id)")
+    await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_locations_printer_id ON locations (printer_id)")
+    # Backfill scan codes for locations created before codes existed. Random
+    # values cannot be produced portably in SQL, so do it row by row here.
+    from backend.app.utils.location_codes import generate_location_code
+
+    async with conn.begin_nested():
+        missing = (await conn.execute(text("SELECT id FROM locations WHERE code IS NULL"))).fetchall()
+        for (loc_id,) in missing:
+            await conn.execute(
+                text("UPDATE locations SET code = :code WHERE id = :id"),
+                {"code": generate_location_code(), "id": loc_id},
+            )
 
     # Migration: the seeded test-notification title said "Bambuddy Test". Rows
     # still on that default take "{app_name} Test"; edited titles are kept.
