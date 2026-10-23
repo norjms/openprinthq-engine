@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.core.branding import APP_NAME
 from backend.app.models.notification_template import NotificationTemplate
 from backend.app.models.settings import Settings
 from backend.app.schemas.auth import SMTPSettings
@@ -445,7 +446,7 @@ async def create_password_reset_link_email_from_template(
 
 
 async def create_welcome_email_from_template(
-    db: AsyncSession, username: str, password: str, login_url: str, app_name: str = "OpenPrintHQ"
+    db: AsyncSession, username: str, password: str, login_url: str, app_name: str = APP_NAME
 ) -> tuple[str, str, str]:
     """Create welcome email content using notification template from database.
 
@@ -454,7 +455,7 @@ async def create_welcome_email_from_template(
         username: Username of the new user
         password: Auto-generated password
         login_url: URL to login page
-        app_name: Application name (default: BamBuddy)
+        app_name: Application name (default: OpenPrintHQ)
 
     Returns:
         Tuple of (subject, text_body, html_body)
@@ -507,7 +508,7 @@ async def create_welcome_email_from_template(
 
 
 async def create_password_reset_email_from_template(
-    db: AsyncSession, username: str, password: str, login_url: str, app_name: str = "OpenPrintHQ"
+    db: AsyncSession, username: str, password: str, login_url: str, app_name: str = APP_NAME
 ) -> tuple[str, str, str]:
     """Create password reset email content using notification template from database.
 
@@ -516,7 +517,7 @@ async def create_password_reset_email_from_template(
         username: Username of the user
         password: New auto-generated password
         login_url: URL to login page
-        app_name: Application name (default: BamBuddy)
+        app_name: Application name (default: OpenPrintHQ)
 
     Returns:
         Tuple of (subject, text_body, html_body)
@@ -606,7 +607,7 @@ async def send_user_print_notification(
     all_variables = {
         "username": username,
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-        "app_name": "Bambuddy",
+        "app_name": APP_NAME,
         **variables,
     }
 

@@ -3845,6 +3845,22 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN ejection_profile_id INTEGER")
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN consecutive_ejects INTEGER DEFAULT 0")
 
+    # Migration: the seeded test-notification title said "Bambuddy Test". Rows
+    # still on that default take "{app_name} Test"; edited titles are kept.
+    await _migrate_test_template_title(conn)
+
+
+async def _migrate_test_template_title(conn) -> None:
+    from sqlalchemy import text
+
+    async with conn.begin_nested():
+        await conn.execute(
+            text(
+                "UPDATE notification_templates SET title_template = :new WHERE event_type = 'test' AND title_template = :old"
+            ),
+            {"new": "{app_name} Test", "old": "Bambuddy Test"},
+        )
+
 
 _USER_PRINT_TEMPLATE_RENAMES: tuple[tuple[str, str, str], ...] = (
     ("user_print_start", "User Print Started", "User Print Started Email"),
