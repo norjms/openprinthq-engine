@@ -40,7 +40,9 @@ FLASHFORGE_TYPES = frozenset({CONNECTION_FLASHFORGE})
 MKS_TYPES = frozenset({CONNECTION_MKS})
 OBICO_TYPES = frozenset({CONNECTION_OBICO})
 SNAPMAKER_TYPES = frozenset({CONNECTION_SNAPMAKER})
-NON_BAMBU_TYPES = MOONRAKER_TYPES | OCTOPRINT_TYPES | DUET_TYPES | FLASHFORGE_TYPES | MKS_TYPES | OBICO_TYPES | SNAPMAKER_TYPES
+NON_BAMBU_TYPES = (
+    MOONRAKER_TYPES | OCTOPRINT_TYPES | DUET_TYPES | FLASHFORGE_TYPES | MKS_TYPES | OBICO_TYPES | SNAPMAKER_TYPES
+)
 # All connection types the API/schema accepts.
 KNOWN_CONNECTION_TYPES = frozenset({CONNECTION_BAMBU}) | NON_BAMBU_TYPES
 
@@ -109,7 +111,13 @@ def capabilities_for(printer) -> PrinterCapabilities:
             klipper_profile=profile,
         )
 
-    if conn in OCTOPRINT_TYPES or conn in DUET_TYPES or conn in FLASHFORGE_TYPES or conn in MKS_TYPES or conn in SNAPMAKER_TYPES:
+    if (
+        conn in OCTOPRINT_TYPES
+        or conn in DUET_TYPES
+        or conn in FLASHFORGE_TYPES
+        or conn in MKS_TYPES
+        or conn in SNAPMAKER_TYPES
+    ):
         # OctoPrint / PrusaLink / Duet / FlashForge / MKS: live control +
         # upload, no Bambu feature families. Chamber is config/plugin-dependent
         # and not modelled yet.
