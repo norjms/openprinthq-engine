@@ -422,6 +422,9 @@ export default {
       offline: 'Desconectada',
     },
     plateStatus: {
+      ejecting: "Expulsando pieza",
+      failureHold: "Retenida: fallo detectado",
+      failureHoldHint: "Se detectó un fallo de impresión. Revisa la impresora y haz clic para confirmar y que la cola pueda volver a usarla.",
       markCleared: 'Marcar cama como despejada',
       cleared: 'Cama despejada',
       notCleared: 'Cama no despejada',

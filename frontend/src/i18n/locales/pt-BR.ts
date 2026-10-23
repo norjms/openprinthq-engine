@@ -422,6 +422,9 @@ export default {
       offline: 'Offline',
     },
     plateStatus: {
+      ejecting: "Ejetando peça",
+      failureHold: "Retida: falha detectada",
+      failureHoldHint: "Uma falha de impressão foi detectada. Verifique a impressora e clique para confirmar e liberá-la para a fila.",
       markCleared: 'Marcar placa como liberada',
       cleared: 'Placa liberada',
       notCleared: 'Placa não liberada',

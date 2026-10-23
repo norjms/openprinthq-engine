@@ -584,6 +584,8 @@ export interface PrinterStatus {
   // Queue: printer is awaiting user ack that the build plate was cleared after a
   // finished/failed print. Persisted across restarts (#961).
   awaiting_plate_clear: boolean;
+  ejecting?: boolean;  // a bed eject is running
+  failure_hold?: boolean;  // held after a detected failure until acknowledged
   // AMS drying support
   supports_drying: boolean;
   // The AMS can dry, but only from the printer's own screen (P1 series, #2533).
@@ -3885,6 +3887,8 @@ export const api = {
     request<EjectionProfile>(`/ejection-profiles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteEjectionProfile: (id: number) => request<{ success: boolean }>(`/ejection-profiles/${id}`, { method: 'DELETE' }),
   getEjectStatus: (printerId: number) => request<EjectStatus>(`/printers/${printerId}/eject`),
+  ackPrinterFailures: (printerId: number) =>
+    request<{ acknowledged: number; held: boolean }>(`/printers/${printerId}/failure-events/ack`, { method: 'POST', body: '{}' }),
   ejectNow: (printerId: number) => request<EjectStatus>(`/printers/${printerId}/eject`, { method: 'POST' }),
   getPrinters: () => request<Printer[]>('/printers/'),
   getPrinter: (id: number) => request<Printer>(`/printers/${id}`),

@@ -1,4 +1,4 @@
-# Farm queue: hardware matching, retries, preflight, stats and bed ejection
+# Farm queue: hardware matching, retries, preflight, stats, bed ejection and failure detection
 
 These features make the queue behave like a print farm's dispatcher. They apply to queue items aimed at a
 printer model (`target_model`) or a printer group (`target_group_id`); an item pinned to one printer keeps
@@ -104,6 +104,25 @@ toolhead. `POST /api/v1/printers/{id}/eject` runs the profile by hand on an idle
 
 Test a profile by hand before turning it on: a wrong sequence can drive the toolhead into the part. Bambu
 printers take the G-code over MQTT (`gcode_line`), which suits short sequences.
+
+## Failure detection
+
+Every detector that can tell a print went wrong records an event in one place, `GET /api/v1/failure-events`
+(filter with `printer_id` and `unacknowledged=true`):
+
+| source | where it comes from |
+|---|---|
+| `bambu_hms` | the printer's own AI monitor: spaghetti (`0300_8003`, `0C00_8042`), nozzle clumping (`0C00_803F`, `0C00_8043`) |
+| `obico` | the Obico detector, with its score and the action it took |
+| `klipper` | a Klipper print that ended in error, with Klipper's message |
+| `stall` | progress and layer unchanged for `stall_minutes` while printing (off by default) |
+
+Policy, `GET/PUT /api/v1/failure-detection/policy` with `{"hold_printer": bool, "stall_minutes": int}`:
+with `hold_printer` on, a printer with an unacknowledged event is held, so the queue starts nothing on it until
+someone acknowledges (`POST /api/v1/failure-events/{id}/ack`, or every event on a printer with
+`POST /api/v1/printers/{id}/failure-events/ack`). The printer card shows **Held: failure detected**; clicking it
+acknowledges. Holds survive a restart. Detection never pauses or stops a print by itself; the printer's own AI
+halt and the Obico action setting keep their own behaviour.
 
 ## Permissions and API keys
 

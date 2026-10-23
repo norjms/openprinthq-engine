@@ -422,6 +422,9 @@ export default {
       offline: 'Çevrimdışı',
     },
     plateStatus: {
+      ejecting: "Parça boşaltılıyor",
+      failureHold: "Beklemede: hata algılandı",
+      failureHoldHint: "Bir baskı hatası algılandı. Yazıcıyı kontrol edin, ardından onaylamak ve kuyruğun yeniden kullanmasına izin vermek için tıklayın.",
       markCleared: 'Plakayı temizlendi olarak işaretle',
       cleared: 'Plaka Temiz',
       notCleared: 'Plaka Temiz Değil',
