@@ -33,6 +33,7 @@ from backend.app.services.bambu_ftp import (
     upload_file_async,
     with_ftp_retry,
 )
+from backend.app.services.farm_match import hardware_mismatch, job_hardware
 from backend.app.services.filament_deficit import compute_deficit_for_queue_item
 from backend.app.services.notification_service import notification_service
 from backend.app.services.printer_manager import (
@@ -691,6 +692,7 @@ class PrintScheduler:
                             effective_types,
                             filament_overrides=filament_overrides,
                             require_plate_clear=require_plate_clear,
+                            job_hw=job_hardware(item, effective_types),
                         )
                         # Notifications take a single "what was this aimed at"
                         # string; groups reuse the same field as models.
@@ -704,6 +706,7 @@ class PrintScheduler:
                             item.target_location,
                             filament_overrides=filament_overrides,
                             require_plate_clear=require_plate_clear,
+                            job_hw=job_hardware(item, effective_types),
                         )
                         target_desc = item.target_model
 
@@ -994,6 +997,7 @@ class PrintScheduler:
         target_location: str | None = None,
         filament_overrides: list[dict] | None = None,
         require_plate_clear: bool = True,
+        job_hw: dict | None = None,
     ) -> tuple[int | None, str | None]:
         """Find an idle, connected printer matching the model with compatible filaments.
 
@@ -1040,6 +1044,7 @@ class PrintScheduler:
             required_filament_types=required_filament_types,
             filament_overrides=filament_overrides,
             require_plate_clear=require_plate_clear,
+            job_hw=job_hw,
         )
 
     async def _find_idle_printer_for_group(
@@ -1050,6 +1055,7 @@ class PrintScheduler:
         required_filament_types: list[str] | None = None,
         filament_overrides: list[dict] | None = None,
         require_plate_clear: bool = True,
+        job_hw: dict | None = None,
     ) -> tuple[int | None, str | None]:
         """Find an idle, connected member of a printer group.
 
@@ -1080,6 +1086,7 @@ class PrintScheduler:
             required_filament_types=required_filament_types,
             filament_overrides=filament_overrides,
             require_plate_clear=require_plate_clear,
+            job_hw=job_hw,
         )
 
     def _select_idle_printer(
@@ -1090,6 +1097,7 @@ class PrintScheduler:
         required_filament_types: list[str] | None = None,
         filament_overrides: list[dict] | None = None,
         require_plate_clear: bool = True,
+        job_hw: dict | None = None,
     ) -> tuple[int | None, str | None]:
         """Pick an available printer from an already-resolved candidate list.
 
@@ -1101,6 +1109,10 @@ class PrintScheduler:
             printers: Candidate printers (already filtered to is_active).
             target_desc: Human phrase naming the candidate set, used in the
                          waiting reason, e.g. "X1C printers in Back room".
+            job_hw: What the file needs from the hardware (see farm_match.job_hardware):
+                    sliced nozzle diameter, abrasive filament types, build plate. A
+                    printer with a POSITIVE mismatch is skipped and named in the
+                    waiting reason; unknown data never blocks.
         """
         # Separate force-matched overrides from preference-only overrides
         force_overrides = [o for o in (filament_overrides or []) if o.get("force_color_match")]
@@ -1110,6 +1122,7 @@ class PrintScheduler:
         printers_busy = []
         printers_offline = []
         printers_missing_filament: list[tuple[str, list[str]]] = []
+        printers_hardware: list[tuple[str, list[str]]] = []
         candidates: list[tuple[int, int]] = []  # (printer_id, color_match_count)
 
         for printer in printers:
@@ -1132,6 +1145,18 @@ class PrintScheduler:
             if not is_connected:
                 printers_offline.append(printer.name)
                 continue
+
+            # Farm hardware match (nozzle size, hardened nozzle for abrasives, build
+            # plate). Checked before "busy" so a printer that could never take this
+            # job is reported as such rather than as merely busy.
+            if job_hw:
+                hw_reasons = hardware_mismatch(
+                    job_hw, printer_manager.get_status(printer.id), getattr(printer, "installed_plate", None)
+                )
+                if hw_reasons:
+                    printers_hardware.append((printer.name, hw_reasons))
+                    logger.debug("Skipping printer %s (%s) - hardware: %s", printer.id, printer.name, hw_reasons)
+                    continue
 
             if not is_idle:
                 # Printer is currently printing.  For force-color jobs, check whether the
@@ -1226,6 +1251,9 @@ class PrintScheduler:
                     f"{name} (needs {', '.join(missing)})" for name, missing in printers_missing_filament
                 ]
                 reasons.append(f"Waiting for filament: {'; '.join(names_and_missing)}")
+        if printers_hardware:
+            hw_parts = [f"{name} (needs {'; '.join(why)})" for name, why in printers_hardware]
+            reasons.append(f"Hardware: {'; '.join(hw_parts)}")
         if printers_busy:
             reasons.append(f"Busy: {', '.join(printers_busy)}")
         if printers_offline:

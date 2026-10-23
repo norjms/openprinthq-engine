@@ -59,6 +59,11 @@ const createMockQueueItem = (overrides: Partial<PrintQueueItem> = {}): PrintQueu
   ...overrides,
 });
 
+
+// The model picker is the only combobox apart from the "retry if the print fails" select.
+const modelSelect = () =>
+  screen.getAllByRole('combobox').find((el) => el.id !== 'maxRetries') as HTMLElement;
+
 describe('PrintModal', () => {
   const mockOnClose = vi.fn();
   const mockOnSuccess = vi.fn();
@@ -1723,8 +1728,8 @@ describe('PrintModal — per-plate filament mapping (#2551 follow-up)', () => {
     await waitFor(() => expect(screen.getByText('Plate 2')).toBeInTheDocument());
     await user.click(screen.getByText('Plate 2'));
     await user.click(screen.getByRole('button', { name: /any model/i }));
-    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
-    await user.selectOptions(screen.getByRole('combobox'), 'X1C');
+    await waitFor(() => expect(modelSelect()).toBeInTheDocument());
+    await user.selectOptions(modelSelect(), 'X1C');
 
     await user.click(document.querySelector('button[type="submit"]') as HTMLElement);
 

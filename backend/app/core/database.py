@@ -3825,6 +3825,16 @@ async def run_migrations(conn):
         await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN show_filament_panel BOOLEAN DEFAULT true")
         await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN show_bed_ejection BOOLEAN DEFAULT false")
 
+    # Migration: farm-aware dispatch. printers.installed_plate is the build plate the
+    # operator says is fitted (NULL = unknown, never blocks). print_queue gains
+    # automatic retry: max_retries (0 = off), retry_count, and retry_of_id pointing at
+    # the first attempt. INTEGER DEFAULT 0 is spelled the same on both dialects and
+    # backfills existing rows.
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN installed_plate VARCHAR(60)")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN max_retries INTEGER DEFAULT 0")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN retry_count INTEGER DEFAULT 0")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN retry_of_id INTEGER")
+
 
 _USER_PRINT_TEMPLATE_RENAMES: tuple[tuple[str, str, str], ...] = (
     ("user_print_start", "User Print Started", "User Print Started Email"),
