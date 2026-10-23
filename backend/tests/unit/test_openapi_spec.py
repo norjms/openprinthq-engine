@@ -1,18 +1,22 @@
 """The published OpenAPI document: stable ids, security schemes, and no drift."""
 
-import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
+COMMITTED = ROOT / "docs" / "openapi.json"
 
 
 def _spec():
-    path = ROOT / "scripts" / "export_openapi.py"
-    mod_spec = importlib.util.spec_from_file_location("export_openapi", path)
-    mod = importlib.util.module_from_spec(mod_spec)
-    mod_spec.loader.exec_module(mod)
-    return mod.spec()
+    # Same as scripts/export_openapi.py spec(); inlined because the Docker test
+    # image ships neither scripts/ nor docs/.
+    from backend.app.main import app
+
+    s = json.loads(json.dumps(app.openapi()))
+    s.get("info", {}).pop("version", None)
+    return s
 
 
 def test_shape():
@@ -33,8 +37,9 @@ def test_shape():
     assert "/{full_path}" not in s["paths"] and "/sw.js" not in s["paths"]
 
 
+@pytest.mark.skipif(not COMMITTED.exists(), reason="docs/ is not in this checkout (Docker test image)")
 def test_committed_spec_is_current():
-    committed = json.loads((ROOT / "docs" / "openapi.json").read_text(encoding="utf-8"))
+    committed = json.loads(COMMITTED.read_text(encoding="utf-8"))
     assert committed == json.loads(json.dumps(_spec())), (
         "docs/openapi.json is out of date: run `python scripts/export_openapi.py` and commit the result"
     )
