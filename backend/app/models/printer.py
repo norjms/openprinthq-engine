@@ -30,6 +30,10 @@ class Printer(Base):
     # in API responses — see schemas/printer.py PrinterResponse.
     moonraker_api_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     location: Mapped[str | None] = mapped_column(String(100))  # Group/location name
+    # The build plate the operator says is on the printer ("Textured PEI Plate", ...).
+    # The farm dispatcher only sends a file sliced for another plate type elsewhere
+    # when this is set; NULL means "unknown, don't check".
+    installed_plate: Mapped[str | None] = mapped_column(String(60), nullable=True)
     nozzle_count: Mapped[int] = mapped_column(default=1)  # 1 or 2, auto-detected from MQTT
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_archive: Mapped[bool] = mapped_column(Boolean, default=True)

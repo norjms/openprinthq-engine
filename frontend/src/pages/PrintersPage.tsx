@@ -126,6 +126,10 @@ import { Collapsible } from '../components/Collapsible';
 import { ConnectionDiagnosticModal, DiagnosticChecklist } from '../components/ConnectionDiagnostic';
 import { getColorName, parseFilamentColor, isLightColor } from '../utils/colors';
 
+// Build plate names as the slicer writes them into a 3MF (curr_bed_type), for the
+// printer's "installed plate" setting used by farm dispatch.
+const INSTALLED_PLATES = ['Cool Plate', 'Engineering Plate', 'High Temp Plate', 'Textured PEI Plate', 'Supertack Plate'];
+
 export interface SpoolmanSlotAssignmentRow {
   printer_id: number;
   ams_id: number;
@@ -7554,6 +7558,7 @@ function EditPrinterModal({
     access_code: '',
     model: printer.model || '',
     location: printer.location || '',
+    installed_plate: printer.installed_plate || '',
     auto_archive: printer.auto_archive,
     is_active: printer.is_active,
   });
@@ -7588,6 +7593,7 @@ function EditPrinterModal({
       ip_address: form.ip_address,
       model: form.model || undefined,
       location: form.location || undefined,
+      installed_plate: form.installed_plate || null,
       auto_archive: form.auto_archive,
       is_active: form.is_active,
     };
@@ -7717,6 +7723,28 @@ function EditPrinterModal({
                 placeholder={t('printers.modal.locationPlaceholder')}
               />
               <p className="text-xs text-bambu-gray mt-1">{t('printers.locationHelp')}</p>
+            </div>
+            <div>
+              <label htmlFor="edit_installed_plate" className="block text-sm text-bambu-gray mb-1">
+                {t('printers.modal.installedPlate')}
+              </label>
+              <select
+                id="edit_installed_plate"
+                className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                value={form.installed_plate}
+                onChange={(e) => setForm({ ...form, installed_plate: e.target.value })}
+              >
+                <option value="">{t('printers.modal.plateNotSet')}</option>
+                {INSTALLED_PLATES.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+                {form.installed_plate && !INSTALLED_PLATES.includes(form.installed_plate) && (
+                  <option value={form.installed_plate}>{form.installed_plate}</option>
+                )}
+              </select>
+              <p className="text-xs text-bambu-gray mt-1">{t('printers.modal.installedPlateHelp')}</p>
             </div>
             <div className="flex items-center gap-2">
               <input

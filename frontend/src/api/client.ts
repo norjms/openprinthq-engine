@@ -362,6 +362,7 @@ export interface Printer {
   has_moonraker_api_key?: boolean;  // whether a key is stored (never the key itself)
   model: string | null;
   location: string | null;  // Group/location name
+  installed_plate?: string | null;  // build plate fitted (farm dispatch)
   nozzle_count: number;  // 1 or 2, auto-detected from MQTT
   is_active: boolean;
   auto_archive: boolean;
@@ -609,6 +610,7 @@ export interface PrinterCreate {
   moonraker_port?: number;  // Klipper only (default 7125)
   moonraker_api_key?: string;  // Klipper only, optional
   location?: string;
+  installed_plate?: string | null;  // build plate fitted; null = unknown (farm dispatch skips the check)
   auto_archive?: boolean;
   // Maintenance Mode flag (#1476). Backend already gates MQTT, queue dispatch,
   // scheduler, metrics and the print picker on this; toggling via PATCH
@@ -2200,6 +2202,9 @@ export interface PrintQueueItem {
   position: number;
   scheduled_time: string | null;
   require_previous_success: boolean;
+  max_retries?: number;  // farm queue: requeue after a failed print
+  retry_count?: number;
+  retry_of_id?: number | null;
   auto_off_after: boolean;
   manual_start: boolean;  // Requires manual trigger to start (staged)
   // Set by the dispatch scheduler when the assigned spool can't satisfy
@@ -2282,6 +2287,7 @@ export interface PrintQueueItemCreate {
   library_file_id?: number | null;
   scheduled_time?: string | null;
   require_previous_success?: boolean;
+  max_retries?: number;
   auto_off_after?: boolean;
   manual_start?: boolean;  // Requires manual trigger to start (staged)
   insert_at_top?: boolean;  // Insert ahead of other pending items in the same queue scope
@@ -2331,6 +2337,7 @@ export interface PrintQueueItemUpdate {
   position?: number;
   scheduled_time?: string | null;
   require_previous_success?: boolean;
+  max_retries?: number;
   auto_off_after?: boolean;
   manual_start?: boolean;
   ams_mapping?: number[];
@@ -2354,6 +2361,7 @@ export interface PrintQueueBulkUpdate {
   printer_id?: number | null;
   scheduled_time?: string | null;
   require_previous_success?: boolean;
+  max_retries?: number;
   auto_off_after?: boolean;
   manual_start?: boolean;
   // Print options

@@ -86,6 +86,14 @@ class PrintQueueItem(Base):
     # out with it. The counter bounds that loop; see DISPATCH_MAX_ATTEMPTS.
     dispatch_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
+    # Automatic retry after a failed print (farm queue). When the print fails and
+    # retry_count < max_retries, a fresh copy is queued at the front with
+    # retry_count + 1 and retry_of_id pointing at the first attempt; the failed row
+    # stays in history. 0 = no retries (the default, and the previous behaviour).
+    max_retries: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    retry_of_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # H2C dual-nozzle-rack slicer pick preservation (#1780). BambuStudio's
     # project_file MQTT command for rack-swap-capable models (O1C2 today)
     # carries per-filament physical nozzle position IDs in `nozzle_mapping`,
