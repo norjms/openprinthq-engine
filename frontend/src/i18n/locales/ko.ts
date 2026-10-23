@@ -5201,8 +5201,13 @@ export default {
       email: '이메일',
       discord: 'Discord',
       webhook: 'Webhook',
-      homeassistant: 'Home Assistant'
+      homeassistant: 'Home Assistant',
+      webpush: '브라우저 푸시',
     },
+    webpushSubscribe: '이 브라우저 구독',
+    webpushSubscribed: '이 브라우저는 구독 중입니다',
+    webpushUnsupported: '이 브라우저는 푸시 알림을 받을 수 없습니다 (HTTPS와 서비스 워커 필요)',
+    webpushDenied: '알림 권한이 거부되었습니다',
     providerDescriptions: {
       email: 'SMTP 이메일 알림',
       telegram: 'Telegram 봇을 통한 알림',
@@ -5211,7 +5216,8 @@ export default {
       pushover: '간단하고 신뢰할 수 있는 푸시 알림',
       callmebot: 'CallMeBot을 통한 무료 WhatsApp 알림',
       webhook: '모든 URL에 일반 HTTP POST',
-      homeassistant: 'Home Assistant 대시보드의 지속적인 알림'
+      homeassistant: 'Home Assistant 대시보드의 지속적인 알림',
+      webpush: '아래에서 구독한 브라우저와 설치된 웹 앱으로 알림',
     },
     lastSuccess: '마지막: {{date}}',
     error: '오류',

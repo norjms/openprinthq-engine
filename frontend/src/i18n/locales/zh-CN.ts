@@ -5465,8 +5465,13 @@ export default {
       discord: 'Discord',
       webhook: 'Webhook',
       homeassistant: 'Home Assistant',
+      webpush: '浏览器推送',
     },
     // Provider descriptions
+    webpushSubscribe: '订阅此浏览器',
+    webpushSubscribed: '此浏览器已订阅',
+    webpushUnsupported: '此浏览器无法接收推送通知 (需要 HTTPS 和 Service Worker)',
+    webpushDenied: '通知权限被拒绝',
     providerDescriptions: {
       email: 'SMTP 电子邮件通知',
       telegram: '通过 Telegram 机器人发送通知',
@@ -5476,6 +5481,7 @@ export default {
       callmebot: '通过 CallMeBot 免费发送 WhatsApp 通知',
       webhook: '通用 HTTP POST 到任意 URL',
       homeassistant: 'Home Assistant 仪表板中的持久通知',
+      webpush: '发送到下方已订阅的浏览器和已安装的网页应用',
     },
     // NotificationProviderCard
     lastSuccess: '上次：{{date}}',

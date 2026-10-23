@@ -5465,8 +5465,13 @@ export default {
       discord: 'Discord',
       webhook: 'Webhook',
       homeassistant: 'Home Assistant',
+      webpush: 'Push del browser',
     },
     // Provider descriptions
+    webpushSubscribe: 'Iscrivi questo browser',
+    webpushSubscribed: 'Questo browser è iscritto',
+    webpushUnsupported: 'Questo browser non può ricevere notifiche push (servono HTTPS e un service worker)',
+    webpushDenied: 'Permesso di notifica negato',
     providerDescriptions: {
       email: 'Notifiche email tramite SMTP',
       telegram: 'Notifiche tramite bot Telegram',
@@ -5476,6 +5481,7 @@ export default {
       callmebot: 'Notifiche WhatsApp gratuite tramite CallMeBot',
       webhook: 'POST HTTP generico verso qualsiasi URL',
       homeassistant: 'Notifiche persistenti nella dashboard di Home Assistant',
+      webpush: 'Notifiche a browser e app web installate iscritti qui sotto',
     },
     // NotificationProviderCard
     lastSuccess: 'Ultimo: {{date}}',

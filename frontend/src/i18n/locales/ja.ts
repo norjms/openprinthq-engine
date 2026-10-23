@@ -5477,8 +5477,13 @@ export default {
       discord: 'Discord',
       webhook: 'Webhook',
       homeassistant: 'Home Assistant',
+      webpush: 'ブラウザプッシュ',
     },
     // Provider descriptions
+    webpushSubscribe: 'このブラウザを登録',
+    webpushSubscribed: 'このブラウザは登録済みです',
+    webpushUnsupported: 'このブラウザはプッシュ通知を受信できません (HTTPS と Service Worker が必要)',
+    webpushDenied: '通知の許可が拒否されました',
     providerDescriptions: {
       email: 'SMTPメール通知',
       telegram: 'Telegramボット経由の通知',
@@ -5488,6 +5493,7 @@ export default {
       callmebot: 'CallMeBot経由の無料WhatsApp通知',
       webhook: '任意のURLへの汎用HTTP POST',
       homeassistant: 'Home Assistantダッシュボードの永続通知',
+      webpush: '下で登録したブラウザとインストール済みWebアプリへの通知',
     },
     // NotificationProviderCard
     lastSuccess: '最終: {{date}}',

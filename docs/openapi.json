@@ -11527,6 +11527,28 @@
     "title": "KProfilesResponse",
     "type": "object"
    },
+   "Keys": {
+    "properties": {
+     "auth": {
+      "maxLength": 200,
+      "minLength": 8,
+      "title": "Auth",
+      "type": "string"
+     },
+     "p256dh": {
+      "maxLength": 500,
+      "minLength": 10,
+      "title": "P256Dh",
+      "type": "string"
+     }
+    },
+    "required": [
+     "p256dh",
+     "auth"
+    ],
+    "title": "Keys",
+    "type": "object"
+   },
    "LDAPProvisionRequest": {
     "description": "Body for POST /auth/ldap/provision. Username is re-resolved via the\nservice-account bind, so the request only carries the directory username\nthe admin picked from the search results.",
     "properties": {
@@ -20605,7 +20627,8 @@
      "email",
      "discord",
      "webhook",
-     "homeassistant"
+     "homeassistant",
+     "webpush"
     ],
     "title": "ProviderType",
     "type": "string"
@@ -26272,6 +26295,25 @@
     "title": "SubnetScanStatus",
     "type": "object"
    },
+   "Subscription": {
+    "properties": {
+     "endpoint": {
+      "maxLength": 1000,
+      "minLength": 10,
+      "title": "Endpoint",
+      "type": "string"
+     },
+     "keys": {
+      "$ref": "#/components/schemas/Keys"
+     }
+    },
+    "required": [
+     "endpoint",
+     "keys"
+    ],
+    "title": "Subscription",
+    "type": "object"
+   },
    "SyncResult": {
     "description": "Result of a Spoolman sync operation.",
     "properties": {
@@ -27416,6 +27458,21 @@
     "title": "UnlinkedSpool",
     "type": "object"
    },
+   "Unsubscribe": {
+    "properties": {
+     "endpoint": {
+      "maxLength": 1000,
+      "minLength": 10,
+      "title": "Endpoint",
+      "type": "string"
+     }
+    },
+    "required": [
+     "endpoint"
+    ],
+    "title": "Unsubscribe",
+    "type": "object"
+   },
    "UpdateSpoolWeightRequest": {
     "properties": {
      "spool_id": {
@@ -28422,7 +28479,8 @@
      "email",
      "discord",
      "webhook",
-     "homeassistant"
+     "homeassistant",
+     "webpush"
     ],
     "title": "ProviderType",
     "type": "string"
@@ -56371,6 +56429,127 @@
     "summary": "Get Project Timeline",
     "tags": [
      "projects"
+    ]
+   }
+  },
+  "/api/v1/push/subscribe": {
+   "delete": {
+    "operationId": "notifications_unsubscribe",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Unsubscribe"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Unsubscribe",
+    "tags": [
+     "notifications"
+    ]
+   },
+   "post": {
+    "operationId": "notifications_subscribe",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Subscription"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Subscribe",
+    "tags": [
+     "notifications"
+    ]
+   }
+  },
+  "/api/v1/push/vapid-public-key": {
+   "get": {
+    "description": "The key a browser passes to PushManager.subscribe as applicationServerKey.",
+    "operationId": "notifications_vapid_public_key",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Vapid Public Key",
+    "tags": [
+     "notifications"
     ]
    }
   },

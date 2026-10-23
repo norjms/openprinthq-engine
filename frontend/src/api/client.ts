@@ -2511,7 +2511,7 @@ export interface Filament {
 }
 
 // Notification Provider types
-export type ProviderType = 'callmebot' | 'ntfy' | 'pushover' | 'telegram' | 'email' | 'discord' | 'webhook' | 'homeassistant';
+export type ProviderType = 'callmebot' | 'ntfy' | 'pushover' | 'telegram' | 'email' | 'discord' | 'webhook' | 'homeassistant' | 'webpush';
 
 export interface NotificationProvider {
   id: number;
@@ -5316,6 +5316,9 @@ export const api = {
     request<{ message: string }>(`/notifications/${id}`, { method: 'DELETE' }),
   testNotificationProvider: (id: number) =>
     request<NotificationTestResponse>(`/notifications/${id}/test`, { method: 'POST' }),
+  getPushPublicKey: () => request<{ public_key: string }>('/push/vapid-public-key'),
+  subscribePush: (data: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    request<{ success: boolean }>('/push/subscribe', { method: 'POST', body: JSON.stringify(data) }),
   testNotificationConfig: (data: NotificationTestRequest) =>
     request<NotificationTestResponse>('/notifications/test-config', {
       method: 'POST',
