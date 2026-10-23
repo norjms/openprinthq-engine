@@ -2120,6 +2120,14 @@ class PrintScheduler:
             logger.debug("Printer %d: no status available", printer_id)
             return False
 
+        # A bed eject is running (services/bed_ejection.py): the toolhead is
+        # sweeping the bed, so never start a job, whatever require_plate_clear says.
+        from backend.app.services.bed_ejection import is_ejecting
+
+        if is_ejecting(printer_id):
+            logger.debug("Printer %d: not idle - ejecting the last part", printer_id)
+            return False
+
         # Plate-clear gate: if the printer finished/failed a previous print and the user
         # hasn't acknowledged the plate was cleared, the queue must not dispatch the next
         # job — even if the printer currently reports IDLE. After Auto Off cycles the

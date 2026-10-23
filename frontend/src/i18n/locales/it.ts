@@ -126,6 +126,25 @@ export default {
   },
 
   // Printers page
+  ejection: {
+    title: "Profili di espulsione",
+    description: "Un profilo è il G-code che spinge un pezzo finito fuori dal piano. Con l'espulsione automatica il motore lo esegue dopo una stampa riuscita, attende che la stampante torni inattiva e poi libera il piatto perché parta il lavoro successivo. Per qualsiasi problema il piatto resta in attesa di una persona.",
+    summary: "Espelli sotto {{temp}} C, al massimo {{cap}} di fila",
+    none: "Nessun profilo per ora.",
+    add: "Aggiungi profilo",
+    saved: "Profilo salvato",
+    confirmDelete: "Eliminare il profilo {{name}}? Le stampanti che lo usano smetteranno di espellere automaticamente.",
+    name: "Nome",
+    gcode: "G-code di espulsione",
+    gcodeHelp: "Un nome di macro Klipper o righe di G-code. Provalo prima a mano: una sequenza sbagliata può mandare la testina contro il pezzo.",
+    maxBedTemp: "Attendi finché il piano è a (C) o meno",
+    maxConsecutive: "Espulsioni di fila prima che una persona controlli (0 = nessun limite)",
+    timeout: "Rinuncia dopo (secondi)",
+    settle: "Attendi dopo l'invio prima di verificare l'inattività (secondi)",
+    allowedPlates: "Solo con questi piatti (separati da virgole)",
+    allowedPlatesHelp: "Vuoto = qualsiasi piatto. Confrontato con il piatto installato sulla stampante.",
+    verifyWithCamera: "Verifica con la fotocamera che il piano sia vuoto prima di liberare il piatto",
+  },
   printers: {
     addPreflight: {
       checking: 'Verifica della connessione...',
@@ -492,6 +511,10 @@ export default {
       moonrakerApiKeyPlaceholder: 'Lasciare vuoto per LAN aperta',
       moonrakerApiKeyHelp: "Necessaria solo se Moonraker richiede l'autenticazione. Con LAN aperta lasciare vuoto.",
       klipperProfile: 'Profilo stampante',
+      autoEject: "Espelli automaticamente dopo una stampa riuscita",
+      ejectionProfile: "Profilo di espulsione",
+      ejectionProfileNone: "Nessuno",
+      manageProfiles: "Gestisci profili",
       saveChanges: 'Salva modifiche',
     },
     // Skip objects

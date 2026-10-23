@@ -3835,6 +3835,16 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN retry_count INTEGER DEFAULT 0")
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN retry_of_id INTEGER")
 
+    # Migration: server-side bed ejection. The ejection_profiles table itself is
+    # made by create_all; existing printers get the three new columns (auto-eject
+    # off, no profile, count 0). BOOLEAN default dialect-split as above.
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN auto_eject BOOLEAN DEFAULT 0")
+    else:
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN auto_eject BOOLEAN DEFAULT false")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN ejection_profile_id INTEGER")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN consecutive_ejects INTEGER DEFAULT 0")
+
 
 _USER_PRINT_TEMPLATE_RENAMES: tuple[tuple[str, str, str], ...] = (
     ("user_print_start", "User Print Started", "User Print Started Email"),

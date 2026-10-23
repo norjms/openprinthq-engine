@@ -28,6 +28,7 @@ from backend.app.api.routes import (
     camwall,
     cloud,
     discovery,
+    ejection_profiles,
     external_links,
     filaments,
     firmware,
@@ -4246,6 +4247,15 @@ async def on_print_complete(printer_id: int, data: dict):
     _final_status = data.get("status", "completed")
     if _final_status in ("completed", "failed", "aborted", "cancelled"):
         printer_manager.set_awaiting_plate_clear(printer_id, True)
+        # Server-side bed ejection: on printers with auto-eject and a profile, a
+        # completed print is pushed off the bed and the gate cleared only when every
+        # step worked (services/bed_ejection.py). Never raises into this callback.
+        try:
+            from backend.app.services.bed_ejection import maybe_start_after_print
+
+            await maybe_start_after_print(printer_id, _final_status)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[EJECT] printer %s: could not start auto-eject: %s", printer_id, e)
 
     # Klipper / Moonraker printers are live-only (no 3MF archive pipeline).
     # Record a lightweight Print Log entry and stop here — everything below is
@@ -7229,6 +7239,7 @@ app.include_router(obico.router, prefix=app_settings.api_prefix)
 app.include_router(metrics.router, prefix=app_settings.api_prefix)
 app.include_router(virtual_printers.router, prefix=app_settings.api_prefix)
 app.include_router(spoolbuddy.router, prefix=app_settings.api_prefix)
+app.include_router(ejection_profiles.router, prefix=app_settings.api_prefix)
 
 
 # Serve static files (React build)

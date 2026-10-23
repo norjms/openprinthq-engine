@@ -126,6 +126,25 @@ export default {
   },
 
   // Printers page
+  ejection: {
+    title: "Bed-ejection profiles",
+    description: "A profile is the G-code that pushes a finished part off the bed. With auto-eject on, the engine runs it after a successful print, waits for the printer to be idle again and then clears the plate so the next queued job can start. Any problem leaves the plate waiting for a person.",
+    summary: "Eject below {{temp}} C, at most {{cap}} in a row",
+    none: "No profiles yet.",
+    add: "Add profile",
+    saved: "Profile saved",
+    confirmDelete: "Delete the profile {{name}}? Printers using it stop ejecting automatically.",
+    name: "Name",
+    gcode: "Eject G-code",
+    gcodeHelp: "A Klipper macro name or G-code lines. Test it by hand first: a wrong sequence can drive the toolhead into the part.",
+    maxBedTemp: "Wait until the bed is at or below (C)",
+    maxConsecutive: "Ejects in a row before a person checks (0 = no limit)",
+    timeout: "Give up after (seconds)",
+    settle: "Wait after sending before checking idle (seconds)",
+    allowedPlates: "Only with these plates (comma separated)",
+    allowedPlatesHelp: "Empty = any plate. Compared with the printer's installed plate.",
+    verifyWithCamera: "Check with the camera that the bed is empty before clearing the plate",
+  },
   printers: {
     title: 'Printers',
     addPrinter: 'Add Printer',
@@ -495,6 +514,10 @@ export default {
       moonrakerApiKeyPlaceholder: 'Leave empty for open LAN',
       moonrakerApiKeyHelp: 'Only needed if Moonraker requires authentication. Open-LAN setups can leave this blank.',
       klipperProfile: 'Printer profile',
+      autoEject: "Eject automatically after a successful print",
+      ejectionProfile: "Ejection profile",
+      ejectionProfileNone: "None",
+      manageProfiles: "Manage profiles",
       saveChanges: 'Save Changes',
     },
     // Skip objects
