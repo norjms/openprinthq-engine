@@ -2,6 +2,7 @@ from backend.app.models.ams_history import AMSSensorHistory
 from backend.app.models.ams_label import AmsLabel
 from backend.app.models.api_key import APIKey
 from backend.app.models.archive import PrintArchive
+from backend.app.models.audit_log import AuditLogEntry
 from backend.app.models.auth_ephemeral import AuthEphemeralToken, AuthRateLimitEvent
 from backend.app.models.color_catalog import ColorCatalogEntry
 from backend.app.models.ejection_profile import EjectionProfile
@@ -94,6 +95,7 @@ __all__ = [
     "AuthEphemeralToken",
     "AuthRateLimitEvent",
     "LongLivedToken",
+    "AuditLogEntry",
     "EjectionProfile",
     "PrintFailureEvent",
 ]
