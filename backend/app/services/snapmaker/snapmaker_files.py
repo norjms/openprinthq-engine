@@ -6,6 +6,7 @@ Snapmaker's HTTP API accepts a multipart ``POST /api/v1/upload`` (field
 token comes from ``POST /api/v1/connect`` (the user authorizes it once on the
 touchscreen).
 """
+
 from __future__ import annotations
 
 import logging

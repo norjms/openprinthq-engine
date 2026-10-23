@@ -631,9 +631,8 @@ class BambuMQTTClient:
         # single relay hiccup must not oscillate the printer's online state.
         # Routed sessions target the control-plane relay host rather than a LAN IP.
         _relay_host = os.environ.get("OPHQ_RELAY_HOST", "")
-        self._is_routed = (
-            str(ip_address).startswith("openprinthq-")
-            or (bool(_relay_host) and str(ip_address) == _relay_host)
+        self._is_routed = str(ip_address).startswith("openprinthq-") or (
+            bool(_relay_host) and str(ip_address) == _relay_host
         )
         self._consecutive_stale = 0
         self._client: mqtt.Client | None = None

@@ -93,9 +93,7 @@ async def get_webcams(ip_address: str, port: int, *, api_key: str | None = None)
     return (result or {}).get("webcams", []) if isinstance(result, dict) else []
 
 
-async def get_console(
-    ip_address: str, port: int, *, count: int = 100, api_key: str | None = None
-) -> dict:
+async def get_console(ip_address: str, port: int, *, count: int = 100, api_key: str | None = None) -> dict:
     """Return Moonraker's recent g-code console log + the toolhead's homed axes.
 
     Powers the in-app Klipper console (realtime response log) and its
@@ -126,9 +124,7 @@ async def get_console(
         if isinstance(result, dict):
             store = result.get("gcode_store", []) or []
         try:
-            hr = await client.get(
-                f"{base}/printer/objects/query", params={"toolhead": "homed_axes"}, headers=headers
-            )
+            hr = await client.get(f"{base}/printer/objects/query", params={"toolhead": "homed_axes"}, headers=headers)
             hr.raise_for_status()
             hb = hr.json()
             hres = hb.get("result") if isinstance(hb, dict) else None

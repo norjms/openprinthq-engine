@@ -3,6 +3,7 @@
 Added by OpenPrintHQ (2026-07-25), AGPL-3.0. Kept I/O-free so it can be unit
 tested against recorded /status payloads.
 """
+
 from __future__ import annotations
 
 from backend.app.services.bambu_mqtt import PrinterState

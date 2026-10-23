@@ -94,9 +94,11 @@ class ObicoClient:
                     self._emit_state_change()
             if self._stop:
                 break
-            delay = _PING_INTERVAL_SECONDS if self.state.connected else _RECONNECT_BACKOFF_SECONDS[
-                min(attempt, len(_RECONNECT_BACKOFF_SECONDS) - 1)
-            ]
+            delay = (
+                _PING_INTERVAL_SECONDS
+                if self.state.connected
+                else _RECONNECT_BACKOFF_SECONDS[min(attempt, len(_RECONNECT_BACKOFF_SECONDS) - 1)]
+            )
             if not self.state.connected:
                 attempt += 1
             try:
@@ -108,9 +110,7 @@ class ObicoClient:
         if not self.api_key:
             return False
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{self.host}/api/v1/version/", headers={"Authorization": f"Bearer {self.api_key}"}
-            )
+            resp = await client.get(f"{self.host}/api/v1/version/", headers={"Authorization": f"Bearer {self.api_key}"})
             return resp.status_code == 200
 
     def _emit_state_change(self) -> None:
