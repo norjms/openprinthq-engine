@@ -31,7 +31,8 @@ class TestActor:
 
 
 class TestMiddleware:
-    async def test_writes_change_with_route_and_actor(self, async_client, db_session):
+    async def test_writes_change_with_route_and_actor(self, async_client, db_session, monkeypatch):
+        monkeypatch.setattr(audit, "ENABLED", True)
         r = await async_client.put(
             "/api/v1/failure-detection/policy",
             json={"hold_printer": False, "stall_minutes": 0},
