@@ -126,6 +126,25 @@ export default {
   },
 
   // Printers page
+  ejection: {
+    title: "Auswurfprofile",
+    description: "Ein Profil ist der G-Code, der ein fertiges Teil vom Druckbett schiebt. Mit automatischem Auswurf führt die Engine ihn nach einem erfolgreichen Druck aus, wartet, bis der Drucker wieder bereit ist, und gibt dann die Platte frei, damit der nächste Auftrag starten kann. Bei jedem Problem wartet die Platte auf eine Person.",
+    summary: "Auswurf unter {{temp}} C, höchstens {{cap}} hintereinander",
+    none: "Noch keine Profile.",
+    add: "Profil hinzufügen",
+    saved: "Profil gespeichert",
+    confirmDelete: "Profil {{name}} löschen? Drucker, die es verwenden, werfen nicht mehr automatisch aus.",
+    name: "Name",
+    gcode: "Auswurf-G-Code",
+    gcodeHelp: "Ein Klipper-Makroname oder G-Code-Zeilen. Zuerst von Hand testen: eine falsche Sequenz kann den Druckkopf in das Teil fahren.",
+    maxBedTemp: "Warten, bis das Bett höchstens (C) hat",
+    maxConsecutive: "Auswürfe hintereinander, bevor eine Person prüft (0 = unbegrenzt)",
+    timeout: "Abbrechen nach (Sekunden)",
+    settle: "Nach dem Senden warten, bevor auf Bereitschaft geprüft wird (Sekunden)",
+    allowedPlates: "Nur mit diesen Platten (durch Kommas getrennt)",
+    allowedPlatesHelp: "Leer = jede Platte. Wird mit der eingesetzten Platte des Druckers verglichen.",
+    verifyWithCamera: "Vor der Freigabe mit der Kamera prüfen, ob das Bett leer ist",
+  },
   printers: {
     addPreflight: {
       checking: 'Verbindung wird geprüft...',
@@ -492,6 +511,10 @@ export default {
       moonrakerApiKeyPlaceholder: 'Für offenes LAN leer lassen',
       moonrakerApiKeyHelp: 'Nur nötig, wenn Moonraker eine Authentifizierung verlangt. Bei offenem LAN leer lassen.',
       klipperProfile: 'Druckerprofil',
+      autoEject: "Nach einem erfolgreichen Druck automatisch auswerfen",
+      ejectionProfile: "Auswurfprofil",
+      ejectionProfileNone: "Keins",
+      manageProfiles: "Profile verwalten",
       saveChanges: 'Änderungen speichern',
     },
     // Skip objects

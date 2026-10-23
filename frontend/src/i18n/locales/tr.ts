@@ -126,6 +126,25 @@ export default {
   },
 
   // Yazıcılar sayfası
+  ejection: {
+    title: "Tabla boşaltma profilleri",
+    description: "Profil, biten parçayı tabladan iten G-kodudur. Otomatik boşaltma açıkken motor bunu başarılı bir baskıdan sonra çalıştırır, yazıcının tekrar boşta olmasını bekler ve ardından tablayı serbest bırakarak sıradaki işin başlamasını sağlar. Herhangi bir sorunda tabla bir kişiyi bekler.",
+    summary: "{{temp}} C altında boşalt, art arda en çok {{cap}}",
+    none: "Henüz profil yok.",
+    add: "Profil ekle",
+    saved: "Profil kaydedildi",
+    confirmDelete: "{{name}} profili silinsin mi? Bunu kullanan yazıcılar otomatik boşaltmayı bırakır.",
+    name: "Ad",
+    gcode: "Boşaltma G-kodu",
+    gcodeHelp: "Bir Klipper makro adı veya G-kodu satırları. Önce elle deneyin: yanlış bir dizi kafayı parçaya çarptırabilir.",
+    maxBedTemp: "Tabla şu sıcaklığa (C) inene kadar bekle",
+    maxConsecutive: "Bir kişi kontrol etmeden art arda boşaltma (0 = sınırsız)",
+    timeout: "Şu süreden sonra vazgeç (saniye)",
+    settle: "Gönderdikten sonra boşta kontrolünden önce bekle (saniye)",
+    allowedPlates: "Yalnızca bu plakalarla (virgülle ayrılmış)",
+    allowedPlatesHelp: "Boş = her plaka. Yazıcıda takılı plaka ile karşılaştırılır.",
+    verifyWithCamera: "Tablayı serbest bırakmadan önce kamerayla boş olduğunu doğrula",
+  },
   printers: {
     title: 'Yazıcılar',
     addPrinter: 'Yazıcı Ekle',
@@ -492,6 +511,10 @@ export default {
       moonrakerApiKeyPlaceholder: 'Açık LAN için boş bırakın',
       moonrakerApiKeyHelp: 'Yalnızca Moonraker kimlik doğrulama gerektiriyorsa gereklidir. Açık LAN kurulumlarında boş bırakılabilir.',
       klipperProfile: 'Yazıcı profili',
+      autoEject: "Başarılı baskıdan sonra otomatik boşalt",
+      ejectionProfile: "Boşaltma profili",
+      ejectionProfileNone: "Yok",
+      manageProfiles: "Profilleri yönet",
       saveChanges: 'Değişiklikleri Kaydet',
     },
     // Nesneleri atla

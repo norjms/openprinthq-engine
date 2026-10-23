@@ -363,6 +363,9 @@ export interface Printer {
   model: string | null;
   location: string | null;  // Group/location name
   installed_plate?: string | null;  // build plate fitted (farm dispatch)
+  auto_eject?: boolean;  // run the ejection profile after a successful print
+  ejection_profile_id?: number | null;
+  consecutive_ejects?: number;
   nozzle_count: number;  // 1 or 2, auto-detected from MQTT
   is_active: boolean;
   auto_archive: boolean;
@@ -600,6 +603,32 @@ export interface KlipperProfileInfo {
   experimental: boolean;
 }
 
+export interface EjectionProfileInput {
+  name: string;
+  gcode: string;
+  max_bed_temp_c: number | null;
+  timeout_s: number;
+  settle_s: number;
+  max_consecutive: number;
+  allowed_plates: string[] | null;
+  verify_with_camera: boolean;
+}
+
+export interface EjectionProfile extends EjectionProfileInput {
+  id: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface EjectStatus {
+  printer_id: number;
+  auto_eject: boolean;
+  ejection_profile_id: number | null;
+  consecutive_ejects: number;
+  ejecting: boolean;
+  last: { ok: boolean; reason: string; started_at: string; finished_at: string | null } | null;
+}
+
 export interface PrinterCreate {
   name: string;
   connection_type?: 'bambu' | 'klipper' | 'octoprint' | 'prusalink' | 'duet' | 'flashforge' | 'mks' | 'obico';  // defaults to 'bambu' on the backend
@@ -611,6 +640,8 @@ export interface PrinterCreate {
   moonraker_api_key?: string;  // Klipper only, optional
   location?: string;
   installed_plate?: string | null;  // build plate fitted; null = unknown (farm dispatch skips the check)
+  auto_eject?: boolean;
+  ejection_profile_id?: number | null;
   auto_archive?: boolean;
   // Maintenance Mode flag (#1476). Backend already gates MQTT, queue dispatch,
   // scheduler, metrics and the print picker on this; toggling via PATCH
@@ -3847,6 +3878,14 @@ export const api = {
     }),
 
   // Printers
+  getEjectionProfiles: () => request<EjectionProfile[]>('/ejection-profiles'),
+  createEjectionProfile: (data: EjectionProfileInput) =>
+    request<EjectionProfile>('/ejection-profiles', { method: 'POST', body: JSON.stringify(data) }),
+  updateEjectionProfile: (id: number, data: Partial<EjectionProfileInput>) =>
+    request<EjectionProfile>(`/ejection-profiles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteEjectionProfile: (id: number) => request<{ success: boolean }>(`/ejection-profiles/${id}`, { method: 'DELETE' }),
+  getEjectStatus: (printerId: number) => request<EjectStatus>(`/printers/${printerId}/eject`),
+  ejectNow: (printerId: number) => request<EjectStatus>(`/printers/${printerId}/eject`, { method: 'POST' }),
   getPrinters: () => request<Printer[]>('/printers/'),
   getPrinter: (id: number) => request<Printer>(`/printers/${id}`),
   createPrinter: (data: PrinterCreate) =>

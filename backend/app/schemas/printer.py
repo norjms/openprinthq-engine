@@ -125,6 +125,8 @@ class PrinterUpdate(BaseModel):
     chamber_heater: bool | None = None
     show_filament_panel: bool | None = None
     show_bed_ejection: bool | None = None
+    auto_eject: bool | None = None
+    ejection_profile_id: int | None = None
 
 
 class PrinterResponse(PrinterBase):
@@ -144,6 +146,9 @@ class PrinterResponse(PrinterBase):
     chamber_heater: bool = False
     show_filament_panel: bool = True
     show_bed_ejection: bool = False
+    auto_eject: bool = False
+    ejection_profile_id: int | None = None
+    consecutive_ejects: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -177,6 +182,9 @@ class PrinterResponse(PrinterBase):
             "chamber_heater": bool(getattr(printer, "chamber_heater", False)),
             "show_filament_panel": bool(getattr(printer, "show_filament_panel", True)),
             "show_bed_ejection": bool(getattr(printer, "show_bed_ejection", False)),
+            "auto_eject": bool(getattr(printer, "auto_eject", False)),
+            "ejection_profile_id": getattr(printer, "ejection_profile_id", None),
+            "consecutive_ejects": getattr(printer, "consecutive_ejects", 0) or 0,
             "created_at": printer.created_at,
             "updated_at": printer.updated_at,
         }

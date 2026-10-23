@@ -121,6 +121,25 @@ export default {
     left: '왼쪽',
     right: '오른쪽'
   },
+  ejection: {
+    title: "베드 배출 프로필",
+    description: "프로필은 완성된 출력물을 베드 밖으로 밀어내는 G코드입니다. 자동 배출을 켜면 엔진이 출력 성공 후 이를 실행하고, 프린터가 다시 대기 상태가 되면 플레이트를 비워 다음 작업이 시작되게 합니다. 문제가 생기면 플레이트는 사람의 확인을 기다립니다.",
+    summary: "{{temp}} C 이하에서 배출, 연속 최대 {{cap}}회",
+    none: "아직 프로필이 없습니다.",
+    add: "프로필 추가",
+    saved: "프로필 저장됨",
+    confirmDelete: "프로필 {{name}}을(를) 삭제할까요? 이를 사용하는 프린터는 더 이상 자동 배출하지 않습니다.",
+    name: "이름",
+    gcode: "배출 G코드",
+    gcodeHelp: "Klipper 매크로 이름 또는 G코드 줄. 먼저 수동으로 테스트하세요. 잘못된 시퀀스는 툴헤드를 출력물에 부딪히게 할 수 있습니다.",
+    maxBedTemp: "베드가 다음 온도 이하가 될 때까지 대기 (C)",
+    maxConsecutive: "사람이 확인하기 전 연속 배출 횟수 (0 = 제한 없음)",
+    timeout: "다음 시간 후 포기 (초)",
+    settle: "전송 후 대기 상태 확인 전 대기 (초)",
+    allowedPlates: "이 플레이트에서만 (쉼표로 구분)",
+    allowedPlatesHelp: "비어 있으면 모든 플레이트. 프린터에 장착된 플레이트와 비교합니다.",
+    verifyWithCamera: "플레이트를 비우기 전에 카메라로 베드가 비었는지 확인",
+  },
   printers: {
     title: '프린터',
     addPrinter: '프린터 추가',
@@ -460,6 +479,10 @@ export default {
       moonrakerApiKeyPlaceholder: '개방형 LAN이면 비워 두세요',
       moonrakerApiKeyHelp: 'Moonraker가 인증을 요구할 때만 필요합니다. 개방형 LAN에서는 비워 둘 수 있습니다.',
       klipperProfile: '프린터 프로필',
+      autoEject: "출력 성공 후 자동으로 배출",
+      ejectionProfile: "배출 프로필",
+      ejectionProfileNone: "없음",
+      manageProfiles: "프로필 관리",
       saveChanges: '변경사항 저장'
     },
     skipObjects: {
