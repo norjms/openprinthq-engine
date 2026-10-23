@@ -129,3 +129,40 @@ async def purge_loop() -> None:
         except Exception as e:  # noqa: BLE001
             logger.warning("audit log purge failed: %s", e)
         await asyncio.sleep(24 * 3600)
+
+
+class AuditMiddleware:
+    """Records every change made through the API, after the response is sent.
+
+    A plain ASGI middleware rather than ``@app.middleware("http")``: that style
+    runs the app in a separate task, which changes when request-scoped database
+    sessions close relative to background work. Never stores bodies or query
+    strings; ``ENABLED`` is read per request.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not ENABLED or not should_log(scope.get("method", ""), scope.get("path", "")):
+            await self.app(scope, receive, send)
+            return
+        started = time.monotonic()
+        status = {"code": 500}
+
+        async def _send(message):
+            if message["type"] == "http.response.start":
+                status["code"] = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, _send)
+        finally:
+            try:
+                from starlette.requests import Request
+
+                entry = record_request(Request(scope), status["code"], started)
+                if entry:
+                    await write(entry)
+            except Exception as e:  # noqa: BLE001 - the audit log must never break a request
+                logger.warning("audit log: %s", e)
