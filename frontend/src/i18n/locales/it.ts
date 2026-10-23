@@ -422,6 +422,9 @@ export default {
       offline: 'Offline',
     },
     plateStatus: {
+      ejecting: "Espulsione del pezzo",
+      failureHold: "Bloccata: errore rilevato",
+      failureHoldHint: "È stato rilevato un errore di stampa. Controlla la stampante, poi fai clic per confermare e renderla di nuovo disponibile alla coda.",
       markCleared: 'Segna il piatto come liberato',
       cleared: 'Piatto libero',
       notCleared: 'Piatto non libero',

@@ -422,6 +422,9 @@ export default {
       offline: 'Offline',
     },
     plateStatus: {
+      ejecting: "Teil wird ausgeworfen",
+      failureHold: "Angehalten: Fehler erkannt",
+      failureHoldHint: "Ein Druckfehler wurde erkannt. Drucker prüfen und dann klicken, um zu bestätigen und ihn für die Warteschlange freizugeben.",
       markCleared: 'Platte als freigegeben markieren',
       cleared: 'Platte freigegeben',
       notCleared: 'Platte nicht freigegeben',

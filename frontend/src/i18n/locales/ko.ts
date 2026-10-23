@@ -396,6 +396,9 @@ export default {
       offline: '오프라인'
     },
     plateStatus: {
+      ejecting: "출력물 배출 중",
+      failureHold: "보류: 실패 감지",
+      failureHoldHint: "출력 실패가 감지되었습니다. 프린터를 확인한 뒤 클릭해 확인하면 대기열에서 다시 사용할 수 있습니다.",
       markCleared: '플레이트 비움으로 표시',
       cleared: '플레이트 비워짐',
       notCleared: '플레이트 미비움',

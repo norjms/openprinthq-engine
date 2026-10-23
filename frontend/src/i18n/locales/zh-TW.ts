@@ -422,6 +422,9 @@ export default {
       offline: '離線',
     },
     plateStatus: {
+      ejecting: "正在出件",
+      failureHold: "已暫停使用：偵測到失敗",
+      failureHoldHint: "偵測到列印失敗。請檢查印表機，然後點擊確認，讓佇列可以再次使用它。",
       markCleared: '將列印板標記為已清理',
       cleared: '列印板已清理',
       notCleared: '列印板未清理',
