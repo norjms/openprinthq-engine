@@ -88,6 +88,7 @@ from backend.app.core.websocket import ws_manager
 from backend.app.models.smart_plug import SmartPlug
 from backend.app.services.archive import ArchiveService, peek_plate_index_in_3mf, swap_plate_suffix
 from backend.app.services.archive_purge import archive_purge_service
+from backend.app.services.audit import AuditMiddleware
 from backend.app.services.bambu_ftp import (
     FileNotOnPrinterError,
     cache_3mf_download,
@@ -7219,28 +7220,9 @@ async def trace_id_middleware(request, call_next):
 
 
 # API routes
-@app.middleware("http")
-async def audit_log_middleware(request, call_next):
-    """Record every change made through the API (services/audit.py).
-
-    Registered after the auth and trace middlewares, so it runs outermost and
-    also records refused writes (401/403). Never stores bodies or query strings.
-    """
-    import time as _time
-
-    from backend.app.services import audit
-
-    started = _time.monotonic()
-    response = await call_next(request)
-    try:
-        entry = audit.record_request(request, response.status_code, started)
-        if entry:
-            # One small insert, awaited: no task can outlive the request (and the
-            # test client's database). write() swallows its own errors.
-            await audit.write(entry)
-    except Exception as e:  # noqa: BLE001 - the audit log must never break a request
-        logging.getLogger(__name__).warning("audit log: %s", e)
-    return response
+# Registered after the auth and trace middlewares, so it runs outermost and
+# also records refused writes (401/403). Plain ASGI: no extra task per request.
+app.add_middleware(AuditMiddleware)
 
 
 app.include_router(auth.router, prefix=app_settings.api_prefix)
