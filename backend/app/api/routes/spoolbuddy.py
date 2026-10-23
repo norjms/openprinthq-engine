@@ -890,6 +890,19 @@ async def update_spool_weight(
             raise HTTPException(status_code=404, detail="Spool not found")
 
         net_filament = max(0, req.weight_grams - spool.core_weight)
+        # Keep what tracking expected next to what the scale says before the
+        # inventory is overwritten (services/filament_reconciliation.py).
+        from backend.app.services import filament_reconciliation
+
+        filament_reconciliation.record(
+            db,
+            backend="local",
+            spool_id=spool.id,
+            material=spool.material,
+            label_g=float(spool.label_weight or 0) or None,
+            expected_g=max(0.0, float(spool.label_weight or 0) - float(spool.weight_used or 0)),
+            measured_g=float(net_filament),
+        )
         spool.weight_used = max(0, spool.label_weight - net_filament)
         spool.last_scale_weight = req.weight_grams
         spool.last_weighed_at = datetime.now(timezone.utc)
@@ -924,6 +937,20 @@ async def update_spool_weight(
 
     async with _translate_spoolbuddy_errors():
         await sm_client.update_spool(spool_id=req.spool_id, remaining_weight=remaining_weight)
+
+    from backend.app.services import filament_reconciliation
+
+    expected = sm_spool.get("remaining_weight")
+    filament_reconciliation.record(
+        db,
+        backend="spoolman",
+        spool_id=req.spool_id,
+        material=filament.get("material"),
+        label_g=label_weight,
+        expected_g=_safe_float(expected, None) if expected is not None else None,
+        measured_g=remaining_weight,
+    )
+    await db.commit()
 
     weight_used = max(0.0, label_weight - remaining_weight)
     logger.info(
