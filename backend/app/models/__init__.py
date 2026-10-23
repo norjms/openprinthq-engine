@@ -29,6 +29,7 @@ from backend.app.models.printer_group import PrinterGroup, printer_group_members
 from backend.app.models.printer_sensor_history import PrinterSensorHistory
 from backend.app.models.printer_state_interval import PrinterStateInterval
 from backend.app.models.project import Project
+from backend.app.models.push_subscription import PushSubscription
 from backend.app.models.settings import Settings
 from backend.app.models.slicer_pipeline import SlicerPipeline
 from backend.app.models.smart_plug import SmartPlug
@@ -99,6 +100,7 @@ __all__ = [
     "AuthRateLimitEvent",
     "LongLivedToken",
     "UploadSession",
+    "PushSubscription",
     "PrinterStateInterval",
     "FilamentReconciliation",
     "AuditLogEntry",

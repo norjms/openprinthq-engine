@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.notification import NotificationDigestQueue, NotificationLog, NotificationProvider
 from backend.app.models.notification_template import NotificationTemplate
+from backend.app.services import webpush
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +226,8 @@ class NotificationService:
                 return await self._send_webhook(config, title, message)
             elif provider_type == "homeassistant":
                 return await self._send_homeassistant(config, title, message, db=db)
+            elif provider_type == "webpush":
+                return await webpush.send_all(title, message, db=db)
             else:
                 return False, f"Unknown provider type: {provider_type}"
         except Exception as e:
@@ -813,6 +816,8 @@ class NotificationService:
                 )
             elif provider.provider_type == "homeassistant":
                 return await self._send_homeassistant(config, title, message, db=db)
+            elif provider.provider_type == "webpush":
+                return await webpush.send_all(title, message, db=db)
             else:
                 return False, f"Unknown provider type: {provider.provider_type}"
         except Exception as e:

@@ -19,6 +19,7 @@ class ProviderType(StrEnum):
     DISCORD = "discord"
     WEBHOOK = "webhook"
     HOMEASSISTANT = "homeassistant"
+    WEBPUSH = "webpush"
 
 
 class NotificationProviderBase(BaseModel):
