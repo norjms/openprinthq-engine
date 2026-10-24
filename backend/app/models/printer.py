@@ -34,6 +34,12 @@ class Printer(Base):
     # The farm dispatcher only sends a file sliced for another plate type elsewhere
     # when this is set; NULL means "unknown, don't check".
     installed_plate: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    # Out of service: the printer stays connected and visible, but the farm dispatcher
+    # gives it no new work. Jobs pinned to it wait; model and group jobs go to other
+    # printers. Different from is_active, which disconnects the printer altogether.
+    out_of_service: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    out_of_service_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    out_of_service_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     nozzle_count: Mapped[int] = mapped_column(default=1)  # 1 or 2, auto-detected from MQTT
     # Filament Track Switch: "auto" follows MQTT fila_switch, "installed"/"absent" force it.
     track_switch_mode: Mapped[str] = mapped_column(String(20), default="auto", server_default="auto")

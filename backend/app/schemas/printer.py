@@ -109,6 +109,10 @@ class PrinterUpdate(BaseModel):
     location: str | None = None
     installed_plate: str | None = Field(default=None, max_length=60)
     is_active: bool | None = None
+    # Out of service (see models/printer.py). Setting it stamps out_of_service_since;
+    # clearing it clears the reason and the timestamp.
+    out_of_service: bool | None = None
+    out_of_service_reason: str | None = Field(default=None, max_length=200)
     auto_archive: bool | None = None
     print_hours_offset: float | None = None
     moonraker_port: int | None = Field(default=None, ge=1, le=65535)
@@ -149,6 +153,9 @@ class PrinterResponse(PrinterBase):
     auto_eject: bool = False
     ejection_profile_id: int | None = None
     consecutive_ejects: int = 0
+    out_of_service: bool = False
+    out_of_service_reason: str | None = None
+    out_of_service_since: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -185,6 +192,9 @@ class PrinterResponse(PrinterBase):
             "auto_eject": bool(getattr(printer, "auto_eject", False)),
             "ejection_profile_id": getattr(printer, "ejection_profile_id", None),
             "consecutive_ejects": getattr(printer, "consecutive_ejects", 0) or 0,
+            "out_of_service": bool(getattr(printer, "out_of_service", False)),
+            "out_of_service_reason": getattr(printer, "out_of_service_reason", None),
+            "out_of_service_since": getattr(printer, "out_of_service_since", None),
             "created_at": printer.created_at,
             "updated_at": printer.updated_at,
         }
@@ -204,6 +214,18 @@ class PrinterResponse(PrinterBase):
                 h=printer.plate_detection_roi_h or 0.55,
             )
         return cls(**data)
+
+
+class OutOfServiceRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=200)
+
+
+class OutOfServiceEntry(BaseModel):
+    printer_id: int
+    name: str
+    model: str | None = None
+    reason: str | None = None
+    since: datetime | None = None
 
 
 class PrinterResponseWithSecret(PrinterResponse):

@@ -13077,8 +13077,15 @@
       "type": "string"
      },
      "printer_maintenance_id": {
-      "title": "Printer Maintenance Id",
-      "type": "integer"
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Printer Maintenance Id"
      }
     },
     "required": [
@@ -13088,6 +13095,151 @@
      "hours_at_maintenance"
     ],
     "title": "MaintenanceHistoryResponse",
+    "type": "object"
+   },
+   "MaintenanceLogCreate": {
+    "properties": {
+     "category": {
+      "default": "other",
+      "title": "Category",
+      "type": "string"
+     },
+     "notes": {
+      "anyOf": [
+       {
+        "maxLength": 4000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Notes"
+     },
+     "performed_at": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Performed At"
+     },
+     "performed_by": {
+      "anyOf": [
+       {
+        "maxLength": 100,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Performed By"
+     },
+     "title": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+     }
+    },
+    "required": [
+     "title"
+    ],
+    "title": "MaintenanceLogCreate",
+    "type": "object"
+   },
+   "MaintenanceLogEntry": {
+    "description": "One row of a printer's maintenance history, scheduled or free-form.",
+    "properties": {
+     "category": {
+      "title": "Category",
+      "type": "string"
+     },
+     "hours_at_maintenance": {
+      "default": 0.0,
+      "title": "Hours At Maintenance",
+      "type": "number"
+     },
+     "id": {
+      "title": "Id",
+      "type": "integer"
+     },
+     "maintenance_type_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Maintenance Type Name"
+     },
+     "notes": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Notes"
+     },
+     "performed_at": {
+      "format": "date-time",
+      "title": "Performed At",
+      "type": "string"
+     },
+     "performed_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Performed By"
+     },
+     "printer_id": {
+      "title": "Printer Id",
+      "type": "integer"
+     },
+     "printer_maintenance_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Printer Maintenance Id"
+     },
+     "scheduled": {
+      "title": "Scheduled",
+      "type": "boolean"
+     },
+     "title": {
+      "title": "Title",
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "printer_id",
+     "scheduled",
+     "title",
+     "category",
+     "performed_at"
+    ],
+    "title": "MaintenanceLogEntry",
     "type": "object"
    },
    "MaintenanceStatus": {
@@ -15839,6 +15991,76 @@
     "title": "OrcaProfileMeta",
     "type": "object"
    },
+   "OutOfServiceEntry": {
+    "properties": {
+     "model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model"
+     },
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "printer_id": {
+      "title": "Printer Id",
+      "type": "integer"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     },
+     "since": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Since"
+     }
+    },
+    "required": [
+     "printer_id",
+     "name"
+    ],
+    "title": "OutOfServiceEntry",
+    "type": "object"
+   },
+   "OutOfServiceRequest": {
+    "properties": {
+     "reason": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     }
+    },
+    "title": "OutOfServiceRequest",
+    "type": "object"
+   },
    "PendingUploadResponse": {
     "description": "Response model for pending upload.",
     "properties": {
@@ -15972,6 +16194,18 @@
        }
       ],
       "title": "Notes"
+     },
+     "performed_by": {
+      "anyOf": [
+       {
+        "maxLength": 100,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Performed By"
      }
     },
     "title": "PerformMaintenanceRequest",
@@ -17480,6 +17714,13 @@
       ],
       "title": "Printer Id"
      },
+     "priority": {
+      "default": 50,
+      "maximum": 100.0,
+      "minimum": 0.0,
+      "title": "Priority",
+      "type": "integer"
+     },
      "project_id": {
       "anyOf": [
        {
@@ -17984,6 +18225,11 @@
       ],
       "title": "Printer Name"
      },
+     "priority": {
+      "default": 50,
+      "title": "Priority",
+      "type": "integer"
+     },
      "require_previous_success": {
       "title": "Require Previous Success",
       "type": "boolean"
@@ -18369,6 +18615,19 @@
        }
       ],
       "title": "Printer Id"
+     },
+     "priority": {
+      "anyOf": [
+       {
+        "maximum": 100.0,
+        "minimum": 0.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Priority"
      },
      "require_previous_success": {
       "anyOf": [
@@ -19282,6 +19541,34 @@
       "title": "Nozzle Count",
       "type": "integer"
      },
+     "out_of_service": {
+      "default": false,
+      "title": "Out Of Service",
+      "type": "boolean"
+     },
+     "out_of_service_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Out Of Service Reason"
+     },
+     "out_of_service_since": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Out Of Service Since"
+     },
      "plate_detection_enabled": {
       "default": false,
       "title": "Plate Detection Enabled",
@@ -20146,6 +20433,29 @@
        }
       ],
       "title": "Name"
+     },
+     "out_of_service": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Out Of Service"
+     },
+     "out_of_service_reason": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Out Of Service Reason"
      },
      "plate_detection_enabled": {
       "anyOf": [
@@ -46302,6 +46612,52 @@
     ]
    }
   },
+  "/api/v1/maintenance/log/{entry_id}": {
+   "delete": {
+    "description": "Delete a free-form log entry. Rows recorded by marking a schedule done stay.",
+    "operationId": "maintenance_delete_maintenance_log",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "entry_id",
+      "required": true,
+      "schema": {
+       "title": "Entry Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Delete Maintenance Log",
+    "tags": [
+     "maintenance"
+    ]
+   }
+  },
   "/api/v1/maintenance/overview": {
    "get": {
     "description": "Get maintenance overview for all active printers.",
@@ -46498,6 +46854,126 @@
      }
     ],
     "summary": "Set Printer Hours",
+    "tags": [
+     "maintenance"
+    ]
+   }
+  },
+  "/api/v1/maintenance/printers/{printer_id}/log": {
+   "get": {
+    "description": "A printer's whole maintenance history, newest first: schedules marked done and\nfree-form entries together.",
+    "operationId": "maintenance_get_maintenance_log",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "printer_id",
+      "required": true,
+      "schema": {
+       "title": "Printer Id",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "maximum": 500,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/MaintenanceLogEntry"
+         },
+         "title": "Response Get Maintenance Log Api V1 Maintenance Printers  Printer Id  Log Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Get Maintenance Log",
+    "tags": [
+     "maintenance"
+    ]
+   },
+   "post": {
+    "description": "Log maintenance that has no schedule. Schedules are not reset by this; use\n/items/{id}/perform for that.",
+    "operationId": "maintenance_add_maintenance_log",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "printer_id",
+      "required": true,
+      "schema": {
+       "title": "Printer Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/MaintenanceLogCreate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MaintenanceLogEntry"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Add Maintenance Log",
     "tags": [
      "maintenance"
     ]
@@ -50141,6 +50617,47 @@
      }
     ],
     "summary": "List Klipper Profiles",
+    "tags": [
+     "printers"
+    ]
+   }
+  },
+  "/api/v1/printers/out-of-service": {
+   "get": {
+    "description": "Printers that are out of service: connected and visible, but given no new jobs.",
+    "operationId": "printers_list_out_of_service",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/OutOfServiceEntry"
+         },
+         "title": "Response List Out Of Service Api V1 Printers Out Of Service Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "List Out Of Service",
     "tags": [
      "printers"
     ]
@@ -54705,6 +55222,110 @@
      }
     ],
     "summary": "Put Printer Nozzle",
+    "tags": [
+     "printers"
+    ]
+   }
+  },
+  "/api/v1/printers/{printer_id}/out-of-service": {
+   "delete": {
+    "description": "Put a printer back in service; pinned jobs waiting for it can start again.",
+    "operationId": "printers_return_to_service",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "printer_id",
+      "required": true,
+      "schema": {
+       "title": "Printer Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/OutOfServiceEntry"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Return To Service",
+    "tags": [
+     "printers"
+    ]
+   },
+   "put": {
+    "description": "Take a printer out of service. A print already running is not touched; the\ndispatcher just stops giving the printer new jobs.",
+    "operationId": "printers_take_out_of_service",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "printer_id",
+      "required": true,
+      "schema": {
+       "title": "Printer Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/OutOfServiceRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/OutOfServiceEntry"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Take Out Of Service",
     "tags": [
      "printers"
     ]

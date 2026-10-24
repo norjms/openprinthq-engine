@@ -59,6 +59,7 @@ class PrintQueueItemCreate(BaseModel):
     auto_off_after: bool = False  # Power off printer after print completes
     manual_start: bool = False  # Requires manual trigger to start (staged)
     max_retries: int = Field(default=0, ge=0, le=10)  # Requeue automatically after a failed print
+    priority: int = Field(default=50, ge=0, le=100)  # 25 low, 50 normal, 75 high, 100 urgent; higher goes first
     insert_at_top: bool = False  # Insert ahead of other pending items in the same queue scope
     insert_position: int | None = None  # 1-indexed insertion position for priority queueing
     # Persistent "Print Anyway" acknowledgement (#1698-followup). When set,
@@ -114,6 +115,7 @@ class PrintQueueItemUpdate(BaseModel):
     auto_off_after: bool | None = None
     manual_start: bool | None = None
     max_retries: int | None = Field(default=None, ge=0, le=10)
+    priority: int | None = Field(default=None, ge=0, le=100)
     ams_mapping: list[int] | None = None
     plate_id: int | None = None
     # Print options
@@ -177,6 +179,7 @@ class PrintQueueItemResponse(BaseModel):
     error_message: str | None
     created_at: UTCDatetime
     max_retries: int = 0
+    priority: int = 50
     retry_count: int = 0
     retry_of_id: int | None = None
 

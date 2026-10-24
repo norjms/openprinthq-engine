@@ -62,18 +62,34 @@ class PrinterMaintenance(Base):
 
 
 class MaintenanceHistory(Base):
-    """Log of maintenance actions performed."""
+    """Log of maintenance actions performed.
+
+    Two kinds of row share this table, so a printer has one maintenance history:
+    - scheduled: printer_maintenance_id is set (a schedule was marked done);
+    - free-form: printer_maintenance_id is NULL and title/category describe work
+      that has no schedule (a repair, a one-off calibration, a swapped part).
+    printer_id is set on every row written since the free-form log was added, and
+    backfilled from the schedule for older rows.
+    """
 
     __tablename__ = "maintenance_history"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    printer_maintenance_id: Mapped[int] = mapped_column(ForeignKey("printer_maintenance.id", ondelete="CASCADE"))
+    printer_maintenance_id: Mapped[int | None] = mapped_column(
+        ForeignKey("printer_maintenance.id", ondelete="CASCADE"), nullable=True
+    )
+    printer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("printers.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     performed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     hours_at_maintenance: Mapped[float] = mapped_column(Float, default=0.0)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    performed_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Relationships
-    printer_maintenance: Mapped["PrinterMaintenance"] = relationship(back_populates="history")
+    printer_maintenance: Mapped["PrinterMaintenance | None"] = relationship(back_populates="history")
 
 
 # Import at end to avoid circular imports

@@ -363,6 +363,9 @@ export interface Printer {
   model: string | null;
   location: string | null;  // Group/location name
   installed_plate?: string | null;  // build plate fitted (farm dispatch)
+  out_of_service?: boolean;  // connected and monitored, but given no new jobs
+  out_of_service_reason?: string | null;
+  out_of_service_since?: string | null;
   auto_eject?: boolean;  // run the ejection profile after a successful print
   ejection_profile_id?: number | null;
   consecutive_ejects?: number;
@@ -642,6 +645,8 @@ export interface PrinterCreate {
   moonraker_api_key?: string;  // Klipper only, optional
   location?: string;
   installed_plate?: string | null;  // build plate fitted; null = unknown (farm dispatch skips the check)
+  out_of_service?: boolean;  // stop giving the printer new jobs (stays connected, unlike is_active)
+  out_of_service_reason?: string | null;
   auto_eject?: boolean;
   ejection_profile_id?: number | null;
   auto_archive?: boolean;
@@ -2236,6 +2241,7 @@ export interface PrintQueueItem {
   scheduled_time: string | null;
   require_previous_success: boolean;
   max_retries?: number;  // farm queue: requeue after a failed print
+  priority?: number;  // 25 low, 50 normal, 75 high, 100 urgent; higher dispatches first
   retry_count?: number;
   retry_of_id?: number | null;
   auto_off_after: boolean;
@@ -2321,6 +2327,7 @@ export interface PrintQueueItemCreate {
   scheduled_time?: string | null;
   require_previous_success?: boolean;
   max_retries?: number;
+  priority?: number;
   auto_off_after?: boolean;
   manual_start?: boolean;  // Requires manual trigger to start (staged)
   insert_at_top?: boolean;  // Insert ahead of other pending items in the same queue scope
@@ -2371,6 +2378,7 @@ export interface PrintQueueItemUpdate {
   scheduled_time?: string | null;
   require_previous_success?: boolean;
   max_retries?: number;
+  priority?: number;
   auto_off_after?: boolean;
   manual_start?: boolean;
   ams_mapping?: number[];
@@ -2395,6 +2403,7 @@ export interface PrintQueueBulkUpdate {
   scheduled_time?: string | null;
   require_previous_success?: boolean;
   max_retries?: number;
+  priority?: number;
   auto_off_after?: boolean;
   manual_start?: boolean;
   // Print options
@@ -3265,9 +3274,34 @@ export interface PrinterMaintenanceOverview {
   warning_count: number;
 }
 
+export interface MaintenanceLogEntry {
+  id: number;
+  printer_id: number;
+  scheduled: boolean;  // true when a schedule was marked done
+  printer_maintenance_id: number | null;
+  maintenance_type_name: string | null;
+  title: string;
+  category: string;
+  notes: string | null;
+  performed_by: string | null;
+  performed_at: string;
+  hours_at_maintenance: number;
+}
+
+export const MAINTENANCE_LOG_CATEGORIES = [
+  'inspection',
+  'cleaning',
+  'lubrication',
+  'calibration',
+  'consumable',
+  'repair',
+  'upgrade',
+  'other',
+] as const;
+
 export interface MaintenanceHistory {
   id: number;
-  printer_maintenance_id: number;
+  printer_maintenance_id: number | null;
   performed_at: string;
   hours_at_maintenance: number;
   notes: string | null;
@@ -5822,6 +5856,15 @@ export const api = {
     }),
   getMaintenanceHistory: (itemId: number) =>
     request<MaintenanceHistory[]>(`/maintenance/items/${itemId}/history`),
+  getMaintenanceLog: (printerId: number, limit = 20) =>
+    request<MaintenanceLogEntry[]>(`/maintenance/printers/${printerId}/log?limit=${limit}`),
+  addMaintenanceLog: (printerId: number, data: { title: string; category: string; notes?: string | null }) =>
+    request<MaintenanceLogEntry>(`/maintenance/printers/${printerId}/log`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteMaintenanceLog: (entryId: number) =>
+    request<{ status: string }>(`/maintenance/log/${entryId}`, { method: 'DELETE' }),
   getMaintenanceSummary: () => request<MaintenanceSummary>('/maintenance/summary'),
   setPrinterHours: (printerId: number, totalHours: number) =>
     request<{ printer_id: number; total_hours: number; archive_hours: number; offset_hours: number }>(
