@@ -1192,6 +1192,31 @@ async def update_queue_item(
                 f"File was sliced for {sliced_for} and cannot be dispatched to {update_data['target_model']} printers",
             )
 
+    # Swapping the file (#plate-reslice): validate the new library file, check it was
+    # sliced for the printer or model the item now targets, clear the slot mapping that
+    # belonged to the old file, and drop any archive link (an item prints one source).
+    if "library_file_id" in update_data:
+        new_fid = update_data["library_file_id"]
+        if new_fid is None:
+            raise HTTPException(400, "library_file_id cannot be cleared")
+        new_lib = (await db.execute(select(LibraryFile).where(LibraryFile.id == new_fid))).scalar_one_or_none()
+        if not new_lib:
+            raise HTTPException(400, "Library file not found")
+        new_sliced_for = (new_lib.file_metadata or {}).get("sliced_for_model")
+        target_model = new_target_model
+        if new_printer_id:
+            target_model = (
+                await db.execute(select(Printer.model).where(Printer.id == new_printer_id))
+            ).scalar_one_or_none()
+        if target_model and not is_gcode_compatible(new_sliced_for, target_model):
+            raise HTTPException(
+                400, f"File was sliced for {new_sliced_for} and cannot be dispatched to {target_model} printers"
+            )
+        if new_fid != item.library_file_id or item.archive_id:
+            update_data["archive_id"] = None
+            update_data.setdefault("ams_mapping", None)
+            update_data.setdefault("plate_id", None)
+
     # Serialize ams_mapping to JSON for TEXT column storage
     if "ams_mapping" in update_data:
         update_data["ams_mapping"] = json.dumps(update_data["ams_mapping"]) if update_data["ams_mapping"] else None
@@ -1651,7 +1676,7 @@ async def preflight_queue_item(
     offline, busy, plate not cleared, missing filament, hardware (nozzle size,
     hardened nozzle for abrasive filament, build plate) or a file sliced for an
     incompatible model. Uses the same checks as the dispatcher."""
-    from backend.app.services.farm_match import hardware_mismatch, job_hardware
+    from backend.app.services.farm_match import hardware_mismatch, job_hardware, normalize_plate
     from backend.app.services.print_scheduler import scheduler
     from backend.app.services.printer_manager import printer_manager
 
@@ -1716,6 +1741,14 @@ async def preflight_queue_item(
         else:
             status = printer_manager.get_status(p.id)
             reasons += [f"needs {r}" for r in hardware_mismatch(job, status, p.installed_plate)]
+        # Structured plate fields, so a client (Artisan Hub's plate reslicer) can tell a
+        # plate-only hold from the other reasons without parsing the text above.
+        plate_mismatch = bool(
+            job.get("bed_type")
+            and p.installed_plate
+            and normalize_plate(job["bed_type"]) != normalize_plate(p.installed_plate)
+        )
+        if printer_manager.is_connected(p.id):
             if not scheduler._is_printer_idle(p.id, require_plate_clear=False):
                 reasons.append("busy")
             elif printer_manager.is_awaiting_plate_clear(p.id):
@@ -1726,10 +1759,22 @@ async def preflight_queue_item(
                     reasons.append(f"missing filament: {', '.join(missing)}")
         if sliced_for and not is_gcode_compatible(sliced_for, p.model):
             reasons.append(f"file sliced for {sliced_for}")
-        out.append({"printer_id": p.id, "name": p.name, "model": p.model, "eligible": not reasons, "reasons": reasons})
+        out.append(
+            {
+                "printer_id": p.id,
+                "name": p.name,
+                "model": p.model,
+                "eligible": not reasons,
+                "reasons": reasons,
+                "has_plate": p.installed_plate,
+                "plate_mismatch": plate_mismatch,
+            }
+        )
     return {
         "item_id": item.id,
         "status": item.status,
+        "job_plate": job.get("bed_type"),
+        "filament_types": types,
         "target": target,
         "needs": {**job, "filament_types": types, "sliced_for_model": sliced_for},
         "waiting_reason": item.waiting_reason,
