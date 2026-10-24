@@ -1,4 +1,4 @@
-# Farm queue: hardware matching, retries, preflight, stats, bed ejection and failure detection
+# Farm queue: hardware matching, retries, preflight, stats, bed ejection, failure detection, priority, out of service and the maintenance log
 
 These features make the queue behave like a print farm's dispatcher. They apply to queue items aimed at a
 printer model (`target_model`) or a printer group (`target_group_id`); an item pinned to one printer keeps
@@ -124,7 +124,63 @@ someone acknowledges (`POST /api/v1/failure-events/{id}/ack`, or every event on 
 acknowledges. Holds survive a restart. Detection never pauses or stops a print by itself; the printer's own AI
 halt and the Obico action setting keep their own behaviour.
 
+## Priority
+
+Every queue item has a `priority` from 0 to 100, on Watchtower's scale: 25 low, 50 normal (the default), 75 high,
+100 urgent. Within one queue scope (a printer, or the unassigned jobs for a model or group) the dispatcher takes
+higher priority first and keeps queue-position order between equal priorities, so a queue where everything is 50
+behaves exactly as before. With shortest-job-first on, priority comes first and the SJF order applies within a
+priority. Set it in the print dialog's schedule options, at `POST /api/v1/queue/` or with
+`PATCH /api/v1/queue/{id}` `{"priority": 75}`. Automatic retries keep the priority of the failed attempt.
+
+The queue list (`GET /api/v1/queue/`) is still ordered by position, as the drag-to-reorder UI expects; the
+dispatch order is priority, then position.
+
+## Out of service
+
+A printer can be taken **out of service**: it stays connected and monitored (status, camera, temperatures,
+history), but the queue gives it no new jobs. That is the difference from Maintenance Mode (`is_active` false),
+which disconnects the printer altogether.
+
+- Jobs pinned to the printer wait (skip reason `printer_out_of_service`); preflight lists
+  `out of service: <reason>` for it.
+- Model and group jobs go to other printers; when none is left the waiting reason reads
+  `Out of service: <names>`, which is not "busy only", so the waiting notification fires.
+- Auto-drying skips it. A print already running is not touched.
+
+API: `PUT /api/v1/printers/{id}/out-of-service` with `{"reason": "..."}` (up to 200 characters),
+`DELETE /api/v1/printers/{id}/out-of-service` to put it back, `GET /api/v1/printers/out-of-service` for the list
+(`printer_id`, `name`, `model`, `reason`, `since`). `PATCH /api/v1/printers/{id}` also takes `out_of_service`
+and `out_of_service_reason`. `out_of_service_since` is set when the printer goes out and kept while it stays out,
+so changing the reason does not reset it. In the UI: the printer's edit dialog, and a pill on the printer card.
+
+## Maintenance log
+
+`maintenance_history` holds both kinds of maintenance record, so each printer has one history:
+
+- **scheduled**: written when a maintenance item is marked done (`POST /api/v1/maintenance/items/{id}/perform`,
+  which now also takes `performed_by`);
+- **free-form**: work with no schedule, `POST /api/v1/maintenance/printers/{id}/log` with
+  `{"title", "category", "notes", "performed_by", "performed_at"}`. Categories: inspection, cleaning,
+  lubrication, calibration, consumable, repair, upgrade, other. Logging does not reset any schedule.
+
+`GET /api/v1/maintenance/printers/{id}/log?limit=100` returns both, newest first, each with `scheduled`,
+`title` (the maintenance type's name for scheduled rows), `category` (`scheduled` for scheduled rows),
+`performed_by`, `performed_at` and the print hours at the time. `DELETE /api/v1/maintenance/log/{id}` deletes a
+free-form entry; scheduled records answer 409. `performed_by` defaults to the signed-in user. The Maintenance
+page shows the log under each printer when it is expanded.
+
+Schema: `printer_maintenance_id` became nullable and the table gained `printer_id`, `title`, `category` and
+`performed_by`. PostgreSQL drops NOT NULL in place. SQLite cannot, so the startup migration rebuilds the table
+once, only while the old `NOT NULL` definition is still there, and checks the row count before dropping the old
+table. Existing rows get `printer_id` from their schedule.
+
 ## Permissions and API keys
 
 Preflight and stats are reads (`queue:read_*`); mark needs `queue:update_*`. Through OpenPrintHQ's scoped
 integration keys, preflight and stats work with a `read` key and mark needs a `control` key.
+
+Out of service needs `printers:update` (the list is `printers:read`). The maintenance log reads with
+`maintenance:read`, writes with `maintenance:update` and deletes with `maintenance:delete`. Through integration
+keys: listing works with a `read` key; taking a printer out of service, logging and setting priority need a
+`control` key.

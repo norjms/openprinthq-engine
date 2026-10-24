@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import zipfile
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -33,6 +34,8 @@ from backend.app.schemas.printer import (
     HMSErrorResponse,
     NozzleInfoResponse,
     NozzleRackSlot,
+    OutOfServiceEntry,
+    OutOfServiceRequest,
     PrinterCreate,
     PrinterDiagnosticResult,
     PrinterResponse,
@@ -522,6 +525,74 @@ async def printer_catalog_commands(
         return {"catalog_id": catalog_id, "commands": [], "error": str(e)}
 
 
+def set_out_of_service(printer: Printer, flag: bool, reason: str | None = None) -> None:
+    """Take a printer out of service, or put it back. The timestamp marks when it
+    went out and is kept while it stays out, so a new reason does not reset it."""
+    if flag:
+        if not printer.out_of_service or printer.out_of_service_since is None:
+            printer.out_of_service_since = datetime.now(timezone.utc)
+        printer.out_of_service = True
+        printer.out_of_service_reason = (reason or "").strip()[:200] or None
+    else:
+        printer.out_of_service = False
+        printer.out_of_service_reason = None
+        printer.out_of_service_since = None
+
+
+def _out_of_service_entry(printer: Printer) -> OutOfServiceEntry:
+    return OutOfServiceEntry(
+        printer_id=printer.id,
+        name=printer.name,
+        model=printer.model,
+        reason=printer.out_of_service_reason,
+        since=printer.out_of_service_since,
+    )
+
+
+@router.get("/out-of-service", response_model=list[OutOfServiceEntry])
+async def list_out_of_service(
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+    db: AsyncSession = Depends(get_db),
+):
+    """Printers that are out of service: connected and visible, but given no new jobs."""
+    rows = await db.execute(select(Printer).where(Printer.out_of_service.is_(True)).order_by(Printer.name))
+    return [_out_of_service_entry(p) for p in rows.scalars().all()]
+
+
+@router.put("/{printer_id}/out-of-service", response_model=OutOfServiceEntry)
+async def take_out_of_service(
+    printer_id: int,
+    body: OutOfServiceRequest,
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_UPDATE),
+    db: AsyncSession = Depends(get_db),
+):
+    """Take a printer out of service. A print already running is not touched; the
+    dispatcher just stops giving the printer new jobs."""
+    printer = (await db.execute(select(Printer).where(Printer.id == printer_id))).scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+    set_out_of_service(printer, True, body.reason)
+    await db.commit()
+    await db.refresh(printer)
+    return _out_of_service_entry(printer)
+
+
+@router.delete("/{printer_id}/out-of-service", response_model=OutOfServiceEntry)
+async def return_to_service(
+    printer_id: int,
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_UPDATE),
+    db: AsyncSession = Depends(get_db),
+):
+    """Put a printer back in service; pinned jobs waiting for it can start again."""
+    printer = (await db.execute(select(Printer).where(Printer.id == printer_id))).scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+    set_out_of_service(printer, False)
+    await db.commit()
+    await db.refresh(printer)
+    return _out_of_service_entry(printer)
+
+
 @router.get("/{printer_id}")
 async def get_printer(
     printer_id: int,
@@ -556,6 +627,15 @@ async def update_printer(
         raise HTTPException(404, "Printer not found")
 
     update_data = printer_data.model_dump(exclude_unset=True)
+
+    # Out of service goes through the helper so the timestamp and reason stay consistent.
+    oos_reason = update_data.pop("out_of_service_reason", None)
+    if "out_of_service" in update_data:
+        flag = update_data.pop("out_of_service")
+        if flag is not None:
+            set_out_of_service(printer, bool(flag), oos_reason)
+    elif oos_reason is not None and printer.out_of_service:
+        set_out_of_service(printer, True, oos_reason)
 
     # Handle nested ROI object - flatten to individual columns
     if "plate_detection_roi" in update_data:
@@ -653,6 +733,8 @@ async def delete_printer(
             sql_delete(MaintenanceHistory).where(MaintenanceHistory.printer_maintenance_id.in_(maintenance_ids))
         )
         await db.execute(sql_delete(PrinterMaintenance).where(PrinterMaintenance.printer_id == printer_id))
+    # Free-form maintenance log entries hang off the printer directly.
+    await db.execute(sql_delete(MaintenanceHistory).where(MaintenanceHistory.printer_id == printer_id))
 
     await db.delete(printer)
     await db.commit()
