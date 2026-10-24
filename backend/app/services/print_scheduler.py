@@ -361,6 +361,8 @@ class PrintScheduler:
                         PrintQueueItem.printer_id,
                         PrintQueueItem.target_model,
                         PrintQueueItem.target_group_id,
+                        # Higher priority first; within a priority, the usual SJF order.
+                        PrintQueueItem.priority.desc(),
                         PrintQueueItem.been_jumped.desc(),
                         PrintQueueItem.print_time_seconds.asc().nullslast(),
                         PrintQueueItem.position,
@@ -376,7 +378,9 @@ class PrintScheduler:
                         selectinload(PrintQueueItem.archive),
                         selectinload(PrintQueueItem.library_file),
                     )
-                    .order_by(PrintQueueItem.printer_id, PrintQueueItem.position)
+                    # Higher priority first within each printer / unassigned scope,
+                    # then queue position. Equal priority everywhere = the old order.
+                    .order_by(PrintQueueItem.printer_id, PrintQueueItem.priority.desc(), PrintQueueItem.position)
                 )
             items = list(result.scalars().all())
 
@@ -450,6 +454,12 @@ class PrintScheduler:
                 if inflight_pid is not None:
                     busy_printers.add(inflight_pid)
 
+            # Printers taken out of service get no new work. A pinned job waits for its
+            # printer to come back; model and group jobs skip it in _select_idle_printer.
+            out_of_service: set[int] = {
+                pid for (pid,) in (await db.execute(select(Printer.id).where(Printer.out_of_service.is_(True)))).all()
+            }
+
             # Log skip reasons once per queue check (not per item)
             skip_reasons: dict[str, int] = {}
 
@@ -511,6 +521,12 @@ class PrintScheduler:
                 if item.printer_id:
                     # Specific printer assignment (existing behavior)
                     if item.printer_id in busy_printers:
+                        continue
+
+                    if item.printer_id in out_of_service:
+                        skip_reasons["printer_out_of_service"] = skip_reasons.get("printer_out_of_service", 0) + 1
+                        # Keep later items for this printer behind this one, as for busy.
+                        busy_printers.add(item.printer_id)
                         continue
 
                     # Check if printer is idle
@@ -1121,11 +1137,15 @@ class PrintScheduler:
         # Track reasons for skipping printers
         printers_busy = []
         printers_offline = []
+        printers_out_of_service = []
         printers_missing_filament: list[tuple[str, list[str]]] = []
         printers_hardware: list[tuple[str, list[str]]] = []
         candidates: list[tuple[int, int]] = []  # (printer_id, color_match_count)
 
         for printer in printers:
+            if getattr(printer, "out_of_service", False):
+                printers_out_of_service.append(printer.name)
+                continue
             if printer.id in exclude_ids:
                 # Printer is already claimed by another job in this scheduling run.
                 # For force-color jobs, still check if the color would match — if not,
@@ -1258,6 +1278,8 @@ class PrintScheduler:
             reasons.append(f"Busy: {', '.join(printers_busy)}")
         if printers_offline:
             reasons.append(f"Offline: {', '.join(printers_offline)}")
+        if printers_out_of_service:
+            reasons.append(f"Out of service: {', '.join(printers_out_of_service)}")
 
         return None, " | ".join(reasons) if reasons else f"No available {target_desc}"
 
@@ -2348,7 +2370,9 @@ class PrintScheduler:
         block_for_drying = await self._get_bool_setting(db, "queue_drying_block")
 
         # Get all active printers
-        all_printers = await db.execute(select(Printer).where(Printer.is_active.is_(True)))
+        all_printers = await db.execute(
+            select(Printer).where(Printer.is_active.is_(True)).where(Printer.out_of_service.is_not(True))
+        )
         for printer in all_printers.scalars():
             pid = printer.id
 

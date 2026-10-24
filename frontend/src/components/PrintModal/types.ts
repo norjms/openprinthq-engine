@@ -88,6 +88,7 @@ export interface ScheduleOptions {
   requireManualStart: boolean;
   requirePreviousSuccess: boolean;
   maxRetries: number;
+  priority: number;  // 25 low, 50 normal, 75 high, 100 urgent
   autoOffAfter: boolean;
   gcodeInjection: boolean;
   staggerEnabled: boolean;
@@ -104,6 +105,7 @@ export const DEFAULT_SCHEDULE_OPTIONS: ScheduleOptions = {
   requireManualStart: false,
   requirePreviousSuccess: false,
   maxRetries: 0,
+  priority: 50,
   autoOffAfter: false,
   gcodeInjection: false,
   staggerEnabled: false,

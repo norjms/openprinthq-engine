@@ -201,6 +201,7 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
         "auto_off_after": item.auto_off_after,
         "manual_start": item.manual_start,
         "max_retries": item.max_retries or 0,
+        "priority": item.priority if item.priority is not None else 50,
         "retry_count": item.retry_count or 0,
         "retry_of_id": item.retry_of_id,
         "filament_short": bool(item.filament_short),
@@ -683,6 +684,7 @@ async def add_to_queue(
             auto_off_after=data.auto_off_after,
             manual_start=data.manual_start,
             max_retries=data.max_retries,
+            priority=data.priority,
             skip_filament_check=data.skip_filament_check,
             ams_mapping=ams_mapping_json,
             plate_id=data.plate_id,
@@ -1706,6 +1708,9 @@ async def preflight_queue_item(
     out = []
     for p in printers:
         reasons: list[str] = []
+        if getattr(p, "out_of_service", False):
+            why = getattr(p, "out_of_service_reason", None)
+            reasons.append(f"out of service: {why}" if why else "out of service")
         if not printer_manager.is_connected(p.id):
             reasons.append("offline")
         else:

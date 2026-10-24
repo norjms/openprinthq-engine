@@ -3,8 +3,8 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -16,6 +16,8 @@ from backend.app.models.printer import Printer
 from backend.app.models.user import User
 from backend.app.schemas.maintenance import (
     MaintenanceHistoryResponse,
+    MaintenanceLogCreate,
+    MaintenanceLogEntry,
     MaintenanceStatus,
     MaintenanceTypeCreate,
     MaintenanceTypeResponse,
@@ -580,7 +582,7 @@ async def perform_maintenance(
     item_id: int,
     data: PerformMaintenanceRequest,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_UPDATE),
+    user: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_UPDATE),
 ):
     """Mark maintenance as performed (reset the counter)."""
     result = await db.execute(
@@ -602,8 +604,10 @@ async def perform_maintenance(
     # Create history entry
     history = MaintenanceHistory(
         printer_maintenance_id=item.id,
+        printer_id=item.printer_id,
         hours_at_maintenance=current_hours,
         notes=data.notes,
+        performed_by=_actor(data.performed_by, user),
     )
     db.add(history)
 
@@ -667,6 +671,97 @@ async def get_maintenance_history(
         .order_by(MaintenanceHistory.performed_at.desc())
     )
     return result.scalars().all()
+
+
+def _actor(given: str | None, user: User | None) -> str | None:
+    given = (given or "").strip()
+    if given:
+        return given[:100]
+    return getattr(user, "username", None)
+
+
+def _log_entry(row: MaintenanceHistory, type_name: str | None, printer_id: int) -> MaintenanceLogEntry:
+    scheduled = row.printer_maintenance_id is not None
+    return MaintenanceLogEntry(
+        id=row.id,
+        printer_id=row.printer_id or printer_id,
+        scheduled=scheduled,
+        printer_maintenance_id=row.printer_maintenance_id,
+        maintenance_type_name=type_name,
+        title=row.title or type_name or "Maintenance",
+        category=row.category or ("scheduled" if scheduled else "other"),
+        notes=row.notes,
+        performed_by=row.performed_by,
+        performed_at=row.performed_at,
+        hours_at_maintenance=row.hours_at_maintenance or 0.0,
+    )
+
+
+@router.get("/printers/{printer_id}/log", response_model=list[MaintenanceLogEntry])
+async def get_maintenance_log(
+    printer_id: int,
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_READ),
+):
+    """A printer's whole maintenance history, newest first: schedules marked done and
+    free-form entries together."""
+    if not (await db.execute(select(Printer.id).where(Printer.id == printer_id))).scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Printer not found")
+    rows = await db.execute(
+        select(MaintenanceHistory, MaintenanceType.name)
+        .outerjoin(PrinterMaintenance, MaintenanceHistory.printer_maintenance_id == PrinterMaintenance.id)
+        .outerjoin(MaintenanceType, PrinterMaintenance.maintenance_type_id == MaintenanceType.id)
+        .where(or_(MaintenanceHistory.printer_id == printer_id, PrinterMaintenance.printer_id == printer_id))
+        .order_by(MaintenanceHistory.performed_at.desc(), MaintenanceHistory.id.desc())
+        .limit(limit)
+    )
+    return [_log_entry(row, name, printer_id) for row, name in rows.all()]
+
+
+@router.post("/printers/{printer_id}/log", response_model=MaintenanceLogEntry)
+async def add_maintenance_log(
+    printer_id: int,
+    data: MaintenanceLogCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_UPDATE),
+):
+    """Log maintenance that has no schedule. Schedules are not reset by this; use
+    /items/{id}/perform for that."""
+    if not (await db.execute(select(Printer.id).where(Printer.id == printer_id))).scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Printer not found")
+    row = MaintenanceHistory(
+        printer_id=printer_id,
+        printer_maintenance_id=None,
+        hours_at_maintenance=await get_printer_total_hours(db, printer_id),
+        title=data.title,
+        category=data.category,
+        notes=data.notes,
+        performed_by=_actor(data.performed_by, user),
+    )
+    if data.performed_at is not None:
+        row.performed_at = data.performed_at
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return _log_entry(row, None, printer_id)
+
+
+@router.delete("/log/{entry_id}")
+async def delete_maintenance_log(
+    entry_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_DELETE),
+):
+    """Delete a free-form log entry. Rows recorded by marking a schedule done stay."""
+    row = (await db.execute(select(MaintenanceHistory).where(MaintenanceHistory.id == entry_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Log entry not found")
+    if row.printer_maintenance_id is not None:
+        raise HTTPException(status_code=409, detail="Scheduled maintenance records cannot be deleted here")
+    await db.delete(row)
+    await db.commit()
+    return {"status": "deleted"}
 
 
 @router.get("/summary")
