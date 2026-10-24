@@ -41,6 +41,7 @@ import {
   Power,
   Zap,
   Wrench,
+  Ban,
   ChevronDown,
   Filter,
   Pencil,
@@ -3654,6 +3655,20 @@ function PrinterCard({
                 </div>
               </CardContent>
             </Card>
+          </div>
+        )}
+
+        {/* Out of service: monitoring continues, so the normal status below still renders */}
+        {printer.is_active !== false && printer.out_of_service && (
+          <div
+            className="mt-2 flex items-center gap-2 px-2 py-1.5 rounded-full bg-amber-50 dark:bg-amber-500/15 border border-amber-300 dark:border-amber-500/30"
+            title={printer.out_of_service_reason || undefined}
+          >
+            <Ban className="w-3 h-3 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span className="text-[11px] text-amber-700 dark:text-amber-400 font-medium truncate">
+              {t('printers.modal.outOfServicePill')}
+              {printer.out_of_service_reason ? ` - ${printer.out_of_service_reason}` : ''}
+            </span>
           </div>
         )}
 
@@ -7590,6 +7605,8 @@ function EditPrinterModal({
     installed_plate: printer.installed_plate || '',
     auto_archive: printer.auto_archive,
     is_active: printer.is_active,
+    out_of_service: !!printer.out_of_service,
+    out_of_service_reason: printer.out_of_service_reason || '',
     auto_eject: !!printer.auto_eject,
     ejection_profile_id: printer.ejection_profile_id ?? null,
   });
@@ -7629,6 +7646,8 @@ function EditPrinterModal({
       installed_plate: form.installed_plate || null,
       auto_archive: form.auto_archive,
       is_active: form.is_active,
+      out_of_service: form.out_of_service,
+      out_of_service_reason: form.out_of_service ? form.out_of_service_reason.trim() || null : null,
       auto_eject: form.auto_eject && form.ejection_profile_id != null,
       ejection_profile_id: form.ejection_profile_id,
     };
@@ -7852,6 +7871,39 @@ function EditPrinterModal({
               <p className="text-xs text-bambu-gray/70 mt-1 ml-6">
                 {t('printers.maintenance.editFieldHelp')}
               </p>
+            </div>
+            {/* Out of service: stays connected and monitored, the queue just gives it no new jobs */}
+            <div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="edit_out_of_service"
+                  checked={form.out_of_service}
+                  onChange={(e) => setForm({ ...form, out_of_service: e.target.checked })}
+                  className="rounded border-bambu-dark-tertiary bg-bambu-dark text-amber-400 focus:ring-amber-400"
+                />
+                <label htmlFor="edit_out_of_service" className="text-sm text-bambu-gray flex items-center gap-1.5">
+                  <Ban className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                  {t('printers.modal.outOfService')}
+                </label>
+              </div>
+              <p className="text-xs text-bambu-gray/70 mt-1 ml-6">{t('printers.modal.outOfServiceHelp')}</p>
+              {form.out_of_service && (
+                <div className="mt-2 ml-6">
+                  <label htmlFor="edit_out_of_service_reason" className="block text-xs text-bambu-gray mb-1">
+                    {t('printers.modal.outOfServiceReason')}
+                  </label>
+                  <input
+                    type="text"
+                    id="edit_out_of_service_reason"
+                    maxLength={200}
+                    value={form.out_of_service_reason}
+                    onChange={(e) => setForm({ ...form, out_of_service_reason: e.target.value })}
+                    placeholder={t('printers.modal.outOfServiceReasonPlaceholder')}
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-sm text-white focus:border-bambu-green focus:outline-none"
+                  />
+                </div>
+              )}
             </div>
             {saveWarning ? (
               <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 p-3 space-y-3">

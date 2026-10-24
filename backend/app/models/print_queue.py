@@ -94,6 +94,12 @@ class PrintQueueItem(Base):
     retry_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     retry_of_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Priority, 0-100 on Watchtower's scale (25 low, 50 normal, 75 high, 100 urgent).
+    # Higher dispatches first within the same printer or target (model / group);
+    # equal priority keeps queue-position order, so 50 everywhere behaves exactly
+    # as before. Copied onto automatic retries.
+    priority: Mapped[int] = mapped_column(Integer, default=50, server_default="50")
+
     # H2C dual-nozzle-rack slicer pick preservation (#1780). BambuStudio's
     # project_file MQTT command for rack-swap-capable models (O1C2 today)
     # carries per-filament physical nozzle position IDs in `nozzle_mapping`,

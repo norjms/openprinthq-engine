@@ -43,6 +43,7 @@ import { Card, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
 import { Toggle } from '../components/Toggle';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { MaintenanceLog } from '../components/MaintenanceLog';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -448,6 +449,7 @@ function PrinterSection({
               />
             ))}
           </div>
+          <MaintenanceLog printerId={overview.printer_id} hasPermission={hasPermission} />
         </CardContent>
       )}
     </Card>

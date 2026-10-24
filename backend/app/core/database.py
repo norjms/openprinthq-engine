@@ -3882,6 +3882,93 @@ async def run_migrations(conn):
     # still on that default take "{app_name} Test"; edited titles are kept.
     await _migrate_test_template_title(conn)
 
+    # Migration: Watchtower parity. Printers can be taken out of service (no new
+    # jobs, still connected); queue items get a 0-100 priority (existing rows take
+    # 50, normal, which keeps the old order); maintenance_history also holds free-form entries with no schedule.
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN out_of_service BOOLEAN DEFAULT 0")
+    else:
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN out_of_service BOOLEAN DEFAULT false")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN out_of_service_reason VARCHAR(200)")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN out_of_service_since TIMESTAMP")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN priority INTEGER DEFAULT 50")
+    await _migrate_maintenance_history_log(conn)
+
+
+async def _migrate_maintenance_history_log(conn) -> None:
+    """Let maintenance_history hold free-form entries (no schedule).
+
+    Adds printer_id, title, category and performed_by; makes printer_maintenance_id
+    nullable; backfills printer_id from the schedule for existing rows.
+    PostgreSQL drops NOT NULL in place. SQLite cannot, so the table is rebuilt once,
+    only when the old NOT NULL definition is still there, and the copy is checked by
+    row count before the old table goes.
+    """
+    from sqlalchemy import text
+
+    for ddl in (
+        "ALTER TABLE maintenance_history ADD COLUMN printer_id INTEGER REFERENCES printers(id) ON DELETE CASCADE",
+        "ALTER TABLE maintenance_history ADD COLUMN title VARCHAR(200)",
+        "ALTER TABLE maintenance_history ADD COLUMN category VARCHAR(30)",
+        "ALTER TABLE maintenance_history ADD COLUMN performed_by VARCHAR(100)",
+    ):
+        await _safe_execute(conn, ddl)
+
+    if not is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE maintenance_history ALTER COLUMN printer_maintenance_id DROP NOT NULL")
+    else:
+        row = (
+            await conn.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='maintenance_history'"))
+        ).fetchone()
+        sql = (row[0] if row else "") or ""
+        if "printer_maintenance_id INTEGER NOT NULL" in sql:
+            try:
+                async with conn.begin_nested():
+                    await conn.execute(text("DROP TABLE IF EXISTS maintenance_history_v2"))
+                    await conn.execute(
+                        text(
+                            "CREATE TABLE maintenance_history_v2 ("
+                            "id INTEGER NOT NULL PRIMARY KEY, "
+                            "printer_maintenance_id INTEGER REFERENCES printer_maintenance(id) ON DELETE CASCADE, "
+                            "printer_id INTEGER REFERENCES printers(id) ON DELETE CASCADE, "
+                            "performed_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, "
+                            "hours_at_maintenance FLOAT NOT NULL, "
+                            "notes TEXT, "
+                            "title VARCHAR(200), "
+                            "category VARCHAR(30), "
+                            "performed_by VARCHAR(100)"
+                            ")"
+                        )
+                    )
+                    cols = "id, printer_maintenance_id, printer_id, performed_at, hours_at_maintenance, notes, title, category, performed_by"
+                    await conn.execute(
+                        text(f"INSERT INTO maintenance_history_v2 ({cols}) SELECT {cols} FROM maintenance_history")
+                    )
+                    original = (await conn.execute(text("SELECT count(*) FROM maintenance_history"))).scalar_one()
+                    copied = (await conn.execute(text("SELECT count(*) FROM maintenance_history_v2"))).scalar_one()
+                    if copied != original:
+                        raise RuntimeError(
+                            f"maintenance_history migration: row count mismatch after copy ({original} vs {copied})"
+                        )
+                    await conn.execute(text("DROP TABLE maintenance_history"))
+                    await conn.execute(text("ALTER TABLE maintenance_history_v2 RENAME TO maintenance_history"))
+            except Exception as exc:
+                logger.error("maintenance_history rebuild (SQLite) FAILED: %s", exc, exc_info=True)
+                raise
+
+    await _safe_execute(
+        conn, "CREATE INDEX IF NOT EXISTS ix_maintenance_history_printer_id ON maintenance_history (printer_id)"
+    )
+    async with conn.begin_nested():
+        await conn.execute(
+            text(
+                "UPDATE maintenance_history SET printer_id = ("
+                "SELECT pm.printer_id FROM printer_maintenance pm "
+                "WHERE pm.id = maintenance_history.printer_maintenance_id) "
+                "WHERE printer_id IS NULL AND printer_maintenance_id IS NOT NULL"
+            )
+        )
+
 
 async def _migrate_test_template_title(conn) -> None:
     from sqlalchemy import text

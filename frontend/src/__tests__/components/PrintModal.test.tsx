@@ -62,7 +62,7 @@ const createMockQueueItem = (overrides: Partial<PrintQueueItem> = {}): PrintQueu
 
 // The model picker is the only combobox apart from the "retry if the print fails" select.
 const modelSelect = () =>
-  screen.getAllByRole('combobox').find((el) => el.id !== 'maxRetries') as HTMLElement;
+  screen.getAllByRole('combobox').find((el) => el.id !== 'maxRetries' && el.id !== 'queuePriority') as HTMLElement;
 
 describe('PrintModal', () => {
   const mockOnClose = vi.fn();
