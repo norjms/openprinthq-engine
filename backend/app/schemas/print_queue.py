@@ -107,6 +107,9 @@ class PrintQueueItemUpdate(BaseModel):
     printer_id: int | None = None
     target_model: str | None = None  # Target printer model (mutually exclusive with printer_id)
     target_location: str | None = None  # Target location filter (only used with target_model)
+    # Swap the file a pending item prints (Artisan Hub's plate reslicer: the same job,
+    # resliced for the plate on the printer it is pinned to). Pending items only.
+    library_file_id: int | None = None
     target_group_id: int | None = None  # Target printer group (mutually exclusive with the two above)
     filament_overrides: list[dict] | None = None  # Filament overrides for model-based assignment
     position: int | None = None
