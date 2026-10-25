@@ -54,7 +54,12 @@ _PLATE_ALIASES = {
 
 
 def installed_nozzles(status) -> list[tuple[float | None, str]]:
-    """(diameter, material) per nozzle the printer reported; empty when unknown."""
+    """(diameter, material) per nozzle the printer can print with; empty when unknown.
+
+    The mounted nozzles, plus a tool switcher's rack (the H2C swaps the right extruder's hotend from a rack of up
+    to six): a job that needs a 0.6 prints when a 0.6 is mounted or sitting in the rack, because the printer swaps it
+    in itself. Rack entries count only when a nozzle is really there (a diameter and a serial number).
+    """
     out: list[tuple[float | None, str]] = []
     for nozzle in getattr(status, "nozzles", None) or []:
         raw = getattr(nozzle, "nozzle_diameter", "") or ""
@@ -65,6 +70,32 @@ def installed_nozzles(status) -> list[tuple[float | None, str]]:
         material = (getattr(nozzle, "nozzle_type", "") or "").strip().lower()
         if (dia and dia > 0) or material:
             out.append((dia if dia and dia > 0 else None, material))
+    out += rack_nozzles(status)
+    return out
+
+
+def rack_nozzles(status) -> list[tuple[float | None, str]]:
+    """(diameter, material) for each nozzle in a tool switcher's rack (Bambu nozzle_rack ids 16 and up)."""
+    from backend.app.services.printer_hardware import decode_bambu_nozzle_type
+
+    out: list[tuple[float | None, str]] = []
+    for slot in getattr(status, "nozzle_rack", None) or []:
+        get = slot.get if isinstance(slot, dict) else (lambda k, d=None, _s=slot: getattr(_s, k, d))
+        try:
+            if int(get("id", -1)) < 16:
+                continue  # 0 and 1 describe the mounted hotends, already counted above
+        except (TypeError, ValueError):
+            continue
+        serial = str(get("serial_number", "") or "").strip()
+        try:
+            dia = float(get("nozzle_diameter", 0) or 0)
+        except (TypeError, ValueError):
+            dia = 0.0
+        if dia <= 0 or not serial or serial.upper() == "N/A":
+            continue
+        decoded = decode_bambu_nozzle_type(get("nozzle_type"))
+        material = (decoded[0] if decoded else "").strip().lower()
+        out.append((dia, material))
     return out
 
 
