@@ -42,7 +42,15 @@ def normalize_plate(name: str | None) -> str:
     if not name:
         return ""
     key = re.sub(r"[^a-z0-9]", "", name.lower())
-    return key[:-5] if key.endswith("plate") else key
+    key = key[:-5] if key.endswith("plate") else key
+    return _PLATE_ALIASES.get(key, key)
+
+
+# Same plate, different slicer spellings. Bambu Studio writes "Cool Plate (SuperTack)",
+# OrcaSlicer "Supertack Plate"; both are Bambu's SuperTack cool plate.
+_PLATE_ALIASES = {
+    "coolplatesupertack": "supertack",
+}
 
 
 def installed_nozzles(status) -> list[tuple[float | None, str]]:

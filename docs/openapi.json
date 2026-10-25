@@ -18500,6 +18500,17 @@
       ],
       "title": "Layer Inspect"
      },
+     "library_file_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Library File Id"
+     },
      "manual_start": {
       "anyOf": [
        {
