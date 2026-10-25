@@ -175,6 +175,23 @@ Schema: `printer_maintenance_id` became nullable and the table gained `printer_i
 once, only while the old `NOT NULL` definition is still there, and checks the row count before dropping the old
 table. Existing rows get `printer_id` from their schedule.
 
+## Hooks for plate-aware clients
+
+The engine holds a job whose sliced plate differs from a printer's `installed_plate`, and says why. A client
+that can reslice (Artisan Hub) uses two hooks to turn that hold into a print, and keeps every decision on its
+side:
+
+- `GET /api/v1/queue/{id}/preflight` returns `job_plate` (the plate the file was sliced for) and
+  `filament_types`, and each printer row carries `has_plate` and `plate_mismatch`. A printer whose only reason
+  is the plate is a candidate for a reslice; the text reasons are unchanged.
+- `PATCH /api/v1/queue/{id}` takes `library_file_id` on a pending item, usually with `printer_id` (and
+  `target_model: null`) to pin it to the printer the file was resliced for. The item keeps its id, position,
+  priority and retries. The new file must be sliced for that printer's model; its AMS mapping, plate id and
+  any archive link are cleared because they belonged to the old file.
+
+Plate names are compared after normalising, and Bambu Studio's "Cool Plate (SuperTack)" and OrcaSlicer's
+"Supertack Plate" count as the same plate.
+
 ## Permissions and API keys
 
 Preflight and stats are reads (`queue:read_*`); mark needs `queue:update_*`. Through OpenPrintHQ's scoped
