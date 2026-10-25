@@ -123,3 +123,27 @@ def test_supertack_spellings_are_one_plate():
     assert normalize_plate("Cool Plate (SuperTack)") == normalize_plate("Supertack Plate") == "supertack"
     assert normalize_plate("Textured PEI Plate") == normalize_plate("textured_pei_plate") == "texturedpei"
     assert normalize_plate("Cool Plate") != normalize_plate("Supertack Plate")
+
+
+def test_rack_nozzles_count_for_a_tool_switcher():
+    from types import SimpleNamespace
+
+    from backend.app.services.farm_match import hardware_mismatch, installed_nozzles
+
+    mounted = [
+        SimpleNamespace(nozzle_diameter="0.4", nozzle_type="hardened_steel"),
+        SimpleNamespace(nozzle_diameter="0.4", nozzle_type="hardened_steel"),
+    ]
+    rack = [
+        {"id": 0, "nozzle_type": "HS01", "nozzle_diameter": "0.4", "serial_number": "A"},  # mounted, skipped
+        {"id": 16, "nozzle_type": "HS01", "nozzle_diameter": "0.6", "serial_number": "R16"},
+        {"id": 17, "nozzle_type": "HS01", "nozzle_diameter": "0.4", "serial_number": "N/A"},  # empty slot
+        {"id": 18, "nozzle_type": "HS01", "nozzle_diameter": "0", "serial_number": "R18"},
+    ]  # nothing there
+    status = SimpleNamespace(nozzles=mounted, nozzle_rack=rack)
+    nz = installed_nozzles(status)
+    assert len(nz) == 3 and (0.6, nz[2][1]) == nz[2] and nz[2][1]
+    assert hardware_mismatch({"nozzle_diameter": 0.6}, status, None) == []  # the rack has a 0.6
+    assert hardware_mismatch({"nozzle_diameter": 0.8}, status, None)  # nobody has a 0.8
+    no_rack = SimpleNamespace(nozzles=mounted)
+    assert hardware_mismatch({"nozzle_diameter": 0.6}, no_rack, None)  # a plain printer: held as before
