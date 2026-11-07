@@ -366,6 +366,10 @@ export interface Printer {
   out_of_service?: boolean;  // connected and monitored, but given no new jobs
   out_of_service_reason?: string | null;
   out_of_service_since?: string | null;
+  // What the printer's connection can do (pause_resume_stop, print, home,
+  // temperature, gcode). Missing keys mean supported. PrusaLink has no home,
+  // temperature or gcode.
+  controls?: Partial<Record<'pause_resume_stop' | 'print' | 'home' | 'temperature' | 'gcode', boolean>>;
   auto_eject?: boolean;  // run the ejection profile after a successful print
   ejection_profile_id?: number | null;
   consecutive_ejects?: number;

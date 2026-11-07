@@ -166,15 +166,22 @@ class OctoPrintClient:
                 self._on_print_running_observed(dict(data))
         elif prev in _ACTIVE_STATES and mapped in ("IDLE", "FAILED"):
             done = dict(data)
-            if mapped == "FAILED":
-                done["status"] = "failed"
-            else:
-                # No explicit success flag — infer from last progress.
-                done["status"] = "completed" if (self.state.progress or 0) >= _COMPLETE_THRESHOLD else "cancelled"
+            done["status"] = self._finish_status(mapped)
             done["last_progress"] = self.state.progress
             done["print_duration"] = self.state.raw_data.get("print_duration")
             if self._on_print_complete:
                 self._on_print_complete(done)
+
+    def _finish_status(self, mapped: str) -> str:
+        """How a print that just left RUNNING/PAUSE ended: completed, cancelled or failed.
+
+        OctoPrint has no explicit success flag, so a print that returns to
+        Operational counts as completed when it got to the end. PrusaLink
+        overrides this with the printer's own FINISHED / STOPPED states.
+        """
+        if mapped == "FAILED":
+            return "failed"
+        return "completed" if (self.state.progress or 0) >= _COMPLETE_THRESHOLD else "cancelled"
 
     def _signal_bed(self) -> None:
         bed = self.state.temperatures.get("bed")
@@ -261,6 +268,41 @@ class PrusaLinkClient(OctoPrintClient):
 
     flavor = "prusalink"
 
+    #: Controls PrusaLink does not offer. Buddy firmware (MK4, MK4S, MK3.9, MINI,
+    #: XL) answers 404 to OctoPrint's /api/printer/printhead, /tool, /bed and
+    #: /command, and its v1 API has no equivalent, so homing, temperatures and
+    #: raw G-code cannot be sent over the network. The API routes check this set
+    #: and answer 400 unsupported_for_printer_type instead of reporting success.
+    UNSUPPORTED_METHODS = frozenset({"send_gcode", "set_nozzle_temp", "set_bed_temp", "home"})
+
+    #: The printer's own state text from the last poll (IDLE, PRINTING, FINISHED, ...).
+    _link_state: str | None = None
+
+    def _unsupported(self, what: str) -> bool:
+        logger.warning("[%s] PrusaLink cannot %s over the network", self.serial_number, what)
+        return False
+
+    def send_gcode(self, gcode: str) -> bool:
+        return self._unsupported("run G-code")
+
+    def set_nozzle_temp(self, temp: float) -> bool:
+        return self._unsupported("set the nozzle temperature")
+
+    def set_bed_temp(self, temp: float) -> bool:
+        return self._unsupported("set the bed temperature")
+
+    def home(self, axes: list[str] | None = None) -> bool:
+        return self._unsupported("home")
+
+    def _finish_status(self, mapped: str) -> str:
+        # PrusaLink says how a print ended: FINISHED after the last line,
+        # STOPPED when it was cancelled (on the printer or over the network).
+        if self._link_state == "FINISHED":
+            return "completed"
+        if self._link_state == "STOPPED":
+            return "cancelled"
+        return super()._finish_status(mapped)
+
     # -- native PrusaLink v1 job control ----------------------------------------
     # The OctoPrint-compatible /api/job is a legacy shim on Buddy firmware; v1
     # addresses the running job by id: PUT /api/v1/job/{id}/pause|resume and
@@ -312,11 +354,15 @@ class PrusaLinkClient(OctoPrintClient):
         pr = s.get("printer") or {}
         job = s.get("job") or {}
         state_text = str(pr.get("state") or "").upper()
+        self._link_state = state_text
         flags = {
             "operational": state_text in ("IDLE", "READY", "FINISHED", "STOPPED"),
             "printing": state_text == "PRINTING",
-            "paused": state_text == "PAUSED",
-            "error": state_text in ("ERROR", "ATTENTION"),
+            # ATTENTION is the printer waiting for someone (filament runout, MMU,
+            # a crash detected): the job is still there and resumes from the
+            # printer, so it is a pause, not a failure.
+            "paused": state_text in ("PAUSED", "ATTENTION"),
+            "error": state_text == "ERROR",
             "ready": state_text in ("IDLE", "READY"),
         }
         printer_json = {

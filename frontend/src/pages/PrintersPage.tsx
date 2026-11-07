@@ -1828,6 +1828,10 @@ function PrinterCard({
   // (status, pause/resume/stop, light, home). AMS / drying / k-profiles /
   // print-speed / airduct / calibration are Bambu-only and hidden below.
   const isKlipper = printer.connection_type === 'klipper';
+  // MQTT debug and the speed levels are Bambu-only; every other transport
+  // (Klipper, OctoPrint, PrusaLink, Duet, ...) hides them.
+  const isBambu = (printer.connection_type || 'bambu') === 'bambu';
+  const canHome = printer.controls?.home !== false;
   // Voron/Klipper profile for this printer (cached, shared across cards) — drives
   // the levelling action's label (QGL vs Z-Tilt) and whether it's shown at all.
   const { data: klipperProfiles } = useQuery({
@@ -3250,7 +3254,24 @@ function PrinterCard({
               <div className="my-1 border-t border-bambu-dark-tertiary" />
             </>
           )}
-          {!isKlipper && (
+          {!isBambu && !isKlipper && canHome && hasPermission('printers:control') && (
+            <>
+              <div className="my-1 border-t border-bambu-dark-tertiary" />
+              <button
+                className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2 disabled:opacity-50"
+                disabled={!status?.connected || klipperHomeMutation.isPending}
+                onClick={() => {
+                  klipperHomeMutation.mutate();
+                  setShowMenu(false);
+                }}
+              >
+                <Home className="w-4 h-4" />
+                {t('printers.klipperActions.homeAll')}
+              </button>
+              <div className="my-1 border-t border-bambu-dark-tertiary" />
+            </>
+          )}
+          {isBambu && (
           <button
             className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2"
             onClick={() => {
@@ -4501,7 +4522,7 @@ function PrinterCard({
                       </div>
 
                       {/* Print Speed (Bambu only — Klipper has no fixed speed levels) */}
-                      {!isKlipper && (() => (
+                      {isBambu && (() => (
                         <div className="relative">
                           <button
                             data-testid="speed-control"

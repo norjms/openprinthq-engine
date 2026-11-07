@@ -73,6 +73,21 @@ class PrinterCapabilities:
     can_print: bool  # upload + start a job
     # Klipper-only geometry/profile context (None otherwise).
     klipper_profile: KlipperProfile | None = None
+    # Finer control families. PrusaLink offers pause/resume/stop and printing
+    # but no homing, temperatures or raw G-code over the network.
+    can_home: bool = True
+    can_set_temps: bool = True
+    can_send_gcode: bool = True
+
+    def controls(self) -> dict[str, bool]:
+        """What a client may offer for this printer (the API's ``controls``)."""
+        return {
+            "pause_resume_stop": self.can_control,
+            "print": self.can_print,
+            "home": self.can_control and self.can_home,
+            "temperature": self.can_control and self.can_set_temps,
+            "gcode": self.can_control and self.can_send_gcode,
+        }
 
     @property
     def is_bambu(self) -> bool:
@@ -120,7 +135,9 @@ def capabilities_for(printer) -> PrinterCapabilities:
     ):
         # OctoPrint / PrusaLink / Duet / FlashForge / MKS: live control +
         # upload, no Bambu feature families. Chamber is config/plugin-dependent
-        # and not modelled yet.
+        # and not modelled yet. PrusaLink has no homing, temperature or G-code
+        # endpoints (see PrusaLinkClient.UNSUPPORTED_METHODS).
+        prusalink = conn == CONNECTION_PRUSALINK
         return PrinterCapabilities(
             connection_type=conn,
             has_ams=False,
@@ -132,6 +149,9 @@ def capabilities_for(printer) -> PrinterCapabilities:
             can_control=True,
             can_print=True,
             klipper_profile=None,
+            can_home=not prusalink,
+            can_set_temps=not prusalink,
+            can_send_gcode=not prusalink,
         )
 
     if conn in OBICO_TYPES:

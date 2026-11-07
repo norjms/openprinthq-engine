@@ -133,6 +133,15 @@ class PrinterUpdate(BaseModel):
     ejection_profile_id: int | None = None
 
 
+def _controls_of(printer) -> dict[str, bool]:
+    from backend.app.services.printer_capabilities import capabilities_for
+
+    try:
+        return capabilities_for(printer).controls()
+    except Exception:  # noqa: BLE001 - never fail a printer listing over this
+        return {}
+
+
 class PrinterResponse(PrinterBase):
     id: int
     is_active: bool
@@ -156,6 +165,9 @@ class PrinterResponse(PrinterBase):
     out_of_service: bool = False
     out_of_service_reason: str | None = None
     out_of_service_since: datetime | None = None
+    # What this printer's connection can do: pause_resume_stop, print, home,
+    # temperature, gcode. Empty when unknown (treat as supported).
+    controls: dict[str, bool] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 
@@ -195,6 +207,7 @@ class PrinterResponse(PrinterBase):
             "out_of_service": bool(getattr(printer, "out_of_service", False)),
             "out_of_service_reason": getattr(printer, "out_of_service_reason", None),
             "out_of_service_since": getattr(printer, "out_of_service_since", None),
+            "controls": _controls_of(printer),
             "created_at": printer.created_at,
             "updated_at": printer.updated_at,
         }
