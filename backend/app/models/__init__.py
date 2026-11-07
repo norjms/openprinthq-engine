@@ -25,6 +25,7 @@ from backend.app.models.pending_upload import PendingUpload
 from backend.app.models.pipeline_run import PipelineJob, PipelineRun
 from backend.app.models.print_batch import PrintBatch
 from backend.app.models.printer import Printer
+from backend.app.models.printer_alarm import PrinterAlarm
 from backend.app.models.printer_group import PrinterGroup, printer_group_members
 from backend.app.models.printer_hardware import PrinterFilamentPath, PrinterNozzle
 from backend.app.models.printer_sensor_history import PrinterSensorHistory
@@ -109,4 +110,5 @@ __all__ = [
     "AuditLogEntry",
     "EjectionProfile",
     "PrintFailureEvent",
+    "PrinterAlarm",
 ]

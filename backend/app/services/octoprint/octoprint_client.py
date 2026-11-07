@@ -355,6 +355,8 @@ class PrusaLinkClient(OctoPrintClient):
         job = s.get("job") or {}
         state_text = str(pr.get("state") or "").upper()
         self._link_state = state_text
+        # The alarm feed reads this (ATTENTION, ERROR).
+        self.state.raw_data["printer_state_text"] = state_text
         flags = {
             "operational": state_text in ("IDLE", "READY", "FINISHED", "STOPPED"),
             "printing": state_text == "PRINTING",
