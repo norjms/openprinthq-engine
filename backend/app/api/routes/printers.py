@@ -81,7 +81,7 @@ def _ensure_client_supports(client, method: str, feature: str) -> None:
     AttributeError if something calls them anyway. The Moonraker client simply
     doesn't implement these Bambu-specific methods.
     """
-    if not hasattr(client, method):
+    if not hasattr(client, method) or method in getattr(client, "UNSUPPORTED_METHODS", frozenset()):
         raise HTTPException(
             status_code=400,
             detail={
@@ -89,6 +89,27 @@ def _ensure_client_supports(client, method: str, feature: str) -> None:
                 "message": f"{feature} is not supported for this printer type.",
             },
         )
+
+
+def _set_heater(client, heater: str, target: int, nozzle: int = 0) -> bool:
+    """Set a nozzle or bed target on any transport.
+
+    Bambu (and Moonraker, which aliases them) implement ``set_nozzle_temperature``
+    / ``set_bed_temperature``; the other external clients (OctoPrint, Duet,
+    FlashForge, MKS, Snapmaker) implement ``set_nozzle_temp`` / ``set_bed_temp``
+    for a single extruder. A transport with neither, or one that lists them as
+    unsupported (PrusaLink), gets a 400 instead of a 500 or a silent no-op.
+    """
+    bambu_style = "set_nozzle_temperature" if heater == "nozzle" else "set_bed_temperature"
+    generic = "set_nozzle_temp" if heater == "nozzle" else "set_bed_temp"
+    unsupported = getattr(client, "UNSUPPORTED_METHODS", frozenset())
+    if hasattr(client, bambu_style) and bambu_style not in unsupported:
+        fn = getattr(client, bambu_style)
+        return fn(target, nozzle) if heater == "nozzle" else fn(target)
+    _ensure_client_supports(client, generic, "Set temperature")
+    if heater == "nozzle" and nozzle != 0:
+        raise HTTPException(400, "This printer type has a single nozzle (index 0)")
+    return getattr(client, generic)(target)
 
 
 # Seconds the /hms/execute-action route waits for a printer status push
@@ -3459,7 +3480,7 @@ async def set_nozzle_temperature(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
-    success = client.set_nozzle_temperature(target, nozzle)
+    success = _set_heater(client, "nozzle", target, nozzle)
     if not success:
         raise HTTPException(500, "Failed to set nozzle temperature")
 
@@ -3483,7 +3504,7 @@ async def set_bed_temperature(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
-    success = client.set_bed_temperature(target)
+    success = _set_heater(client, "bed", target)
     if not success:
         raise HTTPException(500, "Failed to set bed temperature")
 
@@ -3886,6 +3907,7 @@ async def bed_jog(
     # move at the travel limit.
     lines = ["G91", f"G1 Z{gcode_distance:.2f} F600", "G90"]
 
+    _ensure_client_supports(client, "send_gcode", "Jogging")
     if not client.send_gcode("\n".join(lines)):
         raise HTTPException(500, "Failed to send bed-jog command")
 
@@ -3922,6 +3944,7 @@ async def xy_jog(
     # Bare relative move — never touch M211 (#2579). The firmware keeps its soft
     # endstops on by default and clamps the move at the travel limit; a printer
     # left disabled by an older build is recovered with a power cycle.
+    _ensure_client_supports(client, "send_gcode", "Jogging")
     if not client.send_gcode("\n".join(["G91", f"G1 {' '.join(axes)} F6000", "G90"])):
         raise HTTPException(500, "Failed to send XY jog command")
 
@@ -3955,6 +3978,7 @@ async def extruder_jog(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "send_gcode", "Extruder jog")
     if not client.send_gcode("\n".join(["M83", f"G1 E{distance:.2f} F300", "M82"])):
         raise HTTPException(500, "Failed to send extruder jog command")
 
@@ -3999,6 +4023,7 @@ async def home_axes(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "send_gcode", "Homing")
     if not client.send_gcode("G28"):
         raise HTTPException(500, "Failed to send home command")
 
