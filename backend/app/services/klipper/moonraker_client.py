@@ -329,6 +329,8 @@ class MoonrakerClient:
                 self._apply_and_signal(params[0])
         elif method in ("notify_klippy_disconnected", "notify_klippy_shutdown"):
             self.state.state = "unknown"
+            # The alarm feed reports it until Klipper sends status again.
+            self.state.raw_data["klippy_alarm"] = "shutdown" if method.endswith("shutdown") else "disconnected"
             self._emit_state_change()
         elif "result" in msg and isinstance(msg["result"], dict):
             result = msg["result"]
@@ -342,6 +344,7 @@ class MoonrakerClient:
                 self._emit_state_change()
 
     def _apply_and_signal(self, objects: dict) -> None:
+        self.state.raw_data.pop("klippy_alarm", None)
         raw_state = apply_status_objects(self.state, objects, self._chamber_object)
         self._detect_transitions(raw_state)
         self._signal_layer_and_bed()
