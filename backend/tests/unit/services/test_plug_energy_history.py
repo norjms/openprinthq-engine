@@ -8,7 +8,7 @@ arithmetic that replaces it, and the two ways it can legitimately have no answer
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 
@@ -83,7 +83,11 @@ async def test_nothing_derivable_before_the_first_midnight(db_session):
     plug = await _plug(db_session)
     now = datetime.now(timezone.utc)
     # Snapshot taken this morning, after midnight — no baseline for the day.
-    await _snapshot(db_session, plug.id, now - timedelta(minutes=30), 102.0)
+    # Halfway between local midnight and now, not a fixed 30 minutes back: in
+    # the first half hour after Berlin midnight (23:00-23:30 UTC) "30 minutes
+    # ago" is still yesterday and becomes the baseline, which failed this test.
+    midnight = local_day_start(now)
+    await _snapshot(db_session, plug.id, midnight + (now - midnight) / 2, 102.0)
 
     today, yesterday = await derive_today_yesterday(db_session, plug.id, live_total_kwh=103.5)
 

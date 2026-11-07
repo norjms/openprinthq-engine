@@ -166,10 +166,17 @@ class PrinterResponse(PrinterBase):
     out_of_service_reason: str | None = None
     out_of_service_since: datetime | None = None
     # What this printer's connection can do: pause_resume_stop, print, home,
-    # temperature, gcode. Empty when unknown (treat as supported).
+    # temperature, gcode. Filled from the connection type whichever way the
+    # response is built (model_validate or from_orm_with_roi).
     controls: dict[str, bool] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def _fill_controls(self) -> "PrinterResponse":
+        if not self.controls:
+            self.controls = _controls_of(self)
+        return self
 
     class Config:
         from_attributes = True
