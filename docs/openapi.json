@@ -19417,6 +19417,13 @@
       "title": "Consecutive Ejects",
       "type": "integer"
      },
+     "controls": {
+      "additionalProperties": {
+       "type": "boolean"
+      },
+      "title": "Controls",
+      "type": "object"
+     },
      "created_at": {
       "format": "date-time",
       "title": "Created At",
