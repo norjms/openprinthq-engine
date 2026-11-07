@@ -143,3 +143,19 @@ def test_controls_per_connection_type(conn, home, temperature, gcode):
     controls = capabilities_for(SimpleNamespace(connection_type=conn, model=None)).controls()
     assert (controls["home"], controls["temperature"], controls["gcode"]) == (home, temperature, gcode)
     assert controls["pause_resume_stop"] is (conn != "obico")
+
+
+async def test_printer_api_returns_controls(async_client, printer_factory):
+    """Both the list and the detail route carry controls (they build the response with model_validate)."""
+    bambu = await printer_factory(name="Bambu")
+    prusa = await printer_factory(
+        name="MK4S", connection_type="prusalink", serial_number="prusalink:test", access_code="", model=None
+    )
+    r = await async_client.get("/api/v1/printers/")
+    assert r.status_code == 200, r.text
+    by = {p["name"]: p["controls"] for p in r.json()}
+    assert by["Bambu"]["home"] is True and by["Bambu"]["temperature"] is True
+    assert by["MK4S"] == {"pause_resume_stop": True, "print": True, "home": False, "temperature": False, "gcode": False}
+    one = (await async_client.get(f"/api/v1/printers/{prusa.id}")).json()
+    assert one["controls"]["home"] is False
+    assert (await async_client.get(f"/api/v1/printers/{bambu.id}")).json()["controls"]["gcode"] is True
