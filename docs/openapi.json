@@ -1115,6 +1115,158 @@
     "title": "AdminDisable2FARequest",
     "type": "object"
    },
+   "AlarmOut": {
+    "properties": {
+     "acknowledged_at": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Acknowledged At"
+     },
+     "acknowledged_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Acknowledged By"
+     },
+     "active": {
+      "title": "Active",
+      "type": "boolean"
+     },
+     "cleared_at": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cleared At"
+     },
+     "code": {
+      "title": "Code",
+      "type": "string"
+     },
+     "first_seen": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "First Seen"
+     },
+     "id": {
+      "title": "Id",
+      "type": "integer"
+     },
+     "last_seen": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Seen"
+     },
+     "message": {
+      "title": "Message",
+      "type": "string"
+     },
+     "printer_id": {
+      "title": "Printer Id",
+      "type": "integer"
+     },
+     "printer_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Printer Name"
+     },
+     "severity": {
+      "title": "Severity",
+      "type": "string"
+     },
+     "source": {
+      "title": "Source",
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "printer_id",
+     "source",
+     "code",
+     "severity",
+     "message",
+     "first_seen",
+     "last_seen",
+     "cleared_at",
+     "active",
+     "acknowledged_at",
+     "acknowledged_by"
+    ],
+    "title": "AlarmOut",
+    "type": "object"
+   },
+   "AlarmSummary": {
+    "properties": {
+     "active": {
+      "title": "Active",
+      "type": "integer"
+     },
+     "by_severity": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "title": "By Severity",
+      "type": "object"
+     },
+     "printers": {
+      "items": {
+       "type": "integer"
+      },
+      "title": "Printers",
+      "type": "array"
+     },
+     "unacknowledged": {
+      "title": "Unacknowledged",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "active",
+     "unacknowledged",
+     "by_severity",
+     "printers"
+    ],
+    "title": "AlarmSummary",
+    "type": "object"
+   },
    "AmsLabelBody": {
     "properties": {
      "ams_serial": {
@@ -29453,6 +29605,286 @@
  },
  "openapi": "3.1.0",
  "paths": {
+  "/api/v1/alarms": {
+   "get": {
+    "description": "The farm's alarms. Active ones come worst first, then newest; cleared and all come newest first.",
+    "operationId": "alarms_list_alarms",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "state",
+      "required": false,
+      "schema": {
+       "default": "active",
+       "enum": [
+        "active",
+        "cleared",
+        "all"
+       ],
+       "title": "State",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "printer_id",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Printer Id"
+      }
+     },
+     {
+      "description": "Repeat to allow several",
+      "in": "query",
+      "name": "severity",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "items": {
+          "enum": [
+           "fatal",
+           "serious",
+           "warning"
+          ],
+          "type": "string"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Repeat to allow several",
+       "title": "Severity"
+      }
+     },
+     {
+      "in": "query",
+      "name": "unacknowledged",
+      "required": false,
+      "schema": {
+       "default": false,
+       "title": "Unacknowledged",
+       "type": "boolean"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 200,
+       "maximum": 1000,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "offset",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "minimum": 0,
+       "title": "Offset",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/AlarmOut"
+         },
+         "title": "Response List Alarms Api V1 Alarms Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "List Alarms",
+    "tags": [
+     "alarms"
+    ]
+   }
+  },
+  "/api/v1/alarms/summary": {
+   "get": {
+    "description": "Counts for a badge: active alarms, unacknowledged ones, by severity, and which printers have any.",
+    "operationId": "alarms_alarm_summary",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AlarmSummary"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Alarm Summary",
+    "tags": [
+     "alarms"
+    ]
+   }
+  },
+  "/api/v1/alarms/{alarm_id}": {
+   "get": {
+    "operationId": "alarms_get_alarm",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "alarm_id",
+      "required": true,
+      "schema": {
+       "title": "Alarm Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AlarmOut"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Get Alarm",
+    "tags": [
+     "alarms"
+    ]
+   }
+  },
+  "/api/v1/alarms/{alarm_id}/ack": {
+   "post": {
+    "description": "Acknowledge one alarm. It stays in the feed until the printer stops reporting it.",
+    "operationId": "alarms_ack_alarm",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "alarm_id",
+      "required": true,
+      "schema": {
+       "title": "Alarm Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "anyOf": [
+         {
+          "$ref": "#/components/schemas/AckBody"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "title": "Body"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Ack Alarm",
+    "tags": [
+     "alarms"
+    ]
+   }
+  },
   "/api/v1/ams-history/{printer_id}": {
    "delete": {
     "description": "Delete old AMS history data for a printer.",
@@ -50990,6 +51422,69 @@
     "summary": "Set Airduct Mode",
     "tags": [
      "printers"
+    ]
+   }
+  },
+  "/api/v1/printers/{printer_id}/alarms/ack": {
+   "post": {
+    "description": "Acknowledge every unacknowledged alarm on a printer.",
+    "operationId": "alarms_ack_printer_alarms",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "printer_id",
+      "required": true,
+      "schema": {
+       "title": "Printer Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "anyOf": [
+         {
+          "$ref": "#/components/schemas/AckBody"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "title": "Body"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Ack Printer Alarms",
+    "tags": [
+     "alarms"
     ]
    }
   },

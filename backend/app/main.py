@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import delete, or_, select, text
 
 from backend.app.api.routes import (
+    alarms,
     ams_history,
     api_keys,
     archive_purge,
@@ -1141,6 +1142,13 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
         await farm_analytics.observe(printer_id, state, printer_manager.is_awaiting_plate_clear(printer_id))
     except Exception as e:  # noqa: BLE001
         logging.getLogger(__name__).debug("farm analytics: %s", e)
+    # Unified alarm feed: diff what the printer reports against the open alarms.
+    try:
+        from backend.app.services import alarm_feed
+
+        await alarm_feed.observe(printer_id, state)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger(__name__).debug("alarm feed: %s", e)
     # Persist decoded nozzle hardware (source='mqtt') when it changes. The
     # service keeps an in-memory snapshot, so this is a dict compare on the
     # hot path and only touches the database on an actual change.
@@ -7315,6 +7323,7 @@ app.include_router(spoolbuddy.router, prefix=app_settings.api_prefix)
 app.include_router(inventory_reconciliation.router, prefix=app_settings.api_prefix)
 app.include_router(ejection_profiles.router, prefix=app_settings.api_prefix)
 app.include_router(failure_events.router, prefix=app_settings.api_prefix)
+app.include_router(alarms.router, prefix=app_settings.api_prefix)
 app.include_router(farm_stats.router, prefix=app_settings.api_prefix)
 app.include_router(library_uploads.router, prefix=app_settings.api_prefix)
 app.include_router(push.router, prefix=app_settings.api_prefix)
