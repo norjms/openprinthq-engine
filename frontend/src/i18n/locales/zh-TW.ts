@@ -1,6 +1,27 @@
 export default {
   // Navigation
+  alarms: {
+    title: '警報',
+    subtitle: '每台印表機目前回報的問題。印表機不再回報時警報會自動清除；確認會將其標記為已查看。',
+    includeCleared: '包括已清除',
+    allPrinters: '所有印表機',
+    acknowledgeAll: '確認此印表機的全部警報',
+    acknowledge: '確認',
+    acknowledged: '已確認',
+    loadFailed: '無法載入警報',
+    none: '沒有印表機回報問題。',
+    noneRecorded: '沒有警報紀錄。',
+    since: '自{{when}}',
+    clearedAt: '{{when}}已清除',
+    seenBy: '{{name}}已查看',
+    severity: {
+      fatal: '致命',
+      serious: '嚴重',
+      warning: '警告',
+    },
+  },
   nav: {
+    alarms: '警報',
     printers: '印表機',
     archives: '歸檔',
     queue: '列印佇列',

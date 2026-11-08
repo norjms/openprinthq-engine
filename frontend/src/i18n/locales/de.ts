@@ -1,6 +1,27 @@
 export default {
   // Navigation
+  alarms: {
+    title: 'Alarme',
+    subtitle: 'Was jeder Drucker gerade meldet. Ein Alarm verschwindet von selbst, wenn der Drucker ihn nicht mehr meldet; Bestätigen markiert ihn als gesehen.',
+    includeCleared: 'Erledigte anzeigen',
+    allPrinters: 'Alle Drucker',
+    acknowledgeAll: 'Alle an diesem Drucker bestätigen',
+    acknowledge: 'Bestätigen',
+    acknowledged: 'Bestätigt',
+    loadFailed: 'Alarme konnten nicht geladen werden',
+    none: 'Kein Drucker meldet ein Problem.',
+    noneRecorded: 'Keine Alarme aufgezeichnet.',
+    since: 'Seit {{when}}',
+    clearedAt: 'erledigt {{when}}',
+    seenBy: 'Gesehen von {{name}}',
+    severity: {
+      fatal: 'Kritisch',
+      serious: 'Schwer',
+      warning: 'Warnung',
+    },
+  },
   nav: {
+    alarms: 'Alarme',
     printers: 'Drucker',
     archives: 'Archiv',
     queue: 'Druckwarteschlange',

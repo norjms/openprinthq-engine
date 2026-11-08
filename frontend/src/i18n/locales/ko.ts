@@ -1,5 +1,26 @@
 export default {
+  alarms: {
+    title: '알람',
+    subtitle: '각 프린터가 지금 보고하는 문제입니다. 프린터가 보고를 멈추면 알람은 자동으로 해제되며, 확인하면 본 것으로 표시됩니다.',
+    includeCleared: '해제된 항목 포함',
+    allPrinters: '모든 프린터',
+    acknowledgeAll: '이 프린터의 모든 알람 확인',
+    acknowledge: '확인',
+    acknowledged: '확인됨',
+    loadFailed: '알람을 불러올 수 없습니다',
+    none: '문제를 보고하는 프린터가 없습니다.',
+    noneRecorded: '기록된 알람이 없습니다.',
+    since: '{{when}}부터',
+    clearedAt: '{{when}} 해제',
+    seenBy: '{{name}} 확인',
+    severity: {
+      fatal: '치명적',
+      serious: '심각',
+      warning: '경고',
+    },
+  },
   nav: {
+    alarms: '알람',
     printers: '프린터',
     archives: '아카이브',
     queue: '대기열',
