@@ -55,6 +55,15 @@ Table `printer_nozzles` holds one row per `(printer_id, extruder_index)` with
 - `DELETE /printers/{id}/nozzles/{extruder_index}` drops the override (404 if
   there is none). Returns the merged view.
 
+The hardware match (the dispatcher, `GET /queue/{id}/preflight` and
+`POST /queue/preflight`, see `docs/farm-queue.md`) uses the same rule: a manual
+override replaces what the printer reported for that extruder, and is the only
+nozzle information for printers that report none (PrusaLink, OctoPrint, most
+Klipper setups). The checks run synchronously per printer, so they read an
+in-memory copy of the overrides (`printer_hardware.manual_nozzles`) that the
+dispatcher reloads once per pass and the preflight routes reload per request;
+`PUT` and `DELETE` update it at once.
+
 The status-change callback persists decoded live values as `source='mqtt'`
 whenever they change. It keeps an in-memory snapshot, so the hot path is a dict
 comparison, and it never overwrites a manual row.
