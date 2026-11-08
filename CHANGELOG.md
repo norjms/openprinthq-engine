@@ -5,6 +5,8 @@ All notable changes to Bambuddy will be documented in this file.
 ## [Unreleased] - OpenPrintHQ engine
 
 ### Added
+- **Cancel a queued job with a reason** - `POST /api/v1/queue/{id}/cancel` takes an optional body `{"reason", "by"}`; the item keeps `cancel_reason` and `cancelled_by` (the signed-in user when `by` is left out) and both show on the queue item. A job that has started is still stopped with `/stop`.
+- **Reuse a library file instead of storing a copy** - `POST /api/v1/library/files?reuse_duplicate=true` answers the stored file (`reused: true`, same `id`) when the library already has the same content, and keeps no second copy. Without the flag an upload behaves as before (a copy, with `duplicate_of` set). Only files the uploader may read are reused.
 - **Pre-send check before anything is queued** - `POST /api/v1/queue/preflight` takes what a job needs (an uploaded file, materials, nozzle size, plate, sliced-for model; a printer, a model or every printer) and answers, printer by printer, whether it could take the job now and why not, with the same checks and answer shape as `GET /queue/{id}/preflight`. For slicer plugins' pre-send windows. See `docs/slicer-api.md`.
 - **Find a library file by hash** - `GET /api/v1/library/files/by-hash/{sha256}` answers the stored file with that SHA-256 (not in the trash), or 404, so a client can skip uploading a file the library already has.
 - **`docs/slicer-api.md`** - every call a slicer plugin makes to a farm, mapped to the engine endpoint that answers it, and what is still missing.
