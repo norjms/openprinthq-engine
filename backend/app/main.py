@@ -27,6 +27,7 @@ from backend.app.api.routes import (
     auth,
     bug_report,
     camera,
+    camera_webrtc,
     camwall,
     cloud,
     discovery,
@@ -6924,6 +6925,10 @@ PUBLIC_API_PATTERNS = [
     # Camera (streams loaded via <img> tag)
     "/camera/stream",  # /printers/{id}/camera/stream
     "/camera/snapshot",  # /printers/{id}/camera/snapshot
+    # WebRTC signalling (#56): the browser posts the SDP offer with the same
+    # ``?token=`` stream token as the MJPEG <img>, so a Cam Wall kiosk can use
+    # it. The route still runs RequireCameraStreamTokenIfAuthEnabled.
+    "/camera/webrtc",  # /printers/{id}/camera/webrtc
     # Streaming-overlay status feed (#2613): OBS loads /overlay/{id} with no login
     # and this backs it, authenticated by an ``overlay``-scoped token in the query
     # string (same reasoning as the camera streams above — no header to carry a
@@ -7305,6 +7310,7 @@ app.include_router(updates.router, prefix=app_settings.api_prefix)
 app.include_router(sponsor_prompt.router, prefix=app_settings.api_prefix)
 app.include_router(maintenance.router, prefix=app_settings.api_prefix)
 app.include_router(camera.router, prefix=app_settings.api_prefix)
+app.include_router(camera_webrtc.router, prefix=app_settings.api_prefix)
 app.include_router(camwall.router, prefix=app_settings.api_prefix)
 app.include_router(external_links.router, prefix=app_settings.api_prefix)
 app.include_router(projects.router, prefix=app_settings.api_prefix)

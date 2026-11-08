@@ -315,6 +315,7 @@ export interface CamWallPrinter {
   id: number;
   name: string;
   camera_rotation: number;
+  webrtc?: boolean;  // has a WebRTC (WHEP) camera; the URL itself is not served (#56)
   connected: boolean;
   state: string | null;
   progress: number | null;
@@ -380,6 +381,7 @@ export interface Printer {
   external_camera_type: string | null;  // "mjpeg", "rtsp", "snapshot"
   external_camera_enabled: boolean;
   external_camera_snapshot_url: string | null;  // optional single-frame override (#1177)
+  camera_webrtc_url?: string | null;  // WHEP endpoint for browser playback (#56)
   camera_rotation: number;  // 0, 90, 180, 270 degrees
   plate_detection_enabled: boolean;  // Check plate before print
   plate_detection_roi?: PlateDetectionROI;  // ROI for plate detection
@@ -685,6 +687,11 @@ export interface PrinterCreate {
   external_camera_type?: string | null;
   external_camera_enabled?: boolean;
   external_camera_snapshot_url?: string | null;
+  camera_webrtc_url?: string | null;  // #56
+  // Write-only go2rtc convenience (#56): expanded server-side into the
+  // MJPEG, snapshot and WHEP URLs.
+  go2rtc_url?: string | null;
+  go2rtc_stream?: string | null;
   camera_rotation?: number;
   plate_detection_enabled?: boolean;
   plate_detection_roi?: PlateDetectionROI;

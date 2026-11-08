@@ -66,6 +66,7 @@ from backend.app.services.printer_manager import (
     supports_drying,
     supports_drying_while_printing,
 )
+from backend.app.services.webrtc_camera import apply_go2rtc_fields
 from backend.app.utils.filament_ids import filament_id_to_setting_id
 from backend.app.utils.http import build_content_disposition
 
@@ -210,7 +211,7 @@ async def create_printer(
         # Synthesize a stable, unique serial now (these have no serial concept).
         import uuid
 
-        data = printer_data.model_dump(exclude={"defer_connection_test"})
+        data = apply_go2rtc_fields(printer_data.model_dump(exclude={"defer_connection_test"}))
         if not data.get("serial_number"):
             data["serial_number"] = f"{printer_data.connection_type}:{uuid.uuid4().hex[:16]}"
         # Store "" not NULL: legacy SQLite made access_code NOT NULL and can't
@@ -248,7 +249,7 @@ async def create_printer(
                     },
                 )
 
-        printer = Printer(**printer_data.model_dump(exclude={"defer_connection_test"}))
+        printer = Printer(**apply_go2rtc_fields(printer_data.model_dump(exclude={"defer_connection_test"})))
 
     db.add(printer)
     await db.commit()
@@ -647,7 +648,9 @@ async def update_printer(
     if not printer:
         raise HTTPException(404, "Printer not found")
 
-    update_data = printer_data.model_dump(exclude_unset=True)
+    # go2rtc_url + go2rtc_stream expand into the camera columns (#56); the
+    # schema has already validated the pair.
+    update_data = apply_go2rtc_fields(printer_data.model_dump(exclude_unset=True))
 
     # Out of service goes through the helper so the timestamp and reason stay consistent.
     oos_reason = update_data.pop("out_of_service_reason", None)
