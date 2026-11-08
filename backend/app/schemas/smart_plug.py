@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 
 class SmartPlugBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    plug_type: Literal["tasmota", "homeassistant", "mqtt", "rest"] = "tasmota"
+    plug_type: Literal["tasmota", "homeassistant", "mqtt", "rest", "kasa"] = "tasmota"
 
     # Tasmota fields (required when plug_type="tasmota")
     ip_address: str | None = Field(default=None, pattern=r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
@@ -98,6 +98,8 @@ class SmartPlugBase(BaseModel):
     def validate_plug_type_fields(self) -> "SmartPlugBase":
         if self.plug_type == "tasmota" and not self.ip_address:
             raise ValueError("ip_address is required for Tasmota plugs")
+        if self.plug_type == "kasa" and not self.ip_address:
+            raise ValueError("ip_address is required for Kasa plugs")
         if self.plug_type == "homeassistant" and not self.ha_entity_id:
             raise ValueError("ha_entity_id is required for Home Assistant plugs")
         if self.plug_type == "mqtt":
@@ -123,7 +125,7 @@ class SmartPlugCreate(SmartPlugBase):
 
 class SmartPlugUpdate(BaseModel):
     name: str | None = None
-    plug_type: Literal["tasmota", "homeassistant", "mqtt", "rest"] | None = None
+    plug_type: Literal["tasmota", "homeassistant", "mqtt", "rest", "kasa"] | None = None
     ip_address: str | None = None
     ha_entity_id: str | None = None
     # Home Assistant energy sensor entities (optional)

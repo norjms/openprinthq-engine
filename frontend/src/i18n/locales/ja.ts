@@ -5409,6 +5409,7 @@ export default {
     username: 'ユーザー名',
     password: 'パスワード',
     authHint: 'Tasmotaデバイスが認証を必要としない場合は空のままにしてください',
+    kasaAuthHint: '新しいKasaファームウェアのみ: TP-Linkアカウントのメールアドレスとパスワード。古いプラグでは不要です。',
     linkToPrinter: 'プリンターにリンク',
     noPrinter: 'プリンターなし（手動制御のみ）',
     linkingDescription: 'リンクすると印刷開始/完了時に自動でオン/オフできます',

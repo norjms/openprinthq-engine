@@ -33,6 +33,7 @@ from backend.app.schemas.smart_plug import (
 )
 from backend.app.services.discovery import tasmota_scanner
 from backend.app.services.homeassistant import homeassistant_service
+from backend.app.services.kasa_plug import kasa_service
 from backend.app.services.mqtt_relay import mqtt_relay
 from backend.app.services.mqtt_smart_plug import subscribe_plug_to_mqtt
 from backend.app.services.notification_service import notification_service
@@ -73,15 +74,15 @@ async def create_smart_plug(
         # Check if printer already has a plug assigned
         # Tasmota plugs: only one per printer (physical power device)
         # HA entities: allow multiple per printer (for different automations)
-        if data.plug_type == "tasmota":
+        if data.plug_type in ("tasmota", "kasa"):
             result = await db.execute(
                 select(SmartPlug).where(
                     SmartPlug.printer_id == data.printer_id,
-                    SmartPlug.plug_type == "tasmota",
+                    SmartPlug.plug_type.in_(("tasmota", "kasa")),
                 )
             )
             if result.scalar_one_or_none():
-                raise HTTPException(400, "This printer already has a Tasmota plug assigned")
+                raise HTTPException(400, "This printer already has a power plug (Tasmota or Kasa) assigned")
 
     # For MQTT plugs, ensure MQTT broker is configured and service is connected
     if data.plug_type == "mqtt":
@@ -434,16 +435,16 @@ async def update_smart_plug(
         # Tasmota plugs: only one per printer (physical power device)
         # HA entities: allow multiple per printer (for different automations)
         new_plug_type = update_data.get("plug_type", plug.plug_type)
-        if new_plug_type == "tasmota":
+        if new_plug_type in ("tasmota", "kasa"):
             result = await db.execute(
                 select(SmartPlug).where(
                     SmartPlug.printer_id == new_printer_id,
                     SmartPlug.id != plug_id,
-                    SmartPlug.plug_type == "tasmota",
+                    SmartPlug.plug_type.in_(("tasmota", "kasa")),
                 )
             )
             if result.scalar_one_or_none():
-                raise HTTPException(400, "This printer already has a Tasmota plug assigned")
+                raise HTTPException(400, "This printer already has a power plug (Tasmota or Kasa) assigned")
 
     # Track old MQTT settings for comparison
     old_plug_type = plug.plug_type
@@ -538,6 +539,8 @@ async def _get_service_for_plug(plug: SmartPlug, db: AsyncSession):
         return homeassistant_service
     if plug.plug_type == "rest":
         return rest_smart_plug_service
+    if plug.plug_type == "kasa":
+        return kasa_service
     return tasmota_service
 
 
@@ -791,6 +794,24 @@ async def check_power_alerts(plug: SmartPlug, current_power: float | None, db: A
                 "error_detail": message,
             },
         )
+
+
+@router.post("/test-kasa")
+async def test_kasa_connection(
+    data: SmartPlugTestConnection,
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.SMART_PLUGS_CONTROL),
+):
+    """Test connection to a TP-Link Kasa plug (username/password: the TP-Link account, needed on newer firmware)."""
+    result = await kasa_service.test_connection(data.ip_address, data.username, data.password)
+    if not result["success"]:
+        raise HTTPException(503, result.get("error", "Failed to connect to the Kasa plug"))
+    return {
+        "success": True,
+        "state": result["state"],
+        "device_name": result.get("device_name"),
+        "model": result.get("model"),
+        "has_energy": result.get("has_energy", False),
+    }
 
 
 @router.post("/test-connection")

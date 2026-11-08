@@ -5371,6 +5371,7 @@ export default {
     username: 'Kullanıcı Adı',
     password: 'Parola',
     authHint: 'Tasmota cihazınız kimlik doğrulama gerektirmiyorsa boş bırakın',
+    kasaAuthHint: 'Yalnızca yeni Kasa yazılımı için: TP-Link hesabınızın e-postası ve şifresi. Eski prizler bir şey gerektirmez.',
     linkToPrinter: 'Yazıcıya Bağla',
     noPrinter: 'Yazıcı yok (yalnızca manuel kontrol)',
     linkingDescription: 'Bağlama, baskılar başladığında/tamamlandığında otomatik açma/kapamayı etkinleştirir',
