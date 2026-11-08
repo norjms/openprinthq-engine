@@ -193,6 +193,8 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
         "required_filament_types": required_filament_types_parsed,
         "filament_overrides": filament_overrides_parsed,
         "waiting_reason": item.waiting_reason,
+        "cancel_reason": getattr(item, "cancel_reason", None),
+        "cancelled_by": getattr(item, "cancelled_by", None),
         "archive_id": item.archive_id,
         "library_file_id": item.library_file_id,
         "position": item.position,
@@ -1371,9 +1373,15 @@ async def resume_queue_after_failure(
     return {"acknowledged": len(to_ack), "restored": len(to_restore)}
 
 
+class CancelBody(BaseModel):
+    reason: str | None = Field(None, max_length=500, description="Kept on the item and shown in its history")
+    by: str | None = Field(None, max_length=100, description="Who cancelled it (defaults to the signed-in user)")
+
+
 @router.post("/{item_id}/cancel")
 async def cancel_queue_item(
     item_id: int,
+    body: CancelBody | None = None,
     db: AsyncSession = Depends(get_db),
     auth_result: tuple[User | None, bool] = Depends(
         require_ownership_permission(
@@ -1382,7 +1390,8 @@ async def cancel_queue_item(
         )
     ),
 ):
-    """Cancel a pending queue item."""
+    """Cancel a pending queue item, optionally with a reason (kept on the item as cancel_reason and
+    cancelled_by). A print that has started is stopped with POST /queue/{id}/stop instead."""
     user, can_modify_all = auth_result
 
     result = await db.execute(select(PrintQueueItem).where(PrintQueueItem.id == item_id))
@@ -1400,10 +1409,14 @@ async def cancel_queue_item(
 
     item.status = "cancelled"
     item.completed_at = datetime.now(timezone.utc)
+    reason = (body.reason or "").strip() if body else ""
+    item.cancel_reason = reason or None
+    who = ((body.by or "").strip() if body else "") or (getattr(user, "username", None) if user else None)
+    item.cancelled_by = who or None
     await db.commit()
 
-    logger.info("Cancelled queue item %s", item_id)
-    return {"message": "Queue item cancelled"}
+    logger.info("Cancelled queue item %s%s", item_id, f": {reason}" if reason else "")
+    return {"message": "Queue item cancelled", "cancel_reason": item.cancel_reason, "cancelled_by": item.cancelled_by}
 
 
 @router.post("/{item_id}/stop")

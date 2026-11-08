@@ -288,6 +288,9 @@ class FileUploadResponse(BaseModel):
     thumbnail_path: str | None
     duplicate_of: int | None = None  # ID of existing file with same hash
     metadata: dict | None = None
+    # True when reuse_duplicate=true found the same content already stored: no new file was kept
+    # and id is the existing file.
+    reused: bool = False
 
 
 # ============ Bulk Operations ============

@@ -3894,6 +3894,10 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN priority INTEGER DEFAULT 50")
     await _migrate_maintenance_history_log(conn)
 
+    # Migration: a queued job cancelled before it started keeps why and by whom.
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN cancel_reason TEXT")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN cancelled_by VARCHAR(100)")
+
 
 async def _migrate_maintenance_history_log(conn) -> None:
     """Let maintenance_history hold free-form entries (no schedule).
