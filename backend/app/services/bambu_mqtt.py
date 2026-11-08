@@ -232,6 +232,17 @@ class MQTTLogEntry:
     payload: dict
 
 
+def hms_level(code: int) -> int:
+    """Severity of an hms[] entry from its 32-bit ``code`` word.
+
+    The level is the high half (1 fatal, 2 serious, 3 common, 4 info). Bambu
+    Studio treats anything else as unknown; that is graded serious (2) here,
+    which is what the parser used before for a missing severity.
+    """
+    level = (int(code) >> 16) & 0xFFFF
+    return level if 1 <= level <= 4 else 2
+
+
 @dataclass
 class HMSError:
     """Health Management System error from printer."""
@@ -3373,7 +3384,8 @@ class BambuMQTTClient:
                 for hms in hms_list:
                     if isinstance(hms, dict):
                         # HMS format: {"attr": attribute_code, "code": error_code}
-                        # attr contains module/severity info, code contains error number
+                        # attr: module id, module number, part id, reserved (a byte each);
+                        # code: message level (high half), message code (low half).
                         # Both are needed to construct the wiki URL
                         attr = hms.get("attr", 0)
                         code = hms.get("code", 0)
@@ -3381,8 +3393,11 @@ class BambuMQTTClient:
                             attr = int(attr.replace("0x", ""), 16) if attr else 0
                         if isinstance(code, str):
                             code = int(code.replace("0x", ""), 16) if code else 0
-                        # Severity is in attr byte 1 (bits 8-15)
-                        severity = (attr >> 8) & 0xF
+                        # Severity is the message level in the high half of code
+                        # (Bambu Studio DevHMSItem::parse_hms_info: 1 fatal, 2 serious,
+                        # 3 common, 4 info). attr bits 8-15 are the part id: reading
+                        # them as the level graded H2C 0C00_0100_0002_0015 fatal.
+                        severity = hms_level(code)
                         # Module is in attr byte 3 (bits 24-31)
                         module = (attr >> 24) & 0xFF
                         # Skip non-error status codes — all real HMS errors
@@ -3412,7 +3427,7 @@ class BambuMQTTClient:
                                 code=f"0x{code:x}" if code else "0x0",
                                 attr=attr,
                                 module=module,
-                                severity=severity if severity > 0 else 2,
+                                severity=severity,
                                 actions=actions,
                                 job_id=self.state.subtask_id,
                                 full_code=full_code,

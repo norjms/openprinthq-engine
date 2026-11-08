@@ -39,7 +39,8 @@ from backend.app.models.printer_alarm import PrinterAlarm
 logger = logging.getLogger(__name__)
 
 SEVERITIES = ("fatal", "serious", "warning")
-# Bambu HMS severity: 1 fatal, 2 serious, 3 common, 4 info.
+# Bambu HMS severity: 1 fatal, 2 serious, 3 common, 4 info (the message level
+# bambu_mqtt.hms_level() reads from the high half of an hms[] code).
 _HMS_SEVERITY = {1: "fatal", 2: "serious", 3: "warning"}
 # HMS codes that are not problems (the printer reports its own cancel as one).
 HMS_IGNORE = frozenset({"0500_400E"})
@@ -108,7 +109,11 @@ def _hms_alarms(state) -> list[Alarm]:
             continue
         if short in HMS_IGNORE:
             continue
-        text = get_error_description(short) or getattr(err, "message", "") or f"HMS {short}"
+        text = (
+            get_error_description(short, getattr(err, "full_code", None) or None)
+            or getattr(err, "message", "")
+            or f"HMS {short}"
+        )
         prev = out.get(short)
         if prev is None or SEVERITIES.index(severity) < SEVERITIES.index(prev.severity):
             out[short] = Alarm("bambu", short, severity, text)
