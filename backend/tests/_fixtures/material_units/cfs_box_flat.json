@@ -1,0 +1,13 @@
+{
+  "api_version": 1,
+  "loaded_slot": 1,
+  "temp_c": 26.5,
+  "humidity_pct": 41.0,
+  "slots": [
+    {"index": 0, "name": "2026_PETG", "material": "PETG", "color": "#1A1A1A", "brand": "None", "present": true, "loaded": false, "external": false},
+    {"index": 1, "name": "Hyper PLA", "material": "PLA", "color": "#FFFFFF", "brand": "Creality", "present": true, "loaded": true, "external": false},
+    {"index": 2, "name": "", "material": "", "color": "", "brand": "None", "present": false, "loaded": false, "external": false},
+    {"index": 3, "name": "", "material": "PLA", "color": "#C12E1F", "brand": "None", "present": true, "loaded": false, "external": false},
+    {"index": 16, "name": "", "material": "TPU", "color": "#000000", "brand": "None", "present": true, "loaded": false, "external": true}
+  ]
+}

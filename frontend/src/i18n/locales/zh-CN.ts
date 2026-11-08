@@ -167,6 +167,14 @@ export default {
     verifyWithCamera: "清除热床状态前用摄像头确认热床已空",
   },
   printers: {
+    materialUnit: {
+      cfs: 'CFS',
+      qidi_box: 'QIDI Box',
+      ace: 'ACE',
+      canvas: 'CANVAS',
+      untested: '未在实机上测试',
+      untestedHelp: '依据公开的协议文档和抓取的数据实现，尚未在真实打印机上验证。',
+    },
     addPreflight: {
       checking: '正在检查连接...',
       warning: '部分连接检查未通过。此打印机可能显示为离线。请查看下方的检查项，尽量修复，或仍然保存。',

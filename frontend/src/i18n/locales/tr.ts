@@ -167,6 +167,14 @@ export default {
     verifyWithCamera: "Tablayı serbest bırakmadan önce kamerayla boş olduğunu doğrula",
   },
   printers: {
+    materialUnit: {
+      cfs: 'CFS',
+      qidi_box: 'QIDI Box',
+      ace: 'ACE',
+      canvas: 'CANVAS',
+      untested: 'Donanımda test edilmedi',
+      untestedHelp: 'Yayınlanmış protokol belgeleri ve kaydedilmiş veriler esas alınarak yapıldı; henüz gerçek bir yazıcıda doğrulanmadı.',
+    },
     title: 'Yazıcılar',
     addPrinter: 'Yazıcı Ekle',
     addPreflight: {

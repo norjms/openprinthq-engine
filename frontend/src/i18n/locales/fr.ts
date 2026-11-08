@@ -167,6 +167,14 @@ export default {
     verifyWithCamera: "Vérifier à la caméra que le plateau est vide avant de le libérer",
   },
   printers: {
+    materialUnit: {
+      cfs: 'CFS',
+      qidi_box: 'QIDI Box',
+      ace: 'ACE',
+      canvas: 'CANVAS',
+      untested: 'Non testé sur le matériel',
+      untestedHelp: 'Conçu à partir de la documentation publique du protocole et de données capturées ; pas encore vérifié sur une vraie imprimante.',
+    },
     addPreflight: {
       checking: 'Vérification de la connexion...',
       warning: 'Certaines vérifications de connexion ont échoué. Cette imprimante pourrait apparaître hors ligne. Examinez les vérifications ci-dessous, corrigez ce que vous pouvez, ou enregistrez quand même.',

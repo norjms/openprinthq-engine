@@ -166,6 +166,14 @@ export default {
     verifyWithCamera: "プレートをクリアする前にカメラでベッドが空か確認する",
   },
   printers: {
+    materialUnit: {
+      cfs: 'CFS',
+      qidi_box: 'QIDI Box',
+      ace: 'ACE',
+      canvas: 'CANVAS',
+      untested: '実機未検証',
+      untestedHelp: '公開されているプロトコル資料と取得済みデータを基に実装しています。実際のプリンターではまだ検証していません。',
+    },
     addPreflight: {
       checking: '接続を確認しています...',
       warning: '一部の接続チェックに失敗しました。このプリンターはオフラインと表示される可能性があります。下のチェックを確認し、可能な範囲で修正するか、そのまま保存してください。',

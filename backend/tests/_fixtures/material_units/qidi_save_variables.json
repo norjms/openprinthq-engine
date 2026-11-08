@@ -1,0 +1,23 @@
+{
+  "box_count": 1,
+  "enable_box": 1,
+  "slot0": 1,
+  "slot1": 2,
+  "slot2": 0,
+  "slot3": 3,
+  "filament_slot0": 1,
+  "color_slot0": 18,
+  "vendor_slot0": 1,
+  "filament_slot1": 11,
+  "color_slot1": 2,
+  "vendor_slot1": 2,
+  "filament_slot2": 0,
+  "color_slot2": 0,
+  "vendor_slot2": 0,
+  "filament_slot3": "QFA90",
+  "color_slot3": ["228332"],
+  "vendor_slot3": 0,
+  "value_t0": "slot0",
+  "value_t1": "slot1",
+  "last_load_slot": "slot1"
+}
