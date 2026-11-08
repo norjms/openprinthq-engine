@@ -13,9 +13,10 @@ Two kinds of code reach this module:
 - ``hms[]`` entries: 64 bits (``attr`` and ``code``), published by Bambu as the
   long code ``MMNNPPRR00LLCCCC`` (module, module number, part, reserved, level,
   message code). The short form "MMMM_CCCC" drops the part and the level, and
-  different parts can share it (0C00_0015 is a toolhead camera notice, a
-  foreign object detection fault and a missing laser insert), so HMS text is
-  keyed by the long code in ``HMS_LONG_DESCRIPTIONS``.
+  different parts can share it (0C00_0015 is an internal toolhead camera code,
+  a foreign object detection fault and a missing laser insert), so HMS text is
+  keyed by the long code in ``HMS_LONG_DESCRIPTIONS``. Codes Bambu publishes
+  with no text are internal (``HMS_INTERNAL_CODES``) and are not alarms.
 """
 
 # HMS error code to human-readable description mapping
@@ -1040,10 +1041,10 @@ HMS_ERROR_DESCRIPTIONS: dict[str, str] = {
 }
 
 
-# hms[] codes by the 16-character long code Bambu publishes. The codes in
-# data/hms_actions.json, plus every code that shares a short form with one of
-# them on the H2C. Bambu publishes no text for 0C00010000020015 (in any
-# language or printer catalog); the entry says what the long code itself does.
+# hms[] codes by the 16-character long code Bambu publishes (H2C wording
+# first): the codes in data/hms_actions.json, every code that shares a short
+# form with one of them on the H2C, and the AMS feed resistance warnings
+# (07NN2S0000020025, AMS NN slot S), which share one short form per AMS unit.
 HMS_LONG_DESCRIPTIONS: dict[str, str] = {
     "03002E0000030001": "The motor noise cancellation data needs to be updated; please recalibrate.",
     "0500040000020031": "Before using a Laser/Cutting Module, the pose of the BirdsEye Camera needs to be determined. Please complete the setup to calibrate the camera.",
@@ -1062,32 +1063,63 @@ HMS_LONG_DESCRIPTIONS: dict[str, str] = {
     "0501040000030006": "The Induction Hotend Latch may be worn. To ensure proper induction hotend switching, please replace the Induction Hotend Latch and clean the rods of Induction Hotend Rack.",
     "0501040000030010": "Laser module is dusty and needs cleaning now.",
     "0700200000020001": "AMS A Slot 1 filament has run out. Please insert a new filament.",
+    "0700200000020025": "AMS A slot 1 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0700210000020001": "AMS A Slot 2 filament has run out. Please insert a new filament.",
+    "0700210000020025": "AMS A slot 2 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0700220000020001": "AMS A Slot 3 filament has run out. Please insert a new filament.",
+    "0700220000020025": "AMS A slot 3 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0700230000020001": "AMS A Slot 4 filament has run out. Please insert a new filament.",
+    "0700230000020025": "AMS A slot 4 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0700550000020001": "A new AMS detected. Please set it up to check which extruder the AMS is connected to.",
     "0700700000020007": "AMS filament ran out. Please put a new filament into the same slot in AMS and resume.",
     "0700860000020002": "The AMS has been detected. Please set it up to confirm which side of the Filament Track Switch inlet the AMS is connected to.",
     "0701200000020001": "AMS B Slot 1 filament has run out. Please insert a new filament.",
+    "0701200000020025": "AMS B slot 1 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0701210000020001": "AMS B Slot 2 filament has run out. Please insert a new filament.",
+    "0701210000020025": "AMS B slot 2 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0701220000020001": "AMS B Slot 3 filament has run out. Please insert a new filament.",
+    "0701220000020025": "AMS B slot 3 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0701230000020001": "AMS B Slot 4 filament has run out. Please insert a new filament.",
+    "0701230000020025": "AMS B slot 4 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0701700000020007": "AMS filament ran out. Please put a new filament into the same slot in AMS and resume.",
     "0702200000020001": "AMS C Slot 1 filament has run out. Please insert a new filament.",
+    "0702200000020025": "AMS C slot 1 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0702210000020001": "AMS C Slot 2 filament has run out. Please insert a new filament.",
+    "0702210000020025": "AMS C slot 2 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0702220000020001": "AMS C Slot 3 filament has run out. Please insert a new filament.",
+    "0702220000020025": "AMS C slot 3 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0702230000020001": "AMS C Slot 4 filament has run out. Please insert a new filament.",
+    "0702230000020025": "AMS C slot 4 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0702700000020007": "AMS filament ran out. Please put a new filament into the same slot in AMS and resume.",
     "0703200000020001": "AMS D Slot 1 filament has run out. Please insert a new filament.",
+    "0703200000020025": "AMS D slot 1 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0703210000020001": "AMS D Slot 2 filament has run out. Please insert a new filament.",
+    "0703210000020025": "AMS D slot 2 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0703220000020001": "AMS D Slot 3 filament has run out. Please insert a new filament.",
+    "0703220000020025": "AMS D slot 3 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0703230000020001": "AMS D Slot 4 filament has run out. Please insert a new filament.",
+    "0703230000020025": "AMS D slot 4 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "0703700000020007": "AMS filament ran out. Please put a new filament into the same slot in AMS and resume.",
+    "0704200000020025": "AMS E slot 1 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0704210000020025": "AMS E slot 2 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0704220000020025": "AMS E slot 3 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0704230000020025": "AMS E slot 4 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0705200000020025": "AMS F slot 1 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0705210000020025": "AMS F slot 2 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0705220000020025": "AMS F slot 3 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0705230000020025": "AMS F slot 4 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0706200000020025": "AMS G slot 1 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0706210000020025": "AMS G slot 2 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0706220000020025": "AMS G slot 3 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0706230000020025": "AMS G slot 4 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0707200000020025": "AMS H slot 1 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0707210000020025": "AMS H slot 2 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0707220000020025": "AMS H slot 3 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
+    "0707230000020025": "AMS H slot 4 feed resistance is too high. Please reduce the feed resistance, decrease the rotation resistance of the spool, and avoid having the filament tube too long and excessively bent.",
     "07FE200000020001": "External filament of left extruder has run out; please load a new filament.",
     "07FE200000020002": "No filament was detected in the left extruder from the external spool; please load the new filament.",
     "07FF200000020001": "External filament of right extruder has run out; please load a new filament.",
     "07FF200000020002": "No filament was detected in the right extruder from the external spool; please load the new filament.",
-    "0C00010000020015": "Toolhead camera notice (HMS 0C00-0100-0002-0015). Bambu Lab publishes no text for this code.",
     "0C00030000020015": 'Foreign object detection is not working. Detected the Live View Camera has been replaced. If a laser or cutting module is installed, please uninstall the module, tap "Settings>Calibration" on printer ...',
     "0C00030000030008": "Possible spaghetti defects were detected. Please check the print quality and decide if the job should be stopped.",
     "0C00040000010015": "Laser Protective Insert not detected. Please place it and continue.",
@@ -1134,6 +1166,149 @@ HMS_UNPUBLISHED_CODES: frozenset[str] = frozenset(
         "12FF_C030",
     }
 )
+
+
+# Codes Bambu publishes with empty text in every printer catalog: internal
+# codes. Bambu Studio does not show them (HMSPanel::append_hms_panel skips an
+# hms[] entry whose catalog text is empty; HMSQuery::is_internal_error does the
+# same for print_error), and the printer keeps printing. Keyed by full code:
+# 16 characters for hms[] entries, 8 for print_error. An H2C reports
+# 0C00010000020015, 0500060000020005 and 0500060000020006 during normal prints.
+HMS_INTERNAL_CODES: frozenset[str] = frozenset(
+    {
+        "0300180000000000",
+        "0300260000000000",
+        "0300E00000020004",
+        "0300E40000020002",
+        "0300E40000020005",
+        "0300E40000020006",
+        "0300E40000020007",
+        "0300E40000020008",
+        "0500010000020003",
+        "0500010000020008",
+        "0500010000020009",
+        "050001000002000B",
+        "050001000002000F",
+        "0500010000020010",
+        "0500010000020011",
+        "0500010000030009",
+        "0500020000030009",
+        "050002000003000A",
+        "050002000003000B",
+        "050002000003000C",
+        "0500030000010053",
+        "0500030000010071",
+        "0500030000020010",
+        "0500030000020011",
+        "0500030000020012",
+        "0500030000020013",
+        "0500030000020014",
+        "0500030000020015",
+        "0500030000020016",
+        "0500030000020017",
+        "0500030000020018",
+        "0500030000020019",
+        "0500030000020050",
+        "0500030000020051",
+        "0500030000020052",
+        "0500030000020053",
+        "0500030000020054",
+        "0500030000020070",
+        "0500030000030007",
+        "0500040000010056",
+        "0500040000010060",
+        "0500040000010061",
+        "0500040000020020",
+        "0500040000030021",
+        "0500050000010008",
+        "0500050000010009",
+        "050005000001000A",
+        "050005000001000B",
+        "050005000001000C",
+        "0500050000020030",
+        "0500060000020005",
+        "0500060000020006",
+        "0500060000020007",
+        "0500060000020008",
+        "0500060000020009",
+        "0500060000020011",
+        "0500060000020012",
+        "0500060000020013",
+        "0500060000020014",
+        "0500060000020015",
+        "0500060000020021",
+        "0500060000020022",
+        "0500060000020023",
+        "0500060000020024",
+        "0500060000020025",
+        "0500060000020035",
+        "0500060000020041",
+        "0500060000020042",
+        "0500060000020043",
+        "0500060000020044",
+        "0500060000020045",
+        "0500060000020051",
+        "0500060000020052",
+        "0500060000020053",
+        "0500060000020054",
+        "0500060000020061",
+        "0500060000020062",
+        "0500060000020070",
+        "0500060000020071",
+        "05000600000200A0",
+        "05000600000200A1",
+        "0500070000020001",
+        "0500070000020002",
+        "0500070000020003",
+        "0500070000020101",
+        "0500070000020201",
+        "0503000000030027",
+        "0503000000030028",
+        "0503000000030029",
+        "0800310000030001",
+        "0C0001000002000E",
+        "0C00010000020015",
+        "0C00010000020016",
+        "0C00010000020019",
+        "0C0001000002001A",
+        "0C0001000002001B",
+        "0C00040000020006",
+        "0C00040000020038",
+        "1A0001000002005F",
+        "1A00010000020060",
+        "1A00010000020061",
+        "1A00010000020062",
+        "1A0001000002006A",
+        "1A0002000002005F",
+        "1A0002000002006A",
+        "1A0003000002005F",
+        "1A0003000002006A",
+        "1A0004000002005F",
+        "1A0004000002006A",
+        "1A0005000002005F",
+        "1A0005000002006A",
+        "1A0006000002005F",
+        "1A0006000002006A",
+        "1A0007000002005F",
+        "1A0007000002006A",
+        "1A0008000002005F",
+        "1A0008000002006A",
+        "1A0009000002005F",
+        "1A0009000002006A",
+        "05008030",
+        "0500C011",
+        "05024009",
+        "0502400A",
+        "0502400B",
+        "0502400C",
+        "0C008002",
+    }
+)
+
+
+def is_internal_code(full_code: str | None) -> bool:
+    """Whether Bambu treats this HMS or print_error code as internal (no text, not shown)."""
+    return bool(full_code) and full_code.upper() in HMS_INTERNAL_CODES
 
 
 def get_error_description(error_code: str, full_code: str | None = None) -> str | None:
