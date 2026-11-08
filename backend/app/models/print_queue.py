@@ -178,6 +178,9 @@ class PrintQueueItem(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Why a job was cancelled before it started, and by whom (POST /queue/{id}/cancel).
+    cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancelled_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -149,6 +149,8 @@ class PrintQueueItemResponse(BaseModel):
     required_filament_types: list[str] | None = None  # Required filament types for model-based assignment
     filament_overrides: list[dict] | None = None  # Filament overrides for model-based assignment
     waiting_reason: str | None = None  # Why a model-based job hasn't started yet
+    cancel_reason: str | None = None  # Why it was cancelled before it started
+    cancelled_by: str | None = None
     archive_id: int | None  # None if library_file_id is set (archive created at print start)
     library_file_id: int | None  # For queue items from library files
     position: int

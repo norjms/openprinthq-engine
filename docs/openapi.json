@@ -5806,6 +5806,38 @@
     "title": "CalibrationResponse",
     "type": "object"
    },
+   "CancelBody": {
+    "properties": {
+     "by": {
+      "anyOf": [
+       {
+        "maxLength": 100,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Who cancelled it (defaults to the signed-in user)",
+      "title": "By"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "maxLength": 500,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Kept on the item and shown in its history",
+      "title": "Reason"
+     }
+    },
+    "title": "CancelBody",
+    "type": "object"
+   },
    "CatalogEntryCreate": {
     "properties": {
      "name": {
@@ -9308,6 +9340,11 @@
        }
       ],
       "title": "Metadata"
+     },
+     "reused": {
+      "default": false,
+      "title": "Reused",
+      "type": "boolean"
      },
      "thumbnail_path": {
       "anyOf": [
@@ -18185,6 +18222,28 @@
       "default": false,
       "title": "Been Jumped",
       "type": "boolean"
+     },
+     "cancel_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cancel Reason"
+     },
+     "cancelled_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cancelled By"
      },
      "cleanup_library_after_dispatch": {
       "default": false,
@@ -43724,6 +43783,18 @@
        "title": "Generate Stl Thumbnails",
        "type": "boolean"
       }
+     },
+     {
+      "description": "When the library already has a file with the same content, answer that file (reused: true) and keep no second copy",
+      "in": "query",
+      "name": "reuse_duplicate",
+      "required": false,
+      "schema": {
+       "default": false,
+       "description": "When the library already has a file with the same content, answer that file (reused: true) and keep no second copy",
+       "title": "Reuse Duplicate",
+       "type": "boolean"
+      }
      }
     ],
     "requestBody": {
@@ -59735,7 +59806,7 @@
   },
   "/api/v1/queue/{item_id}/cancel": {
    "post": {
-    "description": "Cancel a pending queue item.",
+    "description": "Cancel a pending queue item, optionally with a reason (kept on the item as cancel_reason and\ncancelled_by). A print that has started is stopped with POST /queue/{id}/stop instead.",
     "operationId": "queue_cancel_queue_item",
     "parameters": [
      {
@@ -59748,6 +59819,23 @@
       }
      }
     ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "anyOf": [
+         {
+          "$ref": "#/components/schemas/CancelBody"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "title": "Body"
+       }
+      }
+     }
+    },
     "responses": {
      "200": {
       "content": {
