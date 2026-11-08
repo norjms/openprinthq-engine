@@ -3217,19 +3217,89 @@ class PrintScheduler:
         # Credit the owner so on_print_complete can attribute the PrintLogEntry.
         await self._propagate_owner_to_printer_manager(db, item)
 
+        # Creality CFS / QIDI Box: slot-by-slot colour remap (#52). None when
+        # the printer has no multi-material unit or the file declares nothing.
+        slot_mapping = await self._external_slot_mapping(item, file_path)
+
         # Mark printing BEFORE sending the command (crash-safety, mirrors the
         # Bambu path — a phantom "printing" is safer than a phantom reprint).
         item.status = "printing"
         item.started_at = datetime.now(timezone.utc)
         await db.commit()
 
-        if not printer_manager.start_print(item.printer_id, remote_name):
+        if not printer_manager.start_print(item.printer_id, remote_name, ams_mapping=slot_mapping):
             _fail("Failed to start print on Klipper printer")
             await db.commit()
             await self._power_off_if_needed(db, item)
             return
 
         logger.info("Queue item %s: Klipper print started on %s (%s)", item.id, printer.name, remote_name)
+
+    async def _external_slot_mapping(self, item: PrintQueueItem, file_path: Path) -> list[int] | None:
+        """Slot-by-slot remap for a non-Bambu multi-material unit (#52).
+
+        Reads the G-code's filament list, applies the queue item's filament
+        overrides, and maps each filament to the printer slot holding the same
+        material with the closest colour (``material_slots.remap_slots``). The
+        result is stored on the item as ``ams_mapping`` (the field the Bambu
+        path uses, so the queue and the printer card show it the same way) and
+        returned for the client to send in whatever form its protocol takes.
+
+        Material type is the only hard constraint, as in the dispatcher's
+        hold; a filament with no slot of its material gets -1 and the printer's
+        own default for that tool. Returns None when there is nothing to remap.
+        """
+        from backend.app.services.gcode_filaments import parse_gcode_filaments
+        from backend.app.services.material_slots import describe_mapping, remap_slots, units_from_state
+
+        status = printer_manager.get_status(item.printer_id)
+        units = units_from_state(status) if status else []
+        if not units:
+            return None
+
+        stored: list | None = None
+        if item.ams_mapping:
+            try:
+                stored = json.loads(item.ams_mapping)
+            except (json.JSONDecodeError, TypeError):
+                stored = None
+        if isinstance(stored, list) and stored and not _mapping_is_all_unresolved(stored):
+            if all(isinstance(v, int) for v in stored):
+                logger.info("Queue item %s: using stored slot mapping %s", item.id, stored)
+                return stored
+
+        required = await asyncio.to_thread(parse_gcode_filaments, file_path)
+        if not required:
+            return None
+
+        if item.filament_overrides:
+            try:
+                for override in json.loads(item.filament_overrides):
+                    tool = int(override.get("slot_id", 0)) - 1
+                    if 0 <= tool < len(required):
+                        if override.get("type"):
+                            required[tool]["type"] = str(override["type"]).upper()
+                        if override.get("color"):
+                            required[tool]["color"] = override["color"]
+            except (json.JSONDecodeError, TypeError, ValueError, AttributeError) as e:
+                logger.warning("Queue item %s: filament overrides not applied to slot remap: %s", item.id, e)
+
+        mapping = remap_slots(required, units)
+        if all(slot < 0 for slot in mapping):
+            logger.info(
+                "Queue item %s: no slot holds any of the G-code materials %s; leaving the printer's own tool map",
+                item.id,
+                [r.get("type") for r in required],
+            )
+            return None
+        item.ams_mapping = json.dumps(mapping)
+        logger.info(
+            "Queue item %s: slot remap for printer %s: %s",
+            item.id,
+            item.printer_id,
+            describe_mapping(required, mapping),
+        )
+        return mapping
 
     async def _start_print_octoprint(self, db: AsyncSession, item: PrintQueueItem, printer: Printer):
         """Dispatch a queued print to an OctoPrint / PrusaLink printer (live-only).

@@ -167,6 +167,14 @@ export default {
     verifyWithCamera: "Verifica con la fotocamera che il piano sia vuoto prima di liberare il piatto",
   },
   printers: {
+    materialUnit: {
+      cfs: 'CFS',
+      qidi_box: 'QIDI Box',
+      ace: 'ACE',
+      canvas: 'CANVAS',
+      untested: 'Non testato su hardware',
+      untestedHelp: 'Realizzato dalla documentazione pubblica del protocollo e da dati acquisiti; non ancora verificato su una stampante reale.',
+    },
     addPreflight: {
       checking: 'Verifica della connessione...',
       warning: 'Alcuni controlli di connessione non sono riusciti. Questa stampante potrebbe risultare offline. Controlla le verifiche qui sotto, risolvi ciò che puoi oppure salva comunque.',

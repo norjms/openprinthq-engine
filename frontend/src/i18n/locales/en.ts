@@ -167,6 +167,14 @@ export default {
     verifyWithCamera: "Check with the camera that the bed is empty before clearing the plate",
   },
   printers: {
+    materialUnit: {
+      cfs: 'CFS',
+      qidi_box: 'QIDI Box',
+      ace: 'ACE',
+      canvas: 'CANVAS',
+      untested: 'Untested on hardware',
+      untestedHelp: 'Built from published protocol documentation and captured payloads; not yet verified on a real printer.',
+    },
     title: 'Printers',
     addPrinter: 'Add Printer',
     addPreflight: {

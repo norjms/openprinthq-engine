@@ -1,0 +1,39 @@
+{
+  "state": "connect",
+  "filament": 1,
+  "enable": 1,
+  "auto_refill": 1,
+  "filament_useup": 0,
+  "map": {"T1A": "T1A", "T1B": "T1B", "T1C": "T1C", "T1D": "T1D"},
+  "same_material": [["101001", "01A1A1A", ["T1C", "T1D"], "PLA"]],
+  "T1": {
+    "state": "connect",
+    "filament": "None",
+    "temperature": "27",
+    "dry_and_humidity": "48",
+    "filament_detected": "None",
+    "measuring_wheel": "None",
+    "version": "1.1.3",
+    "sn": "10000882925",
+    "mode": "0",
+    "vender": ["3C5250276A21010010C12E1F0165000001000000", "unknown", "BB5250276A21010010FFFFFF0165000001000000", "none"],
+    "remain_len": ["35", "57", "52", "-1"],
+    "color_value": ["0000000", "00A2989", "0FFFFFF", "-1"],
+    "material_type": ["101001", "106002", "101001", "-1"],
+    "uuid": [19, 103],
+    "change_color_num": ["-1", "-1", "-1", "-1"]
+  },
+  "T2": {
+    "state": "None",
+    "filament": "None",
+    "temperature": "None",
+    "dry_and_humidity": "None",
+    "version": "-1",
+    "sn": "-1",
+    "vender": ["None", "None", "None", "None"],
+    "remain_len": ["-1", "-1", "-1", "-1"],
+    "color_value": ["-1", "-1", "-1", "-1"],
+    "material_type": ["-1", "-1", "-1", "-1"],
+    "uuid": "None"
+  }
+}

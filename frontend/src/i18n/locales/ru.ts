@@ -162,6 +162,14 @@ export default {
     verifyWithCamera: "Проверить камерой, что стол пуст, перед снятием отметки",
   },
   printers: {
+    materialUnit: {
+      cfs: 'CFS',
+      qidi_box: 'QIDI Box',
+      ace: 'ACE',
+      canvas: 'CANVAS',
+      untested: 'Не проверено на оборудовании',
+      untestedHelp: 'Сделано по опубликованной документации протокола и записанным данным; на реальном принтере ещё не проверялось.',
+    },
     title: "Принтеры",
     addPrinter: "Добавить принтер",
     addPreflight: {
