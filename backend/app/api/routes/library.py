@@ -1793,6 +1793,42 @@ async def scan_external_folder(
 # ============ File Endpoints ============
 
 
+@router.get("/files/by-hash/{sha256}")
+async def file_by_hash(
+    sha256: str,
+    db: AsyncSession = Depends(get_db),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_READ_ALL,
+            Permission.LIBRARY_READ_OWN,
+        )
+    ),
+):
+    """The library file with this SHA-256, if one is already stored (not in the trash). Lets a client skip
+    uploading a file the library already has: hash locally, ask here, and queue the existing file on a hit.
+    404 when there is none."""
+    want = sha256.strip().lower()
+    if len(want) != 64 or any(c not in "0123456789abcdef" for c in want):
+        raise HTTPException(400, "sha256 must be 64 hex characters")
+    current_user, can_read_all = auth_result
+    q = select(LibraryFile).where(LibraryFile.file_hash == want, LibraryFile.deleted_at.is_(None))
+    if current_user is not None and not can_read_all:
+        q = q.where(LibraryFile.created_by_id == current_user.id)
+    f = (await db.execute(q.order_by(LibraryFile.id).limit(1))).scalar_one_or_none()
+    if f is None:
+        raise HTTPException(404, "No library file with that hash")
+    return {
+        "id": f.id,
+        "filename": f.filename,
+        "file_type": f.file_type,
+        "file_size": f.file_size,
+        "file_hash": f.file_hash,
+        "folder_id": f.folder_id,
+        "created_at": f.created_at,
+        "metadata": f.file_metadata or {},
+    }
+
+
 @router.get("/files", response_model=list[FileListResponse])
 @router.get("/files/", response_model=list[FileListResponse])
 async def list_files(
