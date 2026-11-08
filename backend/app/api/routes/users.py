@@ -308,6 +308,11 @@ async def update_user(
         user.groups = list(groups)
 
     await db.commit()
+    if user_data.group_ids is not None:
+        # Group membership decides printer scope (#57); live sockets follow.
+        from backend.app.core.websocket import ws_manager
+
+        await ws_manager.refresh_printer_scopes()
     result = await db.execute(select(User).where(User.id == user_id).options(selectinload(User.groups)))
     user = result.scalar_one()
 

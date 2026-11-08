@@ -3279,6 +3279,18 @@ export default {
       noResults: 'Aramanızla eşleşen izin yok',
       websocketHint: 'Canlı güncellemeler için gereklidir. Bu izin olmadan arayüz düzenli yoklamaya geri döner.',
     },
+    scope: {
+      title: "Yazıcı erişimi",
+      all: "Tüm yazıcılar",
+      limited: "Yalnızca seçili yazıcılar ve konumlar",
+      hint: "Sınırlı bir grubun üyeleri yalnızca bu yazıcıları görür. Diğer tüm yazıcılar onlardan her yerde gizlenir: pano, kuyruk, kameralar, alarmlar, geçmiş, istatistikler ve bildirimler. Birden fazla gruptaki bir üye tüm gruplarının yazıcılarını alır ve sınırsız herhangi bir grup tüm çiftliğe erişim verir. Yöneticiler her zaman tüm yazıcıları görür.",
+      printers: "Yazıcılar",
+      locations: "Konumlar",
+      noPrinters: "Henüz yapılandırılmış yazıcı yok.",
+      noLocations: "Hiçbir yazıcıda konum ayarlı değil.",
+      emptyWarning: "Hiçbir şey seçilmedi: bu grubun üyeleri hiçbir yazıcı görmeyecek.",
+      adminLocked: "Administrators grubu her zaman tüm yazıcılara erişebilir.",
+    },
   },
 
   // Kullanıcı yönetimi

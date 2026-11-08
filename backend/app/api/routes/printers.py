@@ -19,7 +19,9 @@ from backend.app.core.auth import (
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import PrinterScope, apply_printer_scope, get_printer_scope
 from backend.app.core.tasks import spawn_background_task
+from backend.app.core.websocket import ws_manager
 from backend.app.models.ams_label import AmsLabel
 from backend.app.models.printer import Printer
 from backend.app.models.slot_preset import SlotPresetMapping
@@ -152,6 +154,7 @@ def _serialize_printer(printer: Printer, *, include_secret: bool):
 async def list_printers(
     user: User | None = RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
     db: AsyncSession = Depends(get_db),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """List all configured printers.
 
@@ -159,7 +162,7 @@ async def list_printers(
     to see it (Admin / Operator JWT, or auth-disabled mode). Viewers and
     API keys never receive it.
     """
-    result = await db.execute(select(Printer).order_by(Printer.name))
+    result = await db.execute(apply_printer_scope(select(Printer), scope).order_by(Printer.name))
     printers = list(result.scalars().all())
     include_secret = await _caller_can_view_printer_secrets(user, db)
     return [_serialize_printer(p, include_secret=include_secret) for p in printers]
@@ -254,6 +257,8 @@ async def create_printer(
     db.add(printer)
     await db.commit()
     await db.refresh(printer)
+    # A new printer may fall inside a location scope (#57).
+    await ws_manager.refresh_printer_scopes()
 
     # Connect to the printer
     if printer.is_active:
@@ -317,6 +322,7 @@ async def get_available_filaments(
     location: str | None = Query(None, description="Optional location filter"),
     _=RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
     db: AsyncSession = Depends(get_db),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Get deduplicated list of filaments loaded across all active printers of a given model.
 
@@ -332,6 +338,7 @@ async def get_available_filaments(
     )
     if location:
         query = query.where(Printer.location == location)
+    query = apply_printer_scope(query, scope)
 
     result = await db.execute(query)
     printers_list = list(result.scalars().all())
@@ -420,9 +427,10 @@ async def get_available_filaments(
 async def get_developer_mode_warnings(
     _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
     db: AsyncSession = Depends(get_db),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Check if any connected printer lacks developer LAN mode."""
-    result = await db.execute(select(Printer).where(Printer.is_active == True))  # noqa: E712
+    result = await db.execute(apply_printer_scope(select(Printer).where(Printer.is_active == True), scope))  # noqa: E712
     printers = result.scalars().all()
     statuses = printer_manager.get_all_statuses()
 
@@ -575,9 +583,11 @@ def _out_of_service_entry(printer: Printer) -> OutOfServiceEntry:
 async def list_out_of_service(
     _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
     db: AsyncSession = Depends(get_db),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Printers that are out of service: connected and visible, but given no new jobs."""
-    rows = await db.execute(select(Printer).where(Printer.out_of_service.is_(True)).order_by(Printer.name))
+    query = apply_printer_scope(select(Printer).where(Printer.out_of_service.is_(True)), scope)
+    rows = await db.execute(query.order_by(Printer.name))
     return [_out_of_service_entry(p) for p in rows.scalars().all()]
 
 
@@ -681,6 +691,9 @@ async def update_printer(
 
     await db.commit()
     await db.refresh(printer)
+    if "location" in update_data:
+        # Moving a printer can bring it into or out of a location scope (#57).
+        await ws_manager.refresh_printer_scopes()
 
     # Reconnect if connection settings changed
     if any(

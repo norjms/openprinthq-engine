@@ -21,6 +21,13 @@ from backend.app.core.auth import (
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import (
+    PrinterScope,
+    column_in_scope,
+    get_printer_scope,
+    printer_resource_guard,
+    visible_printer_ids,
+)
 from backend.app.models.archive import PrintArchive
 from backend.app.models.filament import Filament
 from backend.app.models.spool_usage_history import SpoolUsageHistory
@@ -39,7 +46,13 @@ from backend.app.utils.threemf_tools import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/archives", tags=["archives"])
+# Per-printer scoping (#57): an archive printed on a printer outside the
+# caller's scope answers 404 on every /archives/{archive_id}/... route.
+router = APIRouter(
+    prefix="/archives",
+    tags=["archives"],
+    dependencies=[Depends(printer_resource_guard(PrintArchive, "archive_id", not_found="Archive not found"))],
+)
 
 
 def _safe_filename(filename: str) -> str:
@@ -358,12 +371,14 @@ async def list_archives(
             Permission.ARCHIVES_READ_OWN,
         )
     ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """List archived prints."""
     user, can_read_all = auth_result
     visible_to_user_id = user.id if (user is not None and not can_read_all) else None
     service = ArchiveService(db)
     archives = await service.list_archives(
+        visible_printer_ids=await visible_printer_ids(db, scope),
         printer_id=printer_id,
         project_id=project_id,
         date_from=date_from,
@@ -526,6 +541,7 @@ async def list_archives_slim(
             Permission.ARCHIVES_READ_OWN,
         )
     ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Per-event listing for stats/dashboard widgets.
 
@@ -556,6 +572,9 @@ async def list_archives_slim(
         dt_to = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
         filters.append(PrintLogEntry.created_at <= dt_to)
     _apply_run_user_filter(filters, created_by_id)
+    in_scope = column_in_scope(PrintLogEntry.printer_id, await visible_printer_ids(db, scope), include_null=True)
+    if in_scope is not None:
+        filters.append(in_scope)
 
     query = (
         select(
@@ -634,6 +653,7 @@ async def search_archives(
             Permission.ARCHIVES_READ_OWN,
         )
     ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Full-text search across archives.
 
@@ -648,6 +668,7 @@ async def search_archives(
     user, can_read_all = auth_result
     own_only = user is not None and not can_read_all
     search_term = q.strip()
+    in_scope = column_in_scope(PrintArchive.printer_id, await visible_printer_ids(db, scope), include_null=True)
 
     # Build dialect-specific full-text search query
     if is_sqlite():
@@ -709,6 +730,8 @@ async def search_archives(
             query = query.where(PrintArchive.status == status)
         if own_only:
             query = query.where(PrintArchive.created_by_id == user.id)
+        if in_scope is not None:
+            query = query.where(in_scope)
 
         query = query.limit(limit).offset(offset)
         result = await db.execute(query)
@@ -729,6 +752,8 @@ async def search_archives(
     )
     if own_only:
         query = query.where(PrintArchive.created_by_id == user.id)
+    if in_scope is not None:
+        query = query.where(in_scope)
 
     # Apply additional filters
     if printer_id:
@@ -808,6 +833,7 @@ async def analyze_failures(
             Permission.ARCHIVES_READ_OWN,
         )
     ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Analyze failure patterns across prints.
 
@@ -834,6 +860,7 @@ async def analyze_failures(
         printer_id=printer_id,
         project_id=project_id,
         created_by_id=created_by_id,
+        visible_printer_ids=await visible_printer_ids(db, scope),
     )
 
 
@@ -847,6 +874,7 @@ async def compare_archives(
             Permission.ARCHIVES_READ_OWN,
         )
     ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Compare multiple archives side by side.
 
@@ -885,6 +913,13 @@ async def compare_archives(
             if row is None or row.deleted_at is not None or row.created_by_id != user.id:
                 raise HTTPException(404, "Archive not found")
 
+    visible = await visible_printer_ids(db, scope)
+    if visible is not None:
+        rows = await db.execute(select(PrintArchive.id, PrintArchive.printer_id).where(PrintArchive.id.in_(ids)))
+        for row in rows.all():
+            if row.printer_id is not None and row.printer_id not in visible:
+                raise HTTPException(404, "Archive not found")
+
     service = ArchiveComparisonService(db)
     try:
         return await service.compare_archives(ids)
@@ -909,6 +944,7 @@ async def export_archives(
             Permission.ARCHIVES_READ_OWN,
         )
     ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Export archives to CSV or Excel format.
 
@@ -957,6 +993,7 @@ async def export_archives(
             date_to=date_to_dt,
             search=search,
             visible_to_user_id=visible_to_user_id,
+            visible_printer_ids=await visible_printer_ids(db, scope),
         )
     except ImportError as e:
         raise HTTPException(500, str(e))
@@ -977,6 +1014,7 @@ async def export_stats(
     created_by_id: int | None = Query(None, description="Filter by user who created the print (-1 for no user)"),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.STATS_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Export statistics summary to CSV or Excel format."""
     _validate_user_filter_permission(current_user, created_by_id)
@@ -996,6 +1034,7 @@ async def export_stats(
             printer_id=printer_id,
             project_id=project_id,
             created_by_id=created_by_id,
+            visible_printer_ids=await visible_printer_ids(db, scope),
         )
     except ImportError as e:
         raise HTTPException(500, str(e))
@@ -1014,6 +1053,7 @@ async def get_archive_stats(
     created_by_id: int | None = Query(None, description="Filter by user who created the print (-1 for no user)"),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.STATS_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Get statistics across all archives.
 
@@ -1035,6 +1075,9 @@ async def get_archive_stats(
         dt_to = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
         base_conditions.append(PrintLogEntry.created_at <= dt_to)
     _apply_run_user_filter(base_conditions, created_by_id)
+    in_scope = column_in_scope(PrintLogEntry.printer_id, await visible_printer_ids(db, scope), include_null=True)
+    if in_scope is not None:
+        base_conditions.append(in_scope)
 
     # Total counts (one row per print event).
     total_result = await db.execute(select(func.count(PrintLogEntry.id)).where(*base_conditions))

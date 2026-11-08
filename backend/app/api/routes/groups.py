@@ -12,7 +12,9 @@ from backend.app.core.permissions import (
     PERMISSION_CATEGORIES,
     Permission,
 )
+from backend.app.core.websocket import ws_manager
 from backend.app.models.group import Group
+from backend.app.models.printer import Printer
 from backend.app.models.user import User
 from backend.app.schemas.group import (
     GroupCreate,
@@ -38,6 +40,38 @@ def _permission_label(perm: Permission) -> str:
         action = action.replace("_", " ").title()
         return f"{action} {resource}"
     return perm.value
+
+
+def _clean_locations(locations: list[str] | None) -> list[str] | None:
+    if locations is None:
+        return None
+    seen: dict[str, str] = {}
+    for loc in locations:
+        text = (loc or "").strip()
+        if text and text.lower() not in seen:
+            seen[text.lower()] = text
+    return list(seen.values())
+
+
+async def _validate_scope(db: AsyncSession, group: Group | None, printer_ids: list[int] | None) -> list[int] | None:
+    """Validate a printer scope (#57). Unknown printer ids are refused."""
+    if group is not None and group.name == "Administrators" and group.is_system:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The Administrators group cannot be limited to printers",
+        )
+    if printer_ids is None:
+        return None
+    unique = sorted(set(printer_ids))
+    if unique:
+        found = set((await db.execute(select(Printer.id).where(Printer.id.in_(unique)))).scalars().all())
+        missing = [pid for pid in unique if pid not in found]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown printer ids: {', '.join(str(m) for m in missing)}",
+            )
+    return unique
 
 
 @router.get("/permissions", response_model=PermissionsListResponse)
@@ -75,6 +109,8 @@ async def list_groups(
             description=group.description,
             permissions=group.permissions or [],
             is_system=group.is_system,
+            scope_printer_ids=group.scope_printer_ids,
+            scope_locations=group.scope_locations,
             user_count=len(group.users),
             created_at=group.created_at,
             updated_at=group.updated_at,
@@ -108,11 +144,15 @@ async def create_group(
             detail=f"Invalid permissions: {', '.join(invalid_perms)}",
         )
 
+    scope_ids = await _validate_scope(db, None, group_data.scope_printer_ids)
+    scope_locs = _clean_locations(group_data.scope_locations)
     group = Group(
         name=group_data.name,
         description=group_data.description,
         permissions=group_data.permissions,
         is_system=False,  # User-created groups are not system groups
+        scope_printer_ids=scope_ids,
+        scope_locations=scope_locs,
     )
     db.add(group)
     await db.commit()
@@ -124,6 +164,8 @@ async def create_group(
         description=group.description,
         permissions=group.permissions or [],
         is_system=group.is_system,
+        scope_printer_ids=group.scope_printer_ids,
+        scope_locations=group.scope_locations,
         user_count=0,
         created_at=group.created_at,
         updated_at=group.updated_at,
@@ -152,6 +194,8 @@ async def get_group(
         description=group.description,
         permissions=group.permissions or [],
         is_system=group.is_system,
+        scope_printer_ids=group.scope_printer_ids,
+        scope_locations=group.scope_locations,
         user_count=len(group.users),
         created_at=group.created_at,
         updated_at=group.updated_at,
@@ -215,8 +259,23 @@ async def update_group(
             )
         group.permissions = group_data.permissions
 
+    # Printer scope (#57): a field that was sent (even as null) replaces the
+    # stored value; an omitted field is left alone.
+    scope_changed = False
+    sent = group_data.model_fields_set
+    if "scope_printer_ids" in sent or "scope_locations" in sent:
+        await _validate_scope(db, group, None)
+    if "scope_printer_ids" in sent:
+        group.scope_printer_ids = await _validate_scope(db, group, group_data.scope_printer_ids)
+        scope_changed = True
+    if "scope_locations" in sent:
+        group.scope_locations = _clean_locations(group_data.scope_locations)
+        scope_changed = True
+
     await db.commit()
     await db.refresh(group)
+    if scope_changed:
+        await ws_manager.refresh_printer_scopes()
 
     return GroupResponse(
         id=group.id,
@@ -224,6 +283,8 @@ async def update_group(
         description=group.description,
         permissions=group.permissions or [],
         is_system=group.is_system,
+        scope_printer_ids=group.scope_printer_ids,
+        scope_locations=group.scope_locations,
         user_count=len(group.users),
         created_at=group.created_at,
         updated_at=group.updated_at,
@@ -254,6 +315,7 @@ async def delete_group(
 
     await db.delete(group)
     await db.commit()
+    await ws_manager.refresh_printer_scopes()
 
 
 @router.post("/{group_id}/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -292,6 +354,7 @@ async def add_user_to_group(
 
     group.users.append(user)
     await db.commit()
+    await ws_manager.refresh_printer_scopes()
 
 
 @router.delete("/{group_id}/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -330,3 +393,4 @@ async def remove_user_from_group(
 
     group.users.remove(user)
     await db.commit()
+    await ws_manager.refresh_printer_scopes()

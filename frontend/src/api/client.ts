@@ -3430,6 +3430,9 @@ export interface Group {
   permissions: Permission[];
   is_system: boolean;
   user_count: number;
+  // Printer scope (#57). Both null = the group sees every printer.
+  scope_printer_ids?: number[] | null;
+  scope_locations?: string[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -3442,12 +3445,17 @@ export interface GroupCreate {
   name: string;
   description?: string;
   permissions: Permission[];
+  scope_printer_ids?: number[] | null;
+  scope_locations?: string[] | null;
 }
 
 export interface GroupUpdate {
   name?: string;
   description?: string;
   permissions?: Permission[];
+  // Sent (even as null) replaces the stored scope; omitted keeps it.
+  scope_printer_ids?: number[] | null;
+  scope_locations?: string[] | null;
 }
 
 export interface PermissionInfo {

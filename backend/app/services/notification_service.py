@@ -783,8 +783,13 @@ class NotificationService:
         image_data: bytes | None = None,
         event_type: str | None = None,
         variables: dict | None = None,
+        printer_id: int | None = None,
     ) -> tuple[bool, str]:
-        """Send notification to a specific provider."""
+        """Send notification to a specific provider.
+
+        ``printer_id`` names the printer the event is about; browser push uses
+        it to skip subscribers whose printer scope hides that printer (#57).
+        """
         # Check quiet hours
         if self._is_in_quiet_hours(provider):
             logger.info("Skipping notification to %s - quiet hours active", provider.name)
@@ -818,7 +823,7 @@ class NotificationService:
             elif provider.provider_type == "homeassistant":
                 return await self._send_homeassistant(config, title, message, db=db)
             elif provider.provider_type == "webpush":
-                return await webpush.send_all(title, message, db=db)
+                return await webpush.send_all(title, message, db=db, printer_id=printer_id)
             else:
                 return False, f"Unknown provider type: {provider.provider_type}"
         except Exception as e:
@@ -912,7 +917,14 @@ class NotificationService:
             try:
                 # Always send notification immediately
                 success, error = await self._send_to_provider(
-                    provider, title, message, db, image_data=image_data, event_type=event_type, variables=variables
+                    provider,
+                    title,
+                    message,
+                    db,
+                    image_data=image_data,
+                    event_type=event_type,
+                    variables=variables,
+                    printer_id=printer_id,
                 )
 
                 # Also queue for digest if enabled (digest is a summary, not a queue)

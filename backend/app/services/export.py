@@ -81,6 +81,7 @@ class ExportService:
         date_to: datetime | None = None,
         search: str | None = None,
         visible_to_user_id: int | None = None,
+        visible_printer_ids: set[int] | None = None,
     ) -> tuple[bytes, str, str]:
         """Export archives to CSV or Excel format.
 
@@ -107,6 +108,10 @@ class ExportService:
         # Apply filters
         if printer_id:
             query = query.where(PrintArchive.printer_id == printer_id)
+        if visible_printer_ids is not None:
+            from backend.app.core.printer_scope import column_in_scope
+
+            query = query.where(column_in_scope(PrintArchive.printer_id, visible_printer_ids, include_null=True))
         if project_id:
             query = query.where(PrintArchive.project_id == project_id)
         if status:
@@ -164,6 +169,7 @@ class ExportService:
         printer_id: int | None = None,
         project_id: int | None = None,
         created_by_id: int | None = None,
+        visible_printer_ids: set[int] | None = None,
     ) -> tuple[bytes, str, str]:
         """Export statistics summary to CSV or Excel format.
 
@@ -186,6 +192,7 @@ class ExportService:
             printer_id=printer_id,
             project_id=project_id,
             created_by_id=created_by_id,
+            visible_printer_ids=visible_printer_ids,
         )
 
         # Build stats rows

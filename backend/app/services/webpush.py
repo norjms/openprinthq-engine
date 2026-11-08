@@ -84,10 +84,30 @@ def _send_one(sub: PushSubscription, payload: str, pem: str) -> int | None:
         return getattr(e.response, "status_code", 0) or 0
 
 
-async def send_all(title: str, message: str, url: str | None = None, db=None) -> tuple[bool, str]:
+async def _subscriber_sees_printer(session, user_id: int | None, printer_id: int, cache: dict) -> bool:
+    """Per-printer scoping (#57): does this subscriber's user see the printer?"""
+    if user_id is None:
+        return True
+    if user_id not in cache:
+        from backend.app.core.printer_scope import visible_printer_ids_for_user_id
+
+        cache[user_id] = await visible_printer_ids_for_user_id(session, user_id)
+    visible = cache[user_id]
+    return visible is None or printer_id in visible
+
+
+async def send_all(
+    title: str, message: str, url: str | None = None, db=None, printer_id: int | None = None
+) -> tuple[bool, str]:
+    """Push to every subscribed browser. When the event is about one printer
+    (``printer_id``), browsers of users whose printer scope hides it are skipped."""
+
     async def _run(session):
         pem, _pub = await vapid_keys(session)
         subs = (await session.execute(select(PushSubscription))).scalars().all()
+        if printer_id is not None:
+            cache: dict = {}
+            subs = [s for s in subs if await _subscriber_sees_printer(session, s.user_id, printer_id, cache)]
         if not subs:
             return False, "No browser is subscribed to push notifications"
         payload = json.dumps({"title": title, "body": message, "url": url or "/"})

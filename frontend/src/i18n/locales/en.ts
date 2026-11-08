@@ -3304,6 +3304,18 @@ export default {
       noResults: 'No permissions match your search',
       websocketHint: 'Required for live updates. Without it, the interface falls back to periodic polling.',
     },
+    scope: {
+      title: "Printer access",
+      all: "All printers",
+      limited: "Only selected printers and locations",
+      hint: "Members of a limited group see only these printers. Every other printer is hidden from them everywhere: dashboard, queue, cameras, alarms, history, stats and notifications. A member of several groups gets all of their printers, and any unlimited group gives access to the whole farm. Administrators always see every printer.",
+      printers: "Printers",
+      locations: "Locations",
+      noPrinters: "No printers configured yet.",
+      noLocations: "No printer has a location set.",
+      emptyWarning: "Nothing selected: members of this group will see no printers.",
+      adminLocked: "The Administrators group always has access to every printer.",
+    },
   },
 
   // Users management
