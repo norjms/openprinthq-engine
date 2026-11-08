@@ -932,6 +932,7 @@ async def retry_failed(
     run_id: int,
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.PIPELINES_RUN),
     db: AsyncSession = Depends(get_db),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Create a new run with copies = (failed + cancelled count) from the
     parent. Same pipeline, same source. Eligibility re-checked at run time
@@ -972,7 +973,7 @@ async def retry_failed(
 
     # Reuse the run_pipeline route logic via a direct call — keeps the
     # orchestration single-sourced. The result inherits parent_run_id.
-    new_run_response = await run_pipeline(parent.pipeline_id, body, current_user=current_user, db=db)
+    new_run_response = await run_pipeline(parent.pipeline_id, body, current_user=current_user, db=db, scope=scope)
 
     # Stamp parent_run_id on the freshly-created run.
     new_row = (await db.execute(select(PipelineRun).where(PipelineRun.id == new_run_response.id))).scalar_one_or_none()
