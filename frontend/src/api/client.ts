@@ -349,7 +349,7 @@ export interface OverlayStatus {
 export interface Printer {
   id: number;
   name: string;
-  connection_type: 'bambu' | 'klipper' | 'octoprint' | 'prusalink' | 'duet' | 'flashforge' | 'mks' | 'obico';  // protocol/transport; defaults to bambu
+  connection_type: 'bambu' | 'klipper' | 'octoprint' | 'prusalink' | 'duet' | 'flashforge' | 'mks' | 'obico' | 'elegoo' | 'elegoo_cc2';  // protocol/transport; defaults to bambu
   // For Klipper this is a synthetic serial; access_code is unused (open LAN).
   // Kept non-null in the type because all consumers are Bambu/AMS paths that
   // never execute for Klipper printers.
@@ -723,7 +723,7 @@ export interface EjectStatus {
 
 export interface PrinterCreate {
   name: string;
-  connection_type?: 'bambu' | 'klipper' | 'octoprint' | 'prusalink' | 'duet' | 'flashforge' | 'mks' | 'obico';  // defaults to 'bambu' on the backend
+  connection_type?: 'bambu' | 'klipper' | 'octoprint' | 'prusalink' | 'duet' | 'flashforge' | 'mks' | 'obico' | 'elegoo' | 'elegoo_cc2';  // defaults to 'bambu' on the backend
   serial_number?: string;  // required for Bambu; omitted for Klipper
   ip_address: string;
   access_code?: string;  // required for Bambu; omitted for Klipper (open LAN)

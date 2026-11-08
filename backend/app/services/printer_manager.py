@@ -12,6 +12,8 @@ from backend.app.models.printer import Printer
 from backend.app.services.bambu_mqtt import BambuMQTTClient, MQTTLogEntry, PrinterState, get_stage_name
 from backend.app.services.printer_capabilities import (
     TRANSPORT_DUET,
+    TRANSPORT_ELEGOO,
+    TRANSPORT_ELEGOO_CC2,
     TRANSPORT_FLASHFORGE,
     TRANSPORT_MKS,
     TRANSPORT_MOONRAKER,
@@ -737,6 +739,43 @@ class PrinterManager:
                 on_layer_change=on_layer_change,
                 on_bed_temp_update=on_bed_temp_update,
             )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport in (TRANSPORT_ELEGOO, TRANSPORT_ELEGOO_CC2):
+            # Elegoo SDCP v3 (Centauri Carbon, :3030) or Centauri Carbon 2
+            # (MQTT :1883, access_code as the password). moonraker_port is the
+            # port when set to anything but the Moonraker default. Untested on
+            # hardware (docs/elegoo-printers.md).
+            if transport == TRANSPORT_ELEGOO:
+                from backend.app.services.elegoo.sdcp_client import SDCP_PORT, ElegooSDCPClient
+
+                port = printer.moonraker_port if printer.moonraker_port not in (None, 7125) else SDCP_PORT
+                client = ElegooSDCPClient(
+                    ip_address=printer.ip_address,
+                    port=port,
+                    serial_number=printer.serial_number,
+                    on_state_change=on_state_change,
+                    on_print_start=on_print_start,
+                    on_print_complete=on_print_complete,
+                    on_print_running_observed=on_print_running_observed,
+                    on_layer_change=on_layer_change,
+                    on_bed_temp_update=on_bed_temp_update,
+                )
+            else:
+                from backend.app.services.elegoo.cc2_client import CC2_MQTT_PORT, ElegooCC2Client
+
+                port = printer.moonraker_port if printer.moonraker_port not in (None, 7125) else CC2_MQTT_PORT
+                client = ElegooCC2Client(
+                    ip_address=printer.ip_address,
+                    port=port,
+                    serial_number=printer.serial_number,
+                    access_code=printer.access_code or None,
+                    on_state_change=on_state_change,
+                    on_print_start=on_print_start,
+                    on_print_complete=on_print_complete,
+                    on_print_running_observed=on_print_running_observed,
+                    on_layer_change=on_layer_change,
+                    on_bed_temp_update=on_bed_temp_update,
+                )
             client.connect(loop=self._loop or asyncio.get_event_loop())
         elif transport == TRANSPORT_OBICO:
             # Obico (upload-only relay). ip_address holds the Obico server
