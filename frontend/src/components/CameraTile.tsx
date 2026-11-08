@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, VideoOff, WifiOff } from 'lucide-react';
-import { getAuthToken, withStreamToken } from '../api/client';
+import { getAuthToken, getStreamToken, withStreamToken } from '../api/client';
+import { useWhepPlayer } from '../hooks/useWhepPlayer';
+import { pickLiveSource, whepEndpoint } from '../utils/whep';
 import { formatDuration } from '../utils/date';
 
 export type CameraTileMode = 'live' | 'snapshot' | 'paused';
@@ -25,6 +27,9 @@ interface CameraTileProps {
   totalLayers?: number | null;
   printName?: string | null;
   hmsErrorCount?: number;
+  // The printer has a WebRTC (WHEP) URL: live mode tries WebRTC first and
+  // falls back to MJPEG, then to snapshots (#56).
+  webrtc?: boolean;
 }
 
 // Tiles render lighter than EmbeddedCameraViewer's full window: lower fps,
@@ -73,10 +78,13 @@ export function CameraTile({
   totalLayers = null,
   printName = null,
   hmsErrorCount = 0,
+  webrtc = false,
 }: CameraTileProps) {
   const { t } = useTranslation();
   const [bust, setBust] = useState(0);
   const [errored, setErrored] = useState(false);
+  // Live mode only: the snapshot fallback after MJPEG has failed too.
+  const [snapErrored, setSnapErrored] = useState(false);
   const lastModeRef = useRef<CameraTileMode>(mode);
 
   // Tell the backend to release its MJPEG transcoder when this tile stops
@@ -97,8 +105,20 @@ export function CameraTile({
       }).catch(() => {});
     }
     setErrored(false);
+    setSnapErrored(false);
     setBust((b) => b + 1);
   }, [mode, printerId]);
+
+  const whep = useWhepPlayer(
+    mode === 'live' && connected && webrtc ? whepEndpoint(printerId, getStreamToken()) : null,
+  );
+  const liveSource =
+    mode === 'live'
+      ? pickLiveSource({ webrtcConfigured: webrtc, phase: whep.phase, mjpegFailed: errored, snapshotFailed: snapErrored })
+      : null;
+  // Snapshots refresh on the wall's interval both in snapshot mode and when a
+  // live tile has fallen all the way back to them.
+  const polling = mode === 'snapshot' || liveSource === 'snapshot';
 
   useEffect(() => {
     return () => {
@@ -116,10 +136,10 @@ export function CameraTile({
   }, [printerId]);
 
   useEffect(() => {
-    if (mode !== 'snapshot') return;
+    if (!polling) return;
     const interval = setInterval(() => setBust((b) => b + 1), snapshotIntervalMs);
     return () => clearInterval(interval);
-  }, [mode, snapshotIntervalMs]);
+  }, [polling, snapshotIntervalMs]);
 
   const liveUrl = withStreamToken(
     `/api/v1/printers/${printerId}/camera/stream?fps=${LIVE_FPS}&t=${bust}`,
@@ -161,21 +181,45 @@ export function CameraTile({
             <WifiOff className="h-8 w-8 text-bambu-gray/70" aria-hidden="true" />
           )}
         </div>
-      ) : errored ? (
+      ) : liveSource === 'webrtc' ? (
+        <>
+          {/* A still frame holds the tile while WebRTC negotiates; the video
+              only takes over once the element itself reports it is playing. */}
+          {whep.phase !== 'playing' && (
+            <img
+              src={snapshotUrl}
+              alt={printerName}
+              draggable={false}
+              className="absolute inset-0 h-full w-full select-none object-contain"
+              style={{ transform }}
+            />
+          )}
+          <video
+            ref={whep.videoRef}
+            data-testid="camera-tile-webrtc"
+            muted
+            autoPlay
+            playsInline
+            onPlaying={whep.onPlaying}
+            className={`h-full w-full select-none object-contain ${whep.phase === 'playing' ? '' : 'opacity-0'}`}
+            style={{ transform }}
+          />
+        </>
+      ) : (mode === 'live' ? liveSource === 'none' : errored) ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/80 text-bambu-gray">
           <VideoOff className="h-7 w-7" aria-hidden="true" />
           <span className="text-xs">{t('printers.camWall.noSignal')}</span>
         </div>
       ) : (
         <img
-          key={`${mode}-${bust}`}
-          src={mode === 'live' ? liveUrl : snapshotUrl}
+          key={`${mode}-${liveSource}-${bust}`}
+          src={liveSource === 'mjpeg' ? liveUrl : snapshotUrl}
           alt={printerName}
           draggable={false}
           loading="lazy"
           className="h-full w-full select-none object-contain"
           style={{ transform }}
-          onError={() => setErrored(true)}
+          onError={() => (liveSource === 'snapshot' ? setSnapErrored(true) : setErrored(true))}
         />
       )}
 

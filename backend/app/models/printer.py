@@ -61,6 +61,10 @@ class Printer(Base):
     # skipping a warm-up frame. Bypasses MJPEG warm-up issues on sources that
     # expose a dedicated frame endpoint (e.g. go2rtc's /api/frame.jpeg). #1177.
     external_camera_snapshot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Optional WebRTC (WHEP) endpoint for browser playback (#56). Independent of
+    # the external camera toggle: browsers try it first and fall back to the
+    # engine's MJPEG stream. Server-side captures never use it.
+    camera_webrtc_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     camera_rotation: Mapped[int] = mapped_column(default=0)  # 0, 90, 180, 270 degrees
     # Per-role endpoint overrides {role: 'host:port'} used when the printer is
     # reached via a local connector relay (vendor-agnostic multi-port routing).

@@ -7,6 +7,8 @@ import { api, getAuthToken, getStreamToken, withStreamToken } from '../api/clien
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useStreamTokenSync } from '../hooks/useCameraStreamToken';
+import { useWhepPlayer } from '../hooks/useWhepPlayer';
+import { whepEndpoint } from '../utils/whep';
 import { ChamberLight } from '../components/icons/ChamberLight';
 import { SkipObjectsModal, SkipObjectsIcon } from '../components/SkipObjectsModal';
 import { CameraDiagnoseModal } from '../components/CameraDiagnoseModal';
@@ -69,11 +71,32 @@ export function CameraPage() {
   const stallStrikesRef = useRef(0);
 
   // Fetch printer info for the title
-  const { data: printer } = useQuery({
+  const { data: printer, isPending: printerPending } = useQuery({
     queryKey: ['printer', id],
     queryFn: () => api.getPrinter(id),
     enabled: id > 0,
   });
+
+  // WebRTC first in stream mode when the printer has a WHEP URL (#56). The
+  // MJPEG <img> stays unmounted while WebRTC connects or plays, and takes over
+  // when it fails. Snapshot mode never uses WebRTC.
+  const whepTokenReady = !!streamTokenValue || !(authEnabled || streamTokenPending);
+  const whep = useWhepPlayer(
+    printer?.camera_webrtc_url && streamMode === 'stream' && !transitioning && whepTokenReady
+      ? whepEndpoint(id, streamTokenValue)
+      : null,
+  );
+  const webrtcActive = whep.phase === 'connecting' || whep.phase === 'playing';
+  const webrtcFailed = whep.phase === 'failed';
+  // Until the printer is known we cannot tell WebRTC from MJPEG; do not open
+  // an MJPEG stream only to drop it a moment later (#2521 fan-out accounting).
+  const sourcePending = printerPending && id > 0;
+  useEffect(() => {
+    if (webrtcFailed) {
+      setStreamLoading(true);
+      setImageKey(Date.now());
+    }
+  }, [webrtcFailed]);
 
   // Fetch printer status for light toggle and skip objects
   const { data: status } = useQuery({
@@ -281,7 +304,7 @@ export function CameraPage() {
   useEffect(() => {
     // Only skip stall check during initial load, reconnecting, or transitioning
     // Continue checking even during streamError to detect recovery
-    if (streamMode !== 'stream' || streamLoading || isReconnecting || transitioning) {
+    if (streamMode !== 'stream' || streamLoading || isReconnecting || transitioning || webrtcActive || sourcePending) {
       if (stallCheckIntervalRef.current) {
         clearInterval(stallCheckIntervalRef.current);
         stallCheckIntervalRef.current = null;
@@ -327,7 +350,7 @@ export function CameraPage() {
         stallCheckIntervalRef.current = null;
       }
     };
-  }, [streamMode, streamLoading, streamError, isReconnecting, transitioning, id, attemptReconnect]);
+  }, [streamMode, streamLoading, streamError, isReconnecting, transitioning, webrtcActive, sourcePending, id, attemptReconnect]);
 
   const handleStreamError = () => {
     setStreamLoading(false);
@@ -453,6 +476,7 @@ export function CameraPage() {
       setImageKey(Date.now());
       setTransitioning(false);
     }, 100);
+    if (printer?.camera_webrtc_url) whep.retry();
   };
 
   const toggleFullscreen = () => {
@@ -630,7 +654,7 @@ export function CameraPage() {
   const waitingForStreamToken = !streamTokenValue && (authEnabled || streamTokenPending);
   const appendToken = (url: string) =>
     streamTokenValue ? `${url}&token=${encodeURIComponent(streamTokenValue)}` : withStreamToken(url);
-  const currentUrl = transitioning || waitingForStreamToken
+  const currentUrl = transitioning || waitingForStreamToken || sourcePending || webrtcActive
     ? ''
     : streamMode === 'stream'
       ? appendToken(`/api/v1/printers/${id}/camera/stream?fps=${fps}&t=${imageKey}`)
@@ -744,7 +768,7 @@ export function CameraPage() {
         style={{ touchAction: 'none' }}
       >
         <div className="relative w-full h-full flex items-center justify-center">
-          {(streamLoading || transitioning) && !isReconnecting && (
+          {((webrtcActive ? whep.phase === 'connecting' : streamLoading) || transitioning) && !isReconnecting && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
               <div className="text-center">
                 <RefreshCw className="w-8 h-8 text-bambu-gray animate-spin mx-auto mb-2" />
@@ -771,7 +795,7 @@ export function CameraPage() {
               </div>
             </div>
           )}
-          {streamError && !isReconnecting && (
+          {streamError && !isReconnecting && !webrtcActive && (
             <div className="absolute inset-0 flex items-center justify-center bg-black z-10">
               <div className="text-center p-4">
                 <AlertTriangle className="w-12 h-12 text-orange-400 mx-auto mb-3" />
@@ -796,22 +820,40 @@ export function CameraPage() {
               </div>
             </div>
           )}
-          <img
-            ref={imgRef}
-            key={imageKey}
-            src={currentUrl}
-            alt={t('camera.cameraStream')}
-            className="max-w-full max-h-full object-contain select-none"
-            style={{
-              transform: `scale(${zoomLevel}) translate(${panOffset.x / zoomLevel}px, ${panOffset.y / zoomLevel}px) rotate(${printer?.camera_rotation || 0}deg)`,
-              ...(printer?.camera_rotation === 90 || printer?.camera_rotation === 270 ? { maxWidth: '100vh', maxHeight: '100vw' } : {}),
-              cursor: zoomLevel > 1 ? (isPanning ? 'grabbing' : 'grab') : 'default',
-            }}
-            onError={currentUrl ? handleStreamError : undefined}
-            onLoad={currentUrl ? handleStreamLoad : undefined}
-            onMouseDown={handleImageMouseDown}
-            draggable={false}
-          />
+          {webrtcActive ? (
+            <video
+              ref={whep.videoRef}
+              data-testid="camera-page-webrtc"
+              muted
+              autoPlay
+              playsInline
+              onPlaying={whep.onPlaying}
+              className="max-w-full max-h-full object-contain select-none"
+              style={{
+                transform: `scale(${zoomLevel}) translate(${panOffset.x / zoomLevel}px, ${panOffset.y / zoomLevel}px) rotate(${printer?.camera_rotation || 0}deg)`,
+                ...(printer?.camera_rotation === 90 || printer?.camera_rotation === 270 ? { maxWidth: '100vh', maxHeight: '100vw' } : {}),
+                cursor: zoomLevel > 1 ? (isPanning ? 'grabbing' : 'grab') : 'default',
+              }}
+              onMouseDown={handleImageMouseDown}
+            />
+          ) : (
+            <img
+              ref={imgRef}
+              key={imageKey}
+              src={currentUrl}
+              alt={t('camera.cameraStream')}
+              className="max-w-full max-h-full object-contain select-none"
+              style={{
+                transform: `scale(${zoomLevel}) translate(${panOffset.x / zoomLevel}px, ${panOffset.y / zoomLevel}px) rotate(${printer?.camera_rotation || 0}deg)`,
+                ...(printer?.camera_rotation === 90 || printer?.camera_rotation === 270 ? { maxWidth: '100vh', maxHeight: '100vw' } : {}),
+                cursor: zoomLevel > 1 ? (isPanning ? 'grabbing' : 'grab') : 'default',
+              }}
+              onError={currentUrl ? handleStreamError : undefined}
+              onLoad={currentUrl ? handleStreamLoad : undefined}
+              onMouseDown={handleImageMouseDown}
+              draggable={false}
+            />
+          )}
 
           {/* Zoom controls */}
           <div className="absolute bottom-4 left-4 flex items-center gap-1.5 bg-black/60 rounded-lg px-2 py-1.5">
