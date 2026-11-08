@@ -2,14 +2,18 @@
 
 Every call goes through the engine's own HTTP API, in-process (an ASGI transport, no
 network), with a short-lived token minted for the linked engine user. The route
-dependencies, ownership filters, audit middleware and any future per-printer scoping
+dependencies, ownership filters, audit middleware and the per-printer scope guard
 therefore apply to chat exactly as they apply to the web UI: nothing here re-implements
 a permission rule. The token lives for two minutes, is never logged and never leaves
 the process.
 
 Printer visibility goes through ONE function, ``visible_printers`` (and its filter
-hook ``filter_visible_printers``). Every printer list, name lookup and per-printer read
-in the chat agent starts from it.
+``filter_visible_printers``). Every printer list, name lookup and per-printer read
+in the chat agent starts from it. Per-printer scoping is applied twice: the engine API
+answers as the linked user (the app-wide printer scope guard and the scoped printer
+list), and ``filter_visible_printers`` narrows the list again with the user's scope
+(``core.printer_scope.visible_printer_ids_for_user``), so a printer the user may not
+see is never named in chat and never resolves for an action.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from datetime import timedelta
 from typing import Any
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.user import User
 
@@ -36,16 +41,26 @@ class EngineApiError(Exception):
         self.detail = detail
 
 
-def filter_visible_printers(user: User, printers: list[dict]) -> list[dict]:
-    """Per-user printer scoping hook. The single place chat narrows the printer list.
+async def filter_visible_printers(user: User, printers: list[dict], db: AsyncSession | None = None) -> list[dict]:
+    """Narrow ``printers`` to the ones ``user``'s groups allow (per-printer scoping).
 
-    Today the engine API already returns the printers this user may see. When
-    per-printer / per-location scoping lands, apply its helper here as a second
-    filter (defence in depth), for example::
-
-        return [p for p in printers if printer_visible_to(user, p["id"])]
+    The engine API already returns only the printers this user may see; this is the
+    second filter (defence in depth) and the single place chat narrows the list.
+    Admins, unscoped users and the auth-disabled case see every printer. Pass ``db`` to
+    reuse an open session; otherwise a short one is opened for the lookup.
     """
-    return printers
+    from backend.app.core.printer_scope import visible_printer_ids_for_user
+
+    if db is None:
+        from backend.app.core import database
+
+        async with database.async_session() as session:
+            allowed = await visible_printer_ids_for_user(session, user)
+    else:
+        allowed = await visible_printer_ids_for_user(db, user)
+    if allowed is None:
+        return printers
+    return [p for p in printers if p.get("id") in allowed]
 
 
 class EngineApi:
@@ -96,7 +111,7 @@ class EngineApi:
         """The printers this user may see. All chat printer lookups start here."""
         rows = await self.get("/printers/")
         printers = [{k: v for k, v in p.items() if k not in _PRINTER_DROP} for p in rows or []]
-        return filter_visible_printers(self.user, printers)
+        return await filter_visible_printers(self.user, printers)
 
     async def printer_status(self, printer_id: int) -> dict:
         return await self.get(f"/printers/{printer_id}/status")

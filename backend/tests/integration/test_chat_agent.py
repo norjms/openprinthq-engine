@@ -397,9 +397,11 @@ class TestActions:
 class TestVisibilityAndLlm:
     async def test_printer_visibility_goes_through_one_hook(self, farm, db_session, client_mock, monkeypatch):
         hidden = farm["p1_id"]
-        monkeypatch.setattr(
-            engine_api, "filter_visible_printers", lambda user, printers: [p for p in printers if p["id"] != hidden]
-        )
+
+        async def hide_one(user, printers, db=None):
+            return [p for p in printers if p["id"] != hidden]
+
+        monkeypatch.setattr(engine_api, "filter_visible_printers", hide_one)
         agent = ChatAgent(_cfg())
         await _link(agent, db_session, farm["users"]["op"])
         assert "do not see a printer" in (await agent.handle_message(msg("pause X1C-1")))[0].text
