@@ -614,6 +614,64 @@ export interface KlipperProfileInfo {
   experimental: boolean;
 }
 
+// Chat agent (Slack / Discord). Token values are write-only: the API only says whether each is set.
+export interface ChatAgentPlatformStatus {
+  running: boolean;
+  error: string | null;
+}
+
+export interface ChatAgentConfig {
+  enabled: boolean;
+  slack_enabled: boolean;
+  discord_enabled: boolean;
+  allow_dms: boolean;
+  llm_enabled: boolean;
+  slack_allowed_channels: string[];
+  slack_allowed_workspaces: string[];
+  discord_allowed_channels: string[];
+  discord_allowed_guilds: string[];
+  llm_base_url: string;
+  llm_model: string;
+  confirm_timeout_seconds: number;
+  slack_bot_token_set: boolean;
+  slack_bot_token_from_env: boolean;
+  slack_app_token_set: boolean;
+  slack_app_token_from_env: boolean;
+  discord_bot_token_set: boolean;
+  discord_bot_token_from_env: boolean;
+  llm_api_key_set: boolean;
+  llm_api_key_from_env: boolean;
+  status: Record<string, ChatAgentPlatformStatus>;
+}
+
+export type ChatAgentConfigUpdate = Partial<
+  Omit<ChatAgentConfig, 'status' | `${string}_set` | `${string}_from_env`>
+> & {
+  slack_bot_token?: string;
+  slack_app_token?: string;
+  discord_bot_token?: string;
+  llm_api_key?: string;
+};
+
+export interface ChatLink {
+  id: number;
+  platform: string;
+  external_user_id: string;
+  external_team_id: string | null;
+  display_name: string | null;
+  user_id: number;
+  username: string | null;
+  created_at: string | null;
+  last_used_at: string | null;
+}
+
+export interface ChatLinkCode {
+  code: string;
+  user_id: number;
+  username: string;
+  expires_at: string;
+}
+
 export interface PrinterAlarm {
   id: number;
   printer_id: number;
@@ -6651,6 +6709,18 @@ export const api = {
 
   deleteLocalBackup: (filename: string) =>
     request<{ success: boolean; message: string }>(`/local-backup/backups/${encodeURIComponent(filename)}`, { method: 'DELETE' }),
+
+  // Chat agent
+  getChatAgentConfig: () => request<ChatAgentConfig>('/chat-agent/config'),
+  updateChatAgentConfig: (data: ChatAgentConfigUpdate) =>
+    request<ChatAgentConfig>('/chat-agent/config', { method: 'PUT', body: JSON.stringify(data) }),
+  getChatLinks: (all = false) => request<ChatLink[]>(`/chat-agent/links${all ? '?all=true' : ''}`),
+  deleteChatLink: (id: number) => request<{ success: boolean }>(`/chat-agent/links/${id}`, { method: 'DELETE' }),
+  createChatLinkCode: (userId?: number) =>
+    request<ChatLinkCode>('/chat-agent/link-codes', {
+      method: 'POST',
+      body: JSON.stringify(userId != null ? { user_id: userId } : {}),
+    }),
 
   // Obico AI failure detection
   getObicoStatus: () =>

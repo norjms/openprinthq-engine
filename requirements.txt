@@ -151,6 +151,12 @@ starlette>=1.3.1
 # iter_chunked) is unaffected by 3.14.0.
 aiohttp>=3.14.0
 
+# Chat agent (services/chat_agent/, docs/chat-agent.md). Slack over Socket Mode
+# (slack_sdk's aiohttp client) and a Discord gateway bot. Both are imported only
+# when the chat agent is configured, so an unconfigured engine never loads them.
+slack_sdk>=3.33.0
+discord.py>=2.5.0
+
 # TP-Link Kasa smart plugs (services/kasa_plug.py): legacy TCP 9999 and KLAP firmware.
 # GPL-3.0-or-later, compatible with this project's AGPL-3.0.
 python-kasa>=0.12.0,<0.13
