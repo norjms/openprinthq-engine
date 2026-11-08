@@ -499,6 +499,16 @@ _HMS_FAILURE_REASONS: dict[str, str] = {
 }
 
 
+def _hms_severity_notifies(severity: int) -> bool:
+    """Whether a Bambu HMS error of this severity sends a notification.
+
+    Fatal, serious and common (1 to 3) do; info (4) does not. The old test,
+    ``severity >= 2``, was written when the parser read the severity from the
+    part id: it let info through and held fatal back.
+    """
+    return 1 <= severity <= 3
+
+
 def _hms_short_code(attr: int, code: int | str) -> str:
     """Build the canonical "MMMM_CCCC" HMS short code from raw attr/code values."""
     if isinstance(code, str):
@@ -1365,8 +1375,12 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
 
         if new_error_codes:
             # Get the actual new errors for the notification
-            # Filter to severity >= 2 (skip informational/status messages like H2D sends)
-            new_errors = [e for e in current_hms_errors if f"{e.attr:08x}" in new_error_codes and e.severity >= 2]
+            # Skip informational/status messages (level 4, which H2D sends)
+            new_errors = [
+                e
+                for e in current_hms_errors
+                if f"{e.attr:08x}" in new_error_codes and _hms_severity_notifies(e.severity)
+            ]
 
             # The printer's AI monitor (spaghetti, nozzle clumping) goes on the
             # failure timeline too (services/failure_detection.py).
