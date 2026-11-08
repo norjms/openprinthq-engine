@@ -257,6 +257,28 @@ async def get_nozzles(db: AsyncSession, printer: Printer) -> dict:
     }
 
 
+# printer_id -> {extruder_index: (diameter_mm, nozzle_type)} for every manual nozzle row. The
+# dispatcher and the preflight checks run synchronously per printer, so they read this copy;
+# load_manual_nozzles() refreshes it from the database and set/clear keep it current.
+_MANUAL_NOZZLES: dict[int, dict[int, tuple[float | None, str | None]]] = {}
+
+
+async def load_manual_nozzles(db: AsyncSession) -> dict[int, dict[int, tuple[float | None, str | None]]]:
+    """Re-read every manual nozzle override into the in-memory copy and return it."""
+    rows = (await db.execute(select(PrinterNozzle).where(PrinterNozzle.source == "manual"))).scalars().all()
+    fresh: dict[int, dict[int, tuple[float | None, str | None]]] = {}
+    for row in rows:
+        fresh.setdefault(row.printer_id, {})[row.extruder_index] = (row.diameter_mm, row.nozzle_type)
+    _MANUAL_NOZZLES.clear()
+    _MANUAL_NOZZLES.update(fresh)
+    return fresh
+
+
+def manual_nozzles(printer_id: int) -> dict[int, tuple[float | None, str | None]]:
+    """The manual nozzle overrides of one printer, from the in-memory copy (empty when none)."""
+    return dict(_MANUAL_NOZZLES.get(printer_id, {}))
+
+
 async def set_manual_nozzle(
     db: AsyncSession,
     printer_id: int,
@@ -281,6 +303,7 @@ async def set_manual_nozzle(
     row.raw_type = None
     row.source = "manual"
     await db.commit()
+    _MANUAL_NOZZLES.setdefault(printer_id, {})[extruder_index] = (diameter_mm, nozzle_type)
 
 
 async def clear_manual_nozzle(db: AsyncSession, printer_id: int, extruder_index: int) -> bool:
@@ -294,6 +317,7 @@ async def clear_manual_nozzle(db: AsyncSession, printer_id: int, extruder_index:
     ).scalar_one_or_none()
     if row is None or row.source != "manual":
         return False
+    _MANUAL_NOZZLES.get(printer_id, {}).pop(extruder_index, None)
     state = _get_state(printer_id)
     live = live_nozzles_from_state(state).get(extruder_index) if state is not None else None
     if live is not None:

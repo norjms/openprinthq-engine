@@ -14,6 +14,8 @@ API key; no session, cookie or CSRF dance.
 | Base | `<OpenPrintHQ URL>/api/engine/api/v1` (through the control plane) |
 | Auth | `Authorization: Bearer ophqk_...` (an OpenPrintHQ API key, scope `control` for anything that changes state) |
 | Identity check | `GET <OpenPrintHQ URL>/api/me` answers `apiKey` for a key |
+| Scopes | Through the control plane: every `GET` needs `read`; `POST /queue/` and `POST /library/files` need `submit`; every other write needs `control`, including the read-only `POST /queue/preflight` dry run. A slicer plugin that runs the pre-send check, edits the queue or sets nozzles needs a `control` key |
+| Engine keys | An engine's own `bb_` key works against an engine reached directly (`<engine>/api/v1`), with that key's permission flags |
 | Errors | JSON `{"detail": ...}`; `detail` is a string, or `{"code", "message"}` for typed errors such as `unsupported_for_printer_type` |
 
 ## Map
@@ -48,7 +50,11 @@ Two Watchtower needs map differently:
   `POST /api/printer/update`, which rewrites the whole printer record):
   `PUT /printers/{id}/nozzles/{extruder_index}` with
   `{"diameter_mm", "nozzle_type", "volume_type"}` sets one extruder;
-  `GET /printers/{id}/nozzles` reads them all.
+  `GET /printers/{id}/nozzles` reads them all. The override is what the
+  pre-send check and the dispatcher compare against for that extruder, also on
+  printers that report no nozzles (PrusaLink, OctoPrint). Through the control
+  plane this needs a `control` key; an engine's own `bb_` API key cannot change
+  printer settings at all (`PRINTERS_UPDATE` is not an API-key permission).
 - **Recolouring a manually tracked spool so a job is not held** (Watchtower
   `PUT /api/filament/assignment`): not needed. Watchtower holds a job until the
   loaded colour matches; the engine's dispatcher holds only on material type
