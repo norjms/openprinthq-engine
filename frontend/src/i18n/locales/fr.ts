@@ -1,6 +1,27 @@
 export default {
   // Navigation
+  alarms: {
+    title: 'Alarmes',
+    subtitle: 'Ce que chaque imprimante signale en ce moment. Une alarme disparaît d\'elle-même quand l\'imprimante cesse de la signaler ; l\'acquitter la marque comme vue.',
+    includeCleared: 'Inclure les résolues',
+    allPrinters: 'Toutes les imprimantes',
+    acknowledgeAll: 'Tout acquitter sur cette imprimante',
+    acknowledge: 'Acquitter',
+    acknowledged: 'Acquittée',
+    loadFailed: 'Impossible de charger les alarmes',
+    none: 'Aucune imprimante ne signale de problème.',
+    noneRecorded: 'Aucune alarme enregistrée.',
+    since: 'Depuis {{when}}',
+    clearedAt: 'résolue {{when}}',
+    seenBy: 'Vue par {{name}}',
+    severity: {
+      fatal: 'Critique',
+      serious: 'Grave',
+      warning: 'Avertissement',
+    },
+  },
   nav: {
+    alarms: 'Alarmes',
     printers: 'Imprimantes',
     archives: 'Archives',
     queue: 'File d\'attente d\'impression',

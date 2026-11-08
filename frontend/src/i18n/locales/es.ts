@@ -1,6 +1,27 @@
 export default {
   // Navigation
+  alarms: {
+    title: 'Alarmas',
+    subtitle: 'Lo que cada impresora informa ahora mismo. Una alarma desaparece sola cuando la impresora deja de informarla; confirmarla la marca como vista.',
+    includeCleared: 'Incluir resueltas',
+    allPrinters: 'Todas las impresoras',
+    acknowledgeAll: 'Confirmar todas en esta impresora',
+    acknowledge: 'Confirmar',
+    acknowledged: 'Confirmada',
+    loadFailed: 'No se pudieron cargar las alarmas',
+    none: 'Ninguna impresora informa un problema.',
+    noneRecorded: 'No hay alarmas registradas.',
+    since: 'Desde {{when}}',
+    clearedAt: 'resuelta {{when}}',
+    seenBy: 'Vista por {{name}}',
+    severity: {
+      fatal: 'Crítica',
+      serious: 'Grave',
+      warning: 'Aviso',
+    },
+  },
   nav: {
+    alarms: 'Alarmas',
     printers: 'Impresoras',
     archives: 'Archivos',
     queue: 'Cola de impresión',

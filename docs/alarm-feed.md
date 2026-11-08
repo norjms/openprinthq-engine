@@ -50,6 +50,13 @@ does not notify for them. For the other transports it sends the provider's
 "printer error" event (`on_printer_error`, type "Printer alarm") for new fatal
 and serious alarms and for PrusaLink ATTENTION.
 
+## Web page
+
+**Alarms** in the sidebar (`/alarms`, `frontend/src/pages/AlarmsPage.tsx`) lists the
+feed, worst first, and refreshes every 30 seconds. Include cleared alarms to see
+history; pick a printer to filter and to acknowledge everything on it.
+Acknowledging needs `printers:control`; seeing the page needs `printers:read`.
+
 ## API
 
 | Method | Path | What |
