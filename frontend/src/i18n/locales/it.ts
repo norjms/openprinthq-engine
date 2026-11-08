@@ -535,6 +535,8 @@ export default {
       typeObico: 'Obico',
       typeElegoo: 'Elegoo (SDCP)',
       typeElegooCc2: 'Elegoo Centauri Carbon 2',
+      typeAnycubic: 'Anycubic Kobra (LAN)',
+      anycubicLanHelp: 'Attiva prima la modalità LAN sulla stampante. OpenPrintHQ recupera da solo le credenziali locali della stampante; non serve altro.',
       elegooAccessCode: 'Codice di accesso (facoltativo)',
       elegooAccessCodeHelp: 'Solo se hai impostato un codice di accesso sulla stampante. Attiva prima la modalità solo LAN sulla stampante.',
       obicoApiKey: 'Chiave API Obico',

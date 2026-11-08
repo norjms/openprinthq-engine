@@ -65,6 +65,7 @@ _CLASS_SOURCE = {
     "SnapmakerClient": "snapmaker",
     "ElegooSDCPClient": "elegoo",
     "ElegooCC2Client": "elegoo_cc2",
+    "AnycubicClient": "anycubic",
     "ObicoClient": "obico",
 }
 
