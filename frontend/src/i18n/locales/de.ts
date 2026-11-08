@@ -3275,6 +3275,18 @@ export default {
       noResults: 'Keine Berechtigungen entsprechen Ihrer Suche',
       websocketHint: 'Erforderlich für Live-Aktualisierungen. Ohne diese Berechtigung greift die Oberfläche auf regelmäßiges Abrufen zurück.',
     },
+    scope: {
+      title: "Druckerzugriff",
+      all: "Alle Drucker",
+      limited: "Nur ausgewählte Drucker und Standorte",
+      hint: "Mitglieder einer eingeschränkten Gruppe sehen nur diese Drucker. Alle anderen Drucker sind für sie überall ausgeblendet: Dashboard, Warteschlange, Kameras, Alarme, Verlauf, Statistiken und Benachrichtigungen. Wer in mehreren Gruppen ist, erhält alle deren Drucker, und jede uneingeschränkte Gruppe gibt Zugriff auf die gesamte Farm. Administratoren sehen immer alle Drucker.",
+      printers: "Drucker",
+      locations: "Standorte",
+      noPrinters: "Noch keine Drucker eingerichtet.",
+      noLocations: "Bei keinem Drucker ist ein Standort gesetzt.",
+      emptyWarning: "Nichts ausgewählt: Mitglieder dieser Gruppe sehen keine Drucker.",
+      adminLocked: "Die Gruppe Administratoren hat immer Zugriff auf alle Drucker.",
+    },
   },
 
   // Users management

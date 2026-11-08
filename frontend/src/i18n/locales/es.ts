@@ -3278,6 +3278,18 @@ export default {
       noResults: 'Ningún permiso coincide con su búsqueda',
       websocketHint: 'Necesario para las actualizaciones en vivo. Sin este permiso, la interfaz recurre al sondeo periódico.',
     },
+    scope: {
+      title: "Acceso a impresoras",
+      all: "Todas las impresoras",
+      limited: "Solo las impresoras y ubicaciones seleccionadas",
+      hint: "Los miembros de un grupo limitado solo ven estas impresoras. Todas las demás quedan ocultas en todas partes: panel, cola, cámaras, alarmas, historial, estadísticas y notificaciones. Quien pertenece a varios grupos obtiene las impresoras de todos ellos, y cualquier grupo sin límite da acceso a toda la granja. Los administradores siempre ven todas las impresoras.",
+      printers: "Impresoras",
+      locations: "Ubicaciones",
+      noPrinters: "Aún no hay impresoras configuradas.",
+      noLocations: "Ninguna impresora tiene una ubicación asignada.",
+      emptyWarning: "No hay nada seleccionado: los miembros de este grupo no verán ninguna impresora.",
+      adminLocked: "El grupo Administradores siempre tiene acceso a todas las impresoras.",
+    },
   },
 
   // Users management

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.exceptions import PyJWTError as JWTError
 from passlib.context import CryptContext
@@ -590,8 +590,13 @@ async def verify_slicer_download_token(token: str, resource_type: str, resource_
 CAMERA_STREAM_TOKEN_EXPIRE_MINUTES = 60
 
 
-async def create_camera_stream_token() -> str:
-    """Create a reusable token for camera stream/snapshot access."""
+async def create_camera_stream_token(scope_user_id: int | None = None) -> str:
+    """Create a reusable token for camera stream/snapshot access.
+
+    ``scope_user_id`` is the user whose printer scope the token carries (the
+    caller, or the owner of the API key that minted it); see
+    ``core/printer_scope.py``.
+    """
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(minutes=CAMERA_STREAM_TOKEN_EXPIRE_MINUTES)
     token = secrets.token_urlsafe(24)
@@ -607,6 +612,7 @@ async def create_camera_stream_token() -> str:
             AuthEphemeralToken(
                 token=token,
                 token_type="camera_stream",
+                scope_user_id=scope_user_id,
                 expires_at=expires_at,
             )
         )
@@ -617,7 +623,7 @@ async def create_camera_stream_token() -> str:
 WEBSOCKET_TOKEN_EXPIRE_MINUTES = 60
 
 
-async def create_websocket_token(username: str | None) -> str:
+async def create_websocket_token(username: str | None, scope_user_id: int | None = None) -> str:
     """Create a short-lived token for ``/api/v1/ws`` connections.
 
     Mirrors the camera-stream-token pattern: opaque random string stored
@@ -649,6 +655,7 @@ async def create_websocket_token(username: str | None) -> str:
                 token=token,
                 token_type="websocket",
                 username=username or "",
+                scope_user_id=scope_user_id,
                 expires_at=expires_at,
             )
         )
@@ -678,6 +685,55 @@ async def verify_websocket_token(token: str) -> str | None:
         if row is None:
             return None
         return row.username or ""
+
+
+async def websocket_token_scope_user_id(token: str) -> int | None:
+    """The ``scope_user_id`` recorded on a websocket token (None if unscoped)."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(AuthEphemeralToken.scope_user_id).where(
+                AuthEphemeralToken.token == token,
+                AuthEphemeralToken.token_type == "websocket",
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+async def resolve_camera_stream_token(token: str) -> tuple[bool, int | None]:
+    """Validate a camera stream token; return ``(valid, scope_user_id)``.
+
+    Ephemeral tokens carry the scope of whoever minted them; long-lived tokens
+    carry their owner's.
+    """
+    now = datetime.now(timezone.utc)
+    async with async_session() as db:
+        result = await db.execute(
+            select(AuthEphemeralToken).where(
+                AuthEphemeralToken.token == token,
+                AuthEphemeralToken.token_type == "camera_stream",
+                AuthEphemeralToken.expires_at > now,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is not None:
+            return True, row.scope_user_id
+
+        from backend.app.services.long_lived_tokens import STREAM_SCOPES, verify_token as verify_long_lived
+
+        record = await verify_long_lived(db, token, scope=STREAM_SCOPES)
+        if record is None:
+            return False, None
+        return True, record.user_id
+
+
+async def _resolve_long_lived_scope(token: str, scope: str) -> tuple[bool, int | None]:
+    async with async_session() as db:
+        from backend.app.services.long_lived_tokens import verify_token as verify_long_lived
+
+        record = await verify_long_lived(db, token, scope=scope)
+        if record is None:
+            return False, None
+        return True, record.user_id
 
 
 async def verify_camera_stream_token(token: str) -> bool:
@@ -1744,6 +1800,17 @@ def RequireAnyPermissionIfAuthEnabled(*permissions: str | Permission):
     return Depends(require_any_permission_if_auth_enabled(*permissions))
 
 
+async def _apply_token_printer_scope(request: Request, scope_user_id: int | None) -> None:
+    """Make a query-param token's owner the printer-scope principal (#57)."""
+    from backend.app.core import printer_scope
+
+    async with async_session() as db:
+        scope = await printer_scope.scope_for_user_id(db, scope_user_id)
+    printer_scope.set_request_scope(request, scope, scope_user_id)
+    await printer_scope.enforce_request_printer_ids(request, scope)
+    await printer_scope.run_deferred_scope_checks(request)
+
+
 def require_camera_stream_token_if_auth_enabled():
     """Dependency that validates a camera stream token query param when auth is enabled.
 
@@ -1752,15 +1819,19 @@ def require_camera_stream_token_if_auth_enabled():
     POST /printers/camera/stream-token and appends it as ?token=xxx.
     """
 
-    async def checker(token: str | None = None) -> None:
+    async def checker(request: Request, token: str | None = None) -> None:
         async with async_session() as db:
             if not await is_auth_enabled(db):
                 return  # Auth disabled, allow access
-        if not token or not await verify_camera_stream_token(token):
+        valid, scope_user_id = await resolve_camera_stream_token(token) if token else (False, None)
+        if not valid:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Valid camera stream token required. Obtain one from POST /api/v1/printers/camera/stream-token",
             )
+        # The token, not the request headers, is this route's principal: apply
+        # its printer scope (#57) and refuse an out-of-scope printer_id.
+        await _apply_token_printer_scope(request, scope_user_id)
 
     return checker
 
@@ -1775,15 +1846,17 @@ def require_camwall_token_if_auth_enabled():
     with the token in the URL because it has no login session to carry a JWT.
     """
 
-    async def checker(token: str | None = None) -> None:
+    async def checker(request: Request, token: str | None = None) -> None:
         async with async_session() as db:
             if not await is_auth_enabled(db):
                 return  # Auth disabled, allow access
-        if not token or not await verify_camwall_token(token):
+        valid, scope_user_id = await _resolve_long_lived_scope(token, "camwall") if token else (False, None)
+        if not valid:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Valid Cam Wall token required. Create one under Settings > API Keys with the 'Cam Wall' scope.",
             )
+        await _apply_token_printer_scope(request, scope_user_id)
 
     return checker
 
@@ -1800,15 +1873,17 @@ def require_overlay_token_if_auth_enabled():
     has no JWT to carry.
     """
 
-    async def checker(token: str | None = None) -> None:
+    async def checker(request: Request, token: str | None = None) -> None:
         async with async_session() as db:
             if not await is_auth_enabled(db):
                 return  # Auth disabled, allow access
-        if not token or not await verify_overlay_token(token):
+        valid, scope_user_id = await _resolve_long_lived_scope(token, "overlay") if token else (False, None)
+        if not valid:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Valid overlay token required. Create one under Settings > API Keys with the 'Streaming Overlay' scope.",
             )
+        await _apply_token_printer_scope(request, scope_user_id)
 
     return checker
 

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import PrinterScope, get_printer_scope, visible_printer_ids
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.models.printer_group import PrinterGroup, group_name_key, printer_group_members
@@ -30,7 +31,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/printer-groups", tags=["printer-groups"])
 
 
-def _to_response(group: PrinterGroup) -> PrinterGroupResponse:
+def _to_response(group: PrinterGroup, visible: set[int] | None = None) -> PrinterGroupResponse:
+    """``visible`` hides members outside a scoped caller's printer scope (#57)."""
     members = [
         PrinterGroupMember(
             id=p.id,
@@ -41,6 +43,7 @@ def _to_response(group: PrinterGroup) -> PrinterGroupResponse:
             is_active=p.is_active,
         )
         for p in sorted(group.printers, key=lambda p: p.name.lower())
+        if visible is None or p.id in visible
     ]
     return PrinterGroupResponse(
         id=group.id,
@@ -63,13 +66,16 @@ async def _load(db: AsyncSession, group_id: int) -> PrinterGroup:
     return group
 
 
-async def _validate_printer_ids(db: AsyncSession, printer_ids: list[int]) -> list[int]:
-    """Return de-duplicated ids after confirming every one exists."""
+async def _validate_printer_ids(db: AsyncSession, printer_ids: list[int], visible: set[int] | None = None) -> list[int]:
+    """Return de-duplicated ids after confirming every one exists (and, for a
+    scoped caller, is in its printer scope: a hidden printer is "unknown")."""
     unique = list(dict.fromkeys(printer_ids))
     if not unique:
         return []
     result = await db.execute(select(Printer.id).where(Printer.id.in_(unique)))
     found = set(result.scalars().all())
+    if visible is not None:
+        found &= visible
     missing = [pid for pid in unique if pid not in found]
     if missing:
         raise HTTPException(status_code=400, detail=f"Unknown printer id(s): {missing}")
@@ -100,9 +106,11 @@ async def _assert_name_free(db: AsyncSession, name: str, exclude_id: int | None 
 async def list_printer_groups(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     result = await db.execute(select(PrinterGroup).order_by(PrinterGroup.position, PrinterGroup.name))
-    return [_to_response(g) for g in result.scalars().all()]
+    visible = await visible_printer_ids(db, scope)
+    return [_to_response(g, visible) for g in result.scalars().all()]
 
 
 @router.post("", response_model=PrinterGroupResponse, status_code=201)
@@ -111,9 +119,11 @@ async def create_printer_group(
     data: PrinterGroupCreate,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.PRINTERS_CREATE),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     key = await _assert_name_free(db, data.name)
-    printer_ids = await _validate_printer_ids(db, data.printer_ids)
+    visible = await visible_printer_ids(db, scope)
+    printer_ids = await _validate_printer_ids(db, data.printer_ids, visible)
 
     group = PrinterGroup(
         name=data.name,
@@ -130,7 +140,7 @@ async def create_printer_group(
     group = await _load(db, group.id)
     await db.refresh(group, ["printers"])
     logger.info("Created printer group %s (%s) with %d printer(s)", group.id, group.name, len(printer_ids))
-    return _to_response(group)
+    return _to_response(group, visible)
 
 
 @router.get("/{group_id}", response_model=PrinterGroupResponse)
@@ -138,8 +148,9 @@ async def get_printer_group(
     group_id: int,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
-    return _to_response(await _load(db, group_id))
+    return _to_response(await _load(db, group_id), await visible_printer_ids(db, scope))
 
 
 @router.put("/{group_id}", response_model=PrinterGroupResponse)
@@ -148,6 +159,7 @@ async def update_printer_group(
     data: PrinterGroupUpdate,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.PRINTERS_UPDATE),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     group = await _load(db, group_id)
 
@@ -162,14 +174,19 @@ async def update_printer_group(
     if data.position is not None:
         group.position = data.position
 
+    visible = await visible_printer_ids(db, scope)
     if data.printer_ids is not None:
-        printer_ids = await _validate_printer_ids(db, data.printer_ids)
+        printer_ids = await _validate_printer_ids(db, data.printer_ids, visible)
+        if visible is not None:
+            # A scoped caller cannot see, so must not silently drop, members
+            # outside its scope: keep them.
+            printer_ids += [p.id for p in group.printers if p.id not in visible and p.id not in printer_ids]
         await _set_members(db, group_id, printer_ids)
 
     await db.commit()
     group = await _load(db, group_id)
     await db.refresh(group, ["printers"])
-    return _to_response(group)
+    return _to_response(group, visible)
 
 
 @router.post("/{group_id}/printers/{printer_id}", response_model=PrinterGroupResponse)
@@ -178,6 +195,7 @@ async def add_printer_to_group(
     printer_id: int,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.PRINTERS_UPDATE),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     group = await _load(db, group_id)
     await _validate_printer_ids(db, [printer_id])
@@ -186,7 +204,7 @@ async def add_printer_to_group(
         await db.commit()
     group = await _load(db, group_id)
     await db.refresh(group, ["printers"])
-    return _to_response(group)
+    return _to_response(group, await visible_printer_ids(db, scope))
 
 
 @router.delete("/{group_id}/printers/{printer_id}", response_model=PrinterGroupResponse)
@@ -195,6 +213,7 @@ async def remove_printer_from_group(
     printer_id: int,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.PRINTERS_UPDATE),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     await _load(db, group_id)
     await db.execute(
@@ -206,7 +225,7 @@ async def remove_printer_from_group(
     await db.commit()
     group = await _load(db, group_id)
     await db.refresh(group, ["printers"])
-    return _to_response(group)
+    return _to_response(group, await visible_printer_ids(db, scope))
 
 
 @router.delete("/{group_id}", status_code=204)
@@ -214,6 +233,7 @@ async def delete_printer_group(
     group_id: int,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.PRINTERS_DELETE),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     group = await _load(db, group_id)
 

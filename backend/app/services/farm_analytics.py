@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, true
 
 from backend.app.core import database
 from backend.app.models.print_queue import PrintQueueItem
@@ -70,13 +70,16 @@ async def observe(printer_id: int, state, awaiting_plate: bool, now: datetime | 
             await db.commit()
 
 
-async def report(db, days: int = 7, now: datetime | None = None) -> dict:
+async def report(db, days: int = 7, now: datetime | None = None, printer_ids: set[int] | None = None) -> dict:
+    """``printer_ids`` limits the report to those printers (a scoped caller); None = all."""
     now = now or _now()
     since = now - timedelta(days=days)
     rows = (await db.execute(select(PrinterStateInterval).where(PrinterStateInterval.ended_at > since))).scalars().all()
     secs: dict[int, dict[str, float]] = defaultdict(lambda: dict.fromkeys(BUCKETS, 0.0))
 
     def add(pid, state, start, end):
+        if printer_ids is not None and pid not in printer_ids:
+            return
         start, end = max(start, since), min(end, now)
         if end > start and state in BUCKETS:
             secs[pid][state] += (end - start).total_seconds()
@@ -106,6 +109,7 @@ async def report(db, days: int = 7, now: datetime | None = None) -> dict:
         await db.execute(
             select(func.date(PrintQueueItem.completed_at), func.count())
             .where(PrintQueueItem.status == "completed", PrintQueueItem.completed_at >= since)
+            .where(PrintQueueItem.printer_id.in_(sorted(printer_ids)) if printer_ids is not None else true())
             .group_by(func.date(PrintQueueItem.completed_at))
         )
     ).all()

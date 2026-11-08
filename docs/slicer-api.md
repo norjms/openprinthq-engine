@@ -18,6 +18,12 @@ API key; no session, cookie or CSRF dance.
 | Engine keys | An engine's own `bb_` key works against an engine reached directly (`<engine>/api/v1`), with that key's permission flags |
 | Errors | JSON `{"detail": ...}`; `detail` is a string, or `{"code", "message"}` for typed errors such as `unsupported_for_printer_type` |
 
+A key acts with its owner's printer scope (`docs/permission-scoping.md`): if
+the owner's group is limited to some printers, the printer list, preflight,
+queue and camera calls only ever show and accept those printers, and any other
+printer answers 404 as if it did not exist. A key made by an administrator or
+a member of an unlimited group sees the whole farm.
+
 ## Map
 
 | Plugin need | Watchtower call today | OpenPrintHQ engine |
@@ -79,7 +85,9 @@ Body (every field optional):
 | `nozzle_diameter`, `bed_type`, `sliced_for_model` | Explicit needs; they win over the file's metadata |
 | `skip_filament_check` | Leave the loaded-filament check out |
 
-With no printer or model, every active printer is checked.
+With no printer or model, every active printer is checked. For a key whose
+owner is limited to some printers, only those printers are checked, and a
+`printer_id` outside them answers 404.
 
 Answer:
 

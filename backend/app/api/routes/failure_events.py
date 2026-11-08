@@ -15,11 +15,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import (
+    PrinterScope,
+    column_in_scope,
+    get_printer_scope,
+    printer_resource_guard,
+    visible_printer_ids,
+)
 from backend.app.models.failure_event import PrintFailureEvent
 from backend.app.models.settings import Settings
 from backend.app.services import failure_detection
 
-router = APIRouter(tags=["failure-detection"])
+# Per-printer scoping (#57): events from printers outside the caller's scope
+# are hidden from the list and answer 404 when acknowledged by id.
+router = APIRouter(
+    tags=["failure-detection"],
+    dependencies=[Depends(printer_resource_guard(PrintFailureEvent, "event_id", not_found="Event not found"))],
+)
 
 
 class FailureEventOut(BaseModel):
@@ -54,8 +66,12 @@ async def list_events(
     limit: int = Query(100, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     q = select(PrintFailureEvent).order_by(PrintFailureEvent.id.desc()).limit(limit)
+    in_scope = column_in_scope(PrintFailureEvent.printer_id, await visible_printer_ids(db, scope))
+    if in_scope is not None:
+        q = q.where(in_scope)
     if printer_id is not None:
         q = q.where(PrintFailureEvent.printer_id == printer_id)
     if unacknowledged:

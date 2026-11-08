@@ -16,6 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import (
+    PrinterScope,
+    column_in_scope,
+    get_printer_scope,
+    is_printer_visible,
+    visible_printer_ids,
+)
 from backend.app.models.printer import Printer
 from backend.app.models.printer_alarm import PrinterAlarm
 from backend.app.services import alarm_feed
@@ -83,9 +90,13 @@ async def list_alarms(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """The farm's alarms. Active ones come worst first, then newest; cleared and all come newest first."""
     q = select(PrinterAlarm)
+    in_scope = column_in_scope(PrinterAlarm.printer_id, await visible_printer_ids(db, scope))
+    if in_scope is not None:
+        q = q.where(in_scope)
     if state == "active":
         q = q.where(PrinterAlarm.cleared_at.is_(None)).order_by(_RANK, PrinterAlarm.first_seen.desc())
     else:
@@ -110,15 +121,16 @@ async def list_alarms(
 async def alarm_summary(
     db: AsyncSession = Depends(get_db),
     _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Counts for a badge: active alarms, unacknowledged ones, by severity, and which printers have any."""
-    rows = (
-        await db.execute(
-            select(PrinterAlarm.printer_id, PrinterAlarm.severity, PrinterAlarm.acknowledged_at).where(
-                PrinterAlarm.cleared_at.is_(None)
-            )
-        )
-    ).all()
+    q = select(PrinterAlarm.printer_id, PrinterAlarm.severity, PrinterAlarm.acknowledged_at).where(
+        PrinterAlarm.cleared_at.is_(None)
+    )
+    in_scope = column_in_scope(PrinterAlarm.printer_id, await visible_printer_ids(db, scope))
+    if in_scope is not None:
+        q = q.where(in_scope)
+    rows = (await db.execute(q)).all()
     by = dict.fromkeys(alarm_feed.SEVERITIES, 0)
     for _pid, sev, _ack in rows:
         by[sev] = by.get(sev, 0) + 1
@@ -136,9 +148,11 @@ async def ack_alarm(
     body: AckBody | None = None,
     db: AsyncSession = Depends(get_db),
     _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Acknowledge one alarm. It stays in the feed until the printer stops reporting it."""
-    if await db.get(PrinterAlarm, alarm_id) is None:
+    row = await db.get(PrinterAlarm, alarm_id)
+    if row is None or not await is_printer_visible(db, scope, row.printer_id):
         raise HTTPException(404, "Alarm not found")
     n = await alarm_feed.acknowledge([alarm_id], None, body.by if body else None)
     return {"acknowledged": n}
@@ -160,9 +174,10 @@ async def get_alarm(
     alarm_id: int,
     db: AsyncSession = Depends(get_db),
     _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     row = await db.get(PrinterAlarm, alarm_id)
-    if row is None:
+    if row is None or not await is_printer_visible(db, scope, row.printer_id):
         raise HTTPException(404, "Alarm not found")
     printer = await db.get(Printer, row.printer_id)
     return _out(row, {row.printer_id: printer.name} if printer else {})

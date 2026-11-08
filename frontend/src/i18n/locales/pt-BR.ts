@@ -3263,6 +3263,18 @@ export default {
       noResults: 'Nenhuma permissão corresponde à sua pesquisa',
       websocketHint: 'Necessário para atualizações em tempo real. Sem esta permissão, a interface recorre à sondagem periódica.',
     },
+    scope: {
+      title: "Acesso às impressoras",
+      all: "Todas as impressoras",
+      limited: "Somente impressoras e locais selecionados",
+      hint: "Membros de um grupo limitado veem apenas estas impressoras. Todas as outras ficam ocultas em todos os lugares: painel, fila, câmeras, alarmes, histórico, estatísticas e notificações. Quem está em vários grupos recebe as impressoras de todos eles, e qualquer grupo sem limite dá acesso à fazenda inteira. Administradores sempre veem todas as impressoras.",
+      printers: "Impressoras",
+      locations: "Locais",
+      noPrinters: "Nenhuma impressora configurada ainda.",
+      noLocations: "Nenhuma impressora tem um local definido.",
+      emptyWarning: "Nada selecionado: os membros deste grupo não verão nenhuma impressora.",
+      adminLocked: "O grupo Administradores sempre tem acesso a todas as impressoras.",
+    },
   },
 
   // Users management
