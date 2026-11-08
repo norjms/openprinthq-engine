@@ -5923,6 +5923,426 @@
     "title": "ChangePasswordRequest",
     "type": "object"
    },
+   "ChatAgentConfigOut": {
+    "properties": {
+     "allow_dms": {
+      "title": "Allow Dms",
+      "type": "boolean"
+     },
+     "confirm_timeout_seconds": {
+      "title": "Confirm Timeout Seconds",
+      "type": "integer"
+     },
+     "discord_allowed_channels": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Discord Allowed Channels",
+      "type": "array"
+     },
+     "discord_allowed_guilds": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Discord Allowed Guilds",
+      "type": "array"
+     },
+     "discord_bot_token_from_env": {
+      "title": "Discord Bot Token From Env",
+      "type": "boolean"
+     },
+     "discord_bot_token_set": {
+      "title": "Discord Bot Token Set",
+      "type": "boolean"
+     },
+     "discord_enabled": {
+      "title": "Discord Enabled",
+      "type": "boolean"
+     },
+     "enabled": {
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "llm_api_key_from_env": {
+      "title": "Llm Api Key From Env",
+      "type": "boolean"
+     },
+     "llm_api_key_set": {
+      "title": "Llm Api Key Set",
+      "type": "boolean"
+     },
+     "llm_base_url": {
+      "title": "Llm Base Url",
+      "type": "string"
+     },
+     "llm_enabled": {
+      "title": "Llm Enabled",
+      "type": "boolean"
+     },
+     "llm_model": {
+      "title": "Llm Model",
+      "type": "string"
+     },
+     "slack_allowed_channels": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Slack Allowed Channels",
+      "type": "array"
+     },
+     "slack_allowed_workspaces": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Slack Allowed Workspaces",
+      "type": "array"
+     },
+     "slack_app_token_from_env": {
+      "title": "Slack App Token From Env",
+      "type": "boolean"
+     },
+     "slack_app_token_set": {
+      "title": "Slack App Token Set",
+      "type": "boolean"
+     },
+     "slack_bot_token_from_env": {
+      "title": "Slack Bot Token From Env",
+      "type": "boolean"
+     },
+     "slack_bot_token_set": {
+      "title": "Slack Bot Token Set",
+      "type": "boolean"
+     },
+     "slack_enabled": {
+      "title": "Slack Enabled",
+      "type": "boolean"
+     },
+     "status": {
+      "additionalProperties": {
+       "$ref": "#/components/schemas/PlatformStatus"
+      },
+      "title": "Status",
+      "type": "object"
+     }
+    },
+    "required": [
+     "enabled",
+     "slack_enabled",
+     "discord_enabled",
+     "allow_dms",
+     "llm_enabled",
+     "slack_allowed_channels",
+     "slack_allowed_workspaces",
+     "discord_allowed_channels",
+     "discord_allowed_guilds",
+     "llm_base_url",
+     "llm_model",
+     "confirm_timeout_seconds",
+     "slack_bot_token_set",
+     "slack_bot_token_from_env",
+     "slack_app_token_set",
+     "slack_app_token_from_env",
+     "discord_bot_token_set",
+     "discord_bot_token_from_env",
+     "llm_api_key_set",
+     "llm_api_key_from_env",
+     "status"
+    ],
+    "title": "ChatAgentConfigOut",
+    "type": "object"
+   },
+   "ChatAgentConfigUpdate": {
+    "description": "Partial update. For tokens: a value sets it, \"\" clears it, leaving it out keeps it.",
+    "properties": {
+     "allow_dms": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Allow Dms"
+     },
+     "confirm_timeout_seconds": {
+      "anyOf": [
+       {
+        "maximum": 900.0,
+        "minimum": 30.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Confirm Timeout Seconds"
+     },
+     "discord_allowed_channels": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "maxItems": 100,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Discord Allowed Channels"
+     },
+     "discord_allowed_guilds": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "maxItems": 100,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Discord Allowed Guilds"
+     },
+     "discord_bot_token": {
+      "anyOf": [
+       {
+        "maxLength": 500,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Discord Bot Token"
+     },
+     "discord_enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Discord Enabled"
+     },
+     "enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Enabled"
+     },
+     "llm_api_key": {
+      "anyOf": [
+       {
+        "maxLength": 500,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Llm Api Key"
+     },
+     "llm_base_url": {
+      "anyOf": [
+       {
+        "maxLength": 500,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Llm Base Url"
+     },
+     "llm_enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Llm Enabled"
+     },
+     "llm_model": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Llm Model"
+     },
+     "slack_allowed_channels": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "maxItems": 100,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Slack Allowed Channels"
+     },
+     "slack_allowed_workspaces": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "maxItems": 100,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Slack Allowed Workspaces"
+     },
+     "slack_app_token": {
+      "anyOf": [
+       {
+        "maxLength": 500,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Slack App Token"
+     },
+     "slack_bot_token": {
+      "anyOf": [
+       {
+        "maxLength": 500,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Slack Bot Token"
+     },
+     "slack_enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Slack Enabled"
+     }
+    },
+    "title": "ChatAgentConfigUpdate",
+    "type": "object"
+   },
+   "ChatLinkOut": {
+    "properties": {
+     "created_at": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Created At"
+     },
+     "display_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Display Name"
+     },
+     "external_team_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "External Team Id"
+     },
+     "external_user_id": {
+      "title": "External User Id",
+      "type": "string"
+     },
+     "id": {
+      "title": "Id",
+      "type": "integer"
+     },
+     "last_used_at": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Used At"
+     },
+     "platform": {
+      "title": "Platform",
+      "type": "string"
+     },
+     "user_id": {
+      "title": "User Id",
+      "type": "integer"
+     },
+     "username": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Username"
+     }
+    },
+    "required": [
+     "id",
+     "platform",
+     "external_user_id",
+     "user_id"
+    ],
+    "title": "ChatLinkOut",
+    "type": "object"
+   },
    "CheckEligibilityRequest": {
     "description": "Exactly one of ``source_library_file_id`` / ``source_archive_id`` must\nbe set.",
     "properties": {
@@ -12082,6 +12502,52 @@
     "title": "LatestFirmwareInfo",
     "type": "object"
    },
+   "LinkCodeOut": {
+    "properties": {
+     "code": {
+      "title": "Code",
+      "type": "string"
+     },
+     "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+     },
+     "user_id": {
+      "title": "User Id",
+      "type": "integer"
+     },
+     "username": {
+      "title": "Username",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "user_id",
+     "username",
+     "expires_at"
+    ],
+    "title": "LinkCodeOut",
+    "type": "object"
+   },
+   "LinkCodeRequest": {
+    "properties": {
+     "user_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "User Id"
+     }
+    },
+    "title": "LinkCodeRequest",
+    "type": "object"
+   },
    "LinkSpoolRequest": {
     "description": "Request to link a Spoolman spool to an AMS tag (tray_uuid or tag_uid).",
     "properties": {
@@ -17051,6 +17517,30 @@
      "h"
     ],
     "title": "PlateDetectionROI",
+    "type": "object"
+   },
+   "PlatformStatus": {
+    "properties": {
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error"
+     },
+     "running": {
+      "title": "Running",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "running"
+    ],
+    "title": "PlatformStatus",
     "type": "object"
    },
    "PreflightDryRun": {
@@ -37103,6 +37593,234 @@
     "summary": "List Camwall Printers",
     "tags": [
      "camwall"
+    ]
+   }
+  },
+  "/api/v1/chat-agent/config": {
+   "get": {
+    "description": "Chat agent settings. Token values are never returned, only whether each is set.",
+    "operationId": "chat_agent_get_chat_agent_config",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ChatAgentConfigOut"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Get Chat Agent Config",
+    "tags": [
+     "chat-agent"
+    ]
+   },
+   "put": {
+    "description": "Save chat agent settings and restart the Slack / Discord connections to match.",
+    "operationId": "chat_agent_update_chat_agent_config",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ChatAgentConfigUpdate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ChatAgentConfigOut"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Update Chat Agent Config",
+    "tags": [
+     "chat-agent"
+    ]
+   }
+  },
+  "/api/v1/chat-agent/link-codes": {
+   "post": {
+    "description": "A single-use code (10 minutes) to send to the bot: ``link <code>``.",
+    "operationId": "chat_agent_create_chat_link_code",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LinkCodeRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LinkCodeOut"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Create Chat Link Code",
+    "tags": [
+     "chat-agent"
+    ]
+   }
+  },
+  "/api/v1/chat-agent/links": {
+   "get": {
+    "description": "Chat accounts linked to your engine account; ``all=true`` lists everyone's (users:read).",
+    "operationId": "chat_agent_list_chat_links",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "all",
+      "required": false,
+      "schema": {
+       "default": false,
+       "title": "All",
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/ChatLinkOut"
+         },
+         "title": "Response List Chat Links Api V1 Chat Agent Links Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "List Chat Links",
+    "tags": [
+     "chat-agent"
+    ]
+   }
+  },
+  "/api/v1/chat-agent/links/{link_id}": {
+   "delete": {
+    "description": "Unlink a chat account. Your own, or anyone's with users:update.",
+    "operationId": "chat_agent_delete_chat_link",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "link_id",
+      "required": true,
+      "schema": {
+       "title": "Link Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Delete Chat Link",
+    "tags": [
+     "chat-agent"
     ]
    }
   },

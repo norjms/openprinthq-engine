@@ -253,6 +253,7 @@ async def init_db():
         archive,
         auth_ephemeral,
         bug_report,
+        chat_agent,
         color_catalog,
         external_link,
         filament,
