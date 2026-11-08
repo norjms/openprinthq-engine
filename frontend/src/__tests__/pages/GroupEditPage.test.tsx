@@ -333,6 +333,8 @@ describe('GroupEditPage', () => {
     it('loads an existing scope in edit mode', async () => {
       server.use(
         http.get('/api/v1/printers/', () => HttpResponse.json(scopePrinters)),
+        // Listed before /groups/:id, which would otherwise also match /groups/permissions.
+        http.get('/api/v1/groups/permissions', () => HttpResponse.json(mockPermissions)),
         http.get('/api/v1/groups/:id', () =>
           HttpResponse.json({ ...mockGroup, is_system: false, name: 'Bay crew', scope_printer_ids: [2], scope_locations: null })
         )

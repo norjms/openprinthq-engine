@@ -182,8 +182,19 @@ class TestMigration:
         monkeypatch.setattr(database_module, "is_sqlite", lambda: True)
 
     @pytest.fixture
-    async def legacy_engine(self, test_engine):
-        """The trunk schema: groups without the scope columns, holding two groups."""
+    async def legacy_engine(self):
+        """The trunk schema on SQLite: groups without the scope columns, holding two groups.
+
+        Its own SQLite engine (the migration under test is the SQLite branch; the
+        PostgreSQL statements are pinned by test_pg_branch_statements below)."""
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        import backend.app.models  # noqa: F401  (registers every table)
+        from backend.app.core.database import Base
+
+        test_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with test_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
         async with test_engine.begin() as conn:
             await conn.execute(text("PRAGMA foreign_keys=OFF"))
             await conn.execute(text("DROP TABLE user_groups"))
@@ -202,7 +213,43 @@ class TestMigration:
                     {"i": 2, "n": "Night shift", "p": "[]", "s": 0},
                 ],
             )
-        return test_engine
+        yield test_engine
+        await test_engine.dispose()
+
+    async def test_pg_branch_statements(self):
+        """On PostgreSQL the columns are added with IF NOT EXISTS (no PRAGMA-style retry there)."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from backend.app.core import database as db_module
+
+        class _Ctx:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return False
+
+        executed: list[str] = []
+
+        async def fake_safe_execute(_conn, sql: str) -> None:
+            executed.append(sql)
+
+        fake_conn = MagicMock()
+        fake_conn.begin_nested = lambda: _Ctx()
+        fake_conn.execute = AsyncMock(return_value=MagicMock(fetchone=MagicMock(return_value=None)))
+        with (
+            patch("backend.app.core.database.is_sqlite", return_value=False),
+            patch("backend.app.core.database._safe_execute", side_effect=fake_safe_execute),
+            patch("backend.app.core.database._migrate_update_auto_link_constraint", AsyncMock()),
+            patch("backend.app.core.database._migrate_widen_spoolman_slot_ams_id_range", AsyncMock()),
+        ):
+            await db_module.run_migrations(fake_conn)
+        stmts = [x for x in executed if "scope_printer_ids" in x or "scope_locations" in x or "scope_user_id" in x]
+        assert stmts == [
+            "ALTER TABLE groups ADD COLUMN IF NOT EXISTS scope_printer_ids JSON",
+            "ALTER TABLE groups ADD COLUMN IF NOT EXISTS scope_locations JSON",
+            "ALTER TABLE auth_ephemeral_tokens ADD COLUMN IF NOT EXISTS scope_user_id INTEGER",
+        ]
 
     async def test_upgrade_leaves_every_group_unscoped(self, legacy_engine):
         from backend.app.core.database import run_migrations
