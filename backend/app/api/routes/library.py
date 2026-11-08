@@ -1985,6 +1985,11 @@ async def upload_file(
     file: UploadFile = File(...),
     folder_id: int | None = None,
     generate_stl_thumbnails: bool = Query(default=True),
+    reuse_duplicate: bool = Query(
+        default=False,
+        description="When the library already has a file with the same content, answer that file "
+        "(reused: true) and keep no second copy",
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
 ):
@@ -2040,6 +2045,29 @@ async def upload_file(
             select(LibraryFile.id).where(LibraryFile.file_hash == file_hash, LibraryFile.deleted_at.is_(None)).limit(1)
         )
         duplicate_of = dup_result.scalar()
+
+        if reuse_duplicate and duplicate_of is not None:
+            existing = await db.get(LibraryFile, duplicate_of)
+            if existing is not None and (
+                current_user is None
+                or existing.created_by_id == current_user.id
+                or current_user.has_permission(Permission.LIBRARY_READ_ALL.value)
+            ):
+                # Same content already stored: drop the copy just written and answer the stored file.
+                try:
+                    file_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Could not remove duplicate upload %s", file_path)
+                return FileUploadResponse(
+                    id=existing.id,
+                    filename=existing.filename,
+                    file_type=existing.file_type,
+                    file_size=existing.file_size,
+                    thumbnail_path=existing.thumbnail_path,
+                    duplicate_of=existing.id,
+                    metadata=existing.file_metadata,
+                    reused=True,
+                )
 
         # Extract metadata and thumbnail
         metadata = {}

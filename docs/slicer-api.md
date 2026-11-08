@@ -24,10 +24,10 @@ API key; no session, cookie or CSRF dance.
 | Printer list and live state | `GET /printers`, `GET /printers/{name}` | `GET /printers/` (includes `controls`), `GET /printers/{id}/status` |
 | What each printer can do | (none) | `controls` on each printer: `pause_resume_stop`, `print`, `home`, `temperature`, `gcode` |
 | Upload a sliced file | `POST /files` (multipart) | `POST /library/files` (multipart, field `file`) |
-| Skip an upload the farm already has | `GET /api/library/files` (internal), compare hashes | `GET /library/files/by-hash/{sha256}`: the stored file, or 404 |
+| Skip an upload the farm already has | `GET /api/library/files` (internal), compare hashes | `GET /library/files/by-hash/{sha256}`: the stored file, or 404; or upload with `?reuse_duplicate=true` and get the stored file back (`reused: true`) |
 | Queue a job (copies, priority, one printer or any of a model) | `POST /jobs` | `POST /queue/` with `library_file_id`, `quantity`, `priority` (0-100), and `printer_id` or `target_model` / `target_location` |
 | Job status | `GET /jobs/{id}` | `GET /queue/{id}` |
-| Pause, resume, cancel a job | `POST /jobs/{id}/{action}` | `POST /printers/{id}/print/pause`, `.../resume`; `POST /queue/{id}/cancel` (not started) or `POST /queue/{id}/stop` (printing) |
+| Pause, resume, cancel a job | `POST /jobs/{id}/{action}` | `POST /printers/{id}/print/pause`, `.../resume`; `POST /queue/{id}/cancel` with an optional `{"reason", "by"}` (not started) or `POST /queue/{id}/stop` (printing) |
 | Printer commands (set ready, home, temperatures, light) | `POST /printers/{name}/commands` | `POST /printers/{id}/clear-plate`, `/home-axes`, `/temperature/nozzle`, `/temperature/bed`, `/chamber-light`; check `controls` first |
 | The farm queue | `GET /api/queue` (internal) | `GET /queue/` |
 | Reorder | `POST /api/queue/reorder` (internal) | `POST /queue/reorder` with `{"items": [{"id", "position"}]}` |
@@ -42,14 +42,19 @@ API key; no session, cookie or CSRF dance.
 | Finished, failed, cancelled events | polling `GET /jobs/{id}` | polling `GET /queue/{id}`, or a webhook notification provider |
 | Alarms | (none) | `GET /alarms`, `GET /alarms/summary` (`docs/alarm-feed.md`) |
 
-Not covered yet, tracked in the farm-parity backlog:
+Two Watchtower needs map differently:
 
-- Recolouring a manually tracked spool to the G-code colour when the material
-  already matches (Watchtower `PUT /api/filament/assignment`). Engine side of
-  issue #52.
-- Setting a printer's nozzle size from the slicer (Watchtower
-  `POST /api/printer/update`). The engine records nozzles per printer
-  (`printer_nozzles`); a write route for the plugin is still to do.
+- **Setting a printer's nozzle size from the slicer** (Watchtower
+  `POST /api/printer/update`, which rewrites the whole printer record):
+  `PUT /printers/{id}/nozzles/{extruder_index}` with
+  `{"diameter_mm", "nozzle_type", "volume_type"}` sets one extruder;
+  `GET /printers/{id}/nozzles` reads them all.
+- **Recolouring a manually tracked spool so a job is not held** (Watchtower
+  `PUT /api/filament/assignment`): not needed. Watchtower holds a job until the
+  loaded colour matches; the engine's dispatcher holds only on material type
+  (`missing filament: <type>`), and uses colour just to prefer the printer whose
+  slots match best. A slicer that still wants to correct a spool's colour edits
+  the spool in the inventory (`PATCH /inventory/spools/{id}`).
 
 ## POST /queue/preflight
 
