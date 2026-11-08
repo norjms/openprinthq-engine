@@ -535,6 +535,8 @@ export default {
       typeObico: 'Obico',
       typeElegoo: 'Elegoo (SDCP)',
       typeElegooCc2: 'Elegoo Centauri Carbon 2',
+      typeAnycubic: 'Anycubic Kobra (LAN)',
+      anycubicLanHelp: 'Önce yazıcıda LAN modunu açın. OpenPrintHQ yazıcının yerel kimlik bilgilerini kendisi alır; başka bir şey gerekmez.',
       elegooAccessCode: 'Erişim kodu (isteğe bağlı)',
       elegooAccessCodeHelp: 'Yalnızca yazıcıda bir erişim kodu ayarladıysanız. Önce yazıcıda Yalnızca LAN modunu açın.',
       obicoApiKey: 'Obico API anahtarı',

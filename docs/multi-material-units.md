@@ -7,6 +7,7 @@ OpenPrintHQ tracks each slot of four non-Bambu multi-material units:
 | Creality Filament System (CFS) | K2, K2 Plus, K2 Pro, K1 / K1C / K1 Max with the CFS upgrade | `klipper` (Moonraker) |
 | QIDI Box | QIDI Plus4, Q2, Max4 | `klipper` (Moonraker) |
 | Elegoo CANVAS | Centauri Carbon (SDCP), Centauri Carbon 2 | `elegoo`, `elegoo_cc2` (see `docs/elegoo-printers.md`) |
+| Anycubic ACE Pro | Kobra 3, Kobra 3 Max, Kobra 3 V2, Kobra S1, Kobra S1 Max | `anycubic` (see `docs/anycubic-printers.md`) |
 
 > **Untested on hardware.** None of these units has been run against
 > OpenPrintHQ: the project owns none of them. Everything below is built from
@@ -102,6 +103,7 @@ How the remap reaches each printer:
 |------|-----|-------|
 | CFS | `BOX_MODIFY_TN T<tool>=T<slot>` for every tool the job uses (slots named `T1A`..`T4D`), then `SDCARD_PRINT_FILE`, in one G-code script | The firmware keeps the table after the job, so every tool is written (identity for the ones that stay) to clear an earlier remap. A job later started from the printer's screen uses the last table written. |
 | QIDI Box | `SAVE_VARIABLE VARIABLE=value_t<N> VALUE='"slot<M>"'` per tool, then `SDCARD_PRINT_FILE`, in one script | Same persistence note: `value_t<N>` is the box's own tool map. |
+| ACE Pro | `ams_settings.ams_box_mapping` in the MQTT start command: `{"paint_index", "ams_index", "paint_color", "ams_color", "material_type"}` per remapped filament | Per job. Without matches no `ams_settings` is sent and the printer maps itself. |
 | CANVAS | `slot_map` in the start command (SDCP Cmd 128, CC2 method 1020): `{"t", "canvas_id", "tray_id"}` per remapped tool | Per job, nothing persists. Tools without a tray are left out and the printer chooses. |
 
 Material type is the only reason the dispatcher holds a job. Colour never holds
@@ -125,6 +127,12 @@ Read with SDCP Cmd 324 or CC2 method 2005 (`canvas_info.canvas_list[].tray_list[
 `filament_type`, `filament_color`, `filament_name`, `brand`, nozzle range,
 `status` 0 empty / 1 loaded / 2 feeding). Details in `docs/elegoo-printers.md`.
 
+### Anycubic ACE Pro
+
+`multiColorBox` reports (`multi_color_box[].slots[]`: `type`, `color` [r, g, b],
+`status` 5 loaded / 4 ready, `consumables_percent`), merged by box and slot,
+polled with `getInfo`. Details in `docs/anycubic-printers.md`.
+
 ## Sources
 
 - HelixScreen (GPL-3.0), github.com/prestonbrown/helixscreen:
@@ -140,6 +148,8 @@ Read with SDCP Cmd 324 or CC2 method 2005 (`canvas_info.canvas_list[].tray_list[
   states and colour encoding.
 - Elegoo CANVAS: the SDCP v3 specification, Elegoo's elegoo-link SDK
   (Apache-2.0) and elegoo-homeassistant (MIT); see `docs/elegoo-printers.md`.
+- Anycubic ACE: kobra-connect (Apache-2.0), anycubic_ha_local (AGPL-3.0) and
+  Rinkhals; see `docs/anycubic-printers.md`.
 - QIDI's Klipper and Moonraker forks, github.com/QIDITECH, and the community
   Box firmware reimplementation in github.com/qidi-community/Plus4-Wiki.
 

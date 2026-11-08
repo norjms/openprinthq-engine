@@ -7093,6 +7093,7 @@ export function AddPrinterModal({
                   { ct: 'obico', label: t('printers.modal.typeObico'), patch: { connection_type: 'obico' as const, model: '' } },
                   { ct: 'elegoo', label: t('printers.modal.typeElegoo'), patch: { connection_type: 'elegoo' as const, model: '', moonraker_port: 3030 } },
                   { ct: 'elegoo_cc2', label: t('printers.modal.typeElegooCc2'), patch: { connection_type: 'elegoo_cc2' as const, model: '', moonraker_port: 1883 } },
+                  { ct: 'anycubic', label: t('printers.modal.typeAnycubic'), patch: { connection_type: 'anycubic' as const, model: '', moonraker_port: 80 } },
                 ] as const).map(({ ct, label, patch }) => (
                   <button
                     key={ct}
@@ -7186,6 +7187,9 @@ export function AddPrinterModal({
                 <UntestedHardwareBadge />
                 <span>{t('printers.materialUnit.untestedHelp')}</span>
               </div>
+            )}
+            {form.connection_type === 'anycubic' && (
+              <p className="text-xs text-bambu-gray">{t('printers.modal.anycubicLanHelp')}</p>
             )}
             {isElegooCc2 && (
               <div>

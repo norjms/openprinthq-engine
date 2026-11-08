@@ -3365,6 +3365,68 @@ class PrintScheduler:
             return
         logger.info("Queue item %s: %s print started on %s (%s)", item.id, label, printer.name, remote_name)
 
+    async def _start_print_anycubic(self, db: AsyncSession, item: PrintQueueItem, printer: Printer):
+        """Dispatch a queued .gcode to an Anycubic Kobra in LAN mode.
+
+        The file goes up through the printer's OctoPrint-compatible upload
+        (port 80 on stock firmware, without auto-print), then the job starts
+        over MQTT with the ACE slot remap (#52) as ``ams_settings``. Untested
+        on hardware.
+        """
+        from backend.app.services.octoprint import octoprint_files
+
+        def _fail(msg: str):
+            item.status = "failed"
+            item.error_message = msg
+            item.completed_at = datetime.now(timezone.utc)
+
+        if not item.library_file_id:
+            _fail("Anycubic printers can only print library .gcode files")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+        result = await db.execute(LibraryFile.active().where(LibraryFile.id == item.library_file_id))
+        library_file = result.scalar_one_or_none()
+        if not library_file:
+            _fail("Library file not found")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+        lib_path = Path(library_file.file_path)
+        file_path = lib_path if lib_path.is_absolute() else settings.base_dir / library_file.file_path
+        filename = library_file.filename
+        if not filename.lower().endswith(".gcode"):
+            _fail("Anycubic printers can only print plain .gcode files")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        remote_name = Path(filename).name
+        port = printer.moonraker_port if printer.moonraker_port not in (None, 7125) else 80
+        try:
+            await octoprint_files.upload_gcode(
+                printer.ip_address, port, str(file_path), remote_name=remote_name, start_print=False
+            )
+        except Exception as e:
+            logger.error("Queue item %s: Anycubic upload failed: %s", item.id, e)
+            _fail(f"Failed to upload to the Anycubic printer: {e}")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+
+        await self._propagate_owner_to_printer_manager(db, item)
+        slot_mapping = await self._external_slot_mapping(item, file_path)
+        item.status = "printing"
+        item.started_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        if not printer_manager.start_print(item.printer_id, remote_name, ams_mapping=slot_mapping):
+            _fail("Failed to start print on the Anycubic printer")
+            await db.commit()
+            await self._power_off_if_needed(db, item)
+            return
+        logger.info("Queue item %s: Anycubic print started on %s (%s)", item.id, printer.name, remote_name)
+
     async def _start_print_octoprint(self, db: AsyncSession, item: PrintQueueItem, printer: Printer):
         """Dispatch a queued print to an OctoPrint / PrusaLink printer (live-only).
 
@@ -3822,6 +3884,7 @@ class PrintScheduler:
         # fully separate from the Bambu FTP/3MF/AMS/archive flow below (which
         # can't apply — .gcode isn't a 3MF, there's no AMS, upload is HTTP).
         from backend.app.services.printer_capabilities import (
+            TRANSPORT_ANYCUBIC,
             TRANSPORT_DUET,
             TRANSPORT_ELEGOO,
             TRANSPORT_ELEGOO_CC2,
@@ -3837,6 +3900,9 @@ class PrintScheduler:
         transport = transport_of(printer)
         if transport in (TRANSPORT_ELEGOO, TRANSPORT_ELEGOO_CC2):
             await self._start_print_elegoo(db, item, printer, cc2=transport == TRANSPORT_ELEGOO_CC2)
+            return
+        if transport == TRANSPORT_ANYCUBIC:
+            await self._start_print_anycubic(db, item, printer)
             return
         if transport == TRANSPORT_MOONRAKER:
             await self._start_print_klipper(db, item, printer)
