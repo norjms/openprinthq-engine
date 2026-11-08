@@ -2,8 +2,8 @@
 
 One list of the problems every printer is reporting, whatever the transport:
 
-- ``bambu``: HMS codes, severity fatal, serious or common (info is left out),
-  described from the bundled HMS catalog;
+- ``bambu``: HMS codes, severity fatal, serious or common (info and Bambu's
+  internal codes are left out), described from the bundled HMS catalog;
 - ``klipper``: a print that ended in error with Klipper's message, and a Klippy
   shutdown or disconnect;
 - ``prusalink``: ATTENTION (filament runout, MMU, a detected crash: the printer
@@ -39,7 +39,8 @@ from backend.app.models.printer_alarm import PrinterAlarm
 logger = logging.getLogger(__name__)
 
 SEVERITIES = ("fatal", "serious", "warning")
-# Bambu HMS severity: 1 fatal, 2 serious, 3 common, 4 info.
+# Bambu HMS severity: 1 fatal, 2 serious, 3 common, 4 info (the message level
+# bambu_mqtt.hms_level() reads from the high half of an hms[] code).
 _HMS_SEVERITY = {1: "fatal", 2: "serious", 3: "warning"}
 # HMS codes that are not problems (the printer reports its own cancel as one).
 HMS_IGNORE = frozenset({"0500_400E"})
@@ -95,7 +96,7 @@ def hms_short_code(err) -> str:
 
 
 def _hms_alarms(state) -> list[Alarm]:
-    from backend.app.services.hms_errors import get_error_description
+    from backend.app.services.hms_errors import get_error_description, is_internal_code
 
     out: dict[str, Alarm] = {}
     for err in getattr(state, "hms_errors", None) or []:
@@ -108,7 +109,11 @@ def _hms_alarms(state) -> list[Alarm]:
             continue
         if short in HMS_IGNORE:
             continue
-        text = get_error_description(short) or getattr(err, "message", "") or f"HMS {short}"
+        full_code = getattr(err, "full_code", None) or None
+        # Internal codes (no published text) are not shown by Bambu Studio either.
+        if is_internal_code(full_code):
+            continue
+        text = get_error_description(short, full_code) or getattr(err, "message", "") or f"HMS {short}"
         prev = out.get(short)
         if prev is None or SEVERITIES.index(severity) < SEVERITIES.index(prev.severity):
             out[short] = Alarm("bambu", short, severity, text)
