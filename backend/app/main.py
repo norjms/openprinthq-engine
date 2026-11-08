@@ -29,6 +29,7 @@ from backend.app.api.routes import (
     camera,
     camera_webrtc,
     camwall,
+    chat_agent,
     cloud,
     discovery,
     ejection_profiles,
@@ -6732,6 +6733,11 @@ async def lifespan(app: FastAPI):
     await local_backup_service.start_scheduler()
     await obico_detection_service.start()
 
+    # Chat agent (Slack / Discord). Starts nothing unless configured.
+    from backend.app.services.chat_agent.manager import chat_agent_manager
+
+    await chat_agent_manager.start()
+
     # Start the library trash sweeper (#1008)
     await library_trash_service.start_scheduler()
 
@@ -6795,6 +6801,12 @@ async def lifespan(app: FastAPI):
     library_trash_service.stop_scheduler()
     archive_purge_service.stop_scheduler()
     obico_detection_service.stop()
+    try:
+        from backend.app.services.chat_agent.manager import chat_agent_manager
+
+        await chat_agent_manager.stop()
+    except Exception as e:  # noqa: BLE001 - shutdown continues
+        logging.debug("chat agent stop failed: %s", e)
     stop_ams_history_recording()
     stop_printer_sensor_history_recording()
     stop_runtime_tracking()
@@ -7286,6 +7298,7 @@ _PRINTER_SCOPE_DEPS = [Depends(printer_scope_guard)]
 
 app.include_router(auth.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
 app.include_router(audit_log.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(chat_agent.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
 app.include_router(mfa.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
 app.include_router(bug_report.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
 app.include_router(users.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
