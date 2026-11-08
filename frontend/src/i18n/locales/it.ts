@@ -1,6 +1,27 @@
 export default {
   // Navigation
+  alarms: {
+    title: 'Allarmi',
+    subtitle: 'Ciò che ogni stampante segnala in questo momento. Un allarme scompare da solo quando la stampante smette di segnalarlo; confermarlo lo segna come visto.',
+    includeCleared: 'Includi risolti',
+    allPrinters: 'Tutte le stampanti',
+    acknowledgeAll: 'Conferma tutti su questa stampante',
+    acknowledge: 'Conferma',
+    acknowledged: 'Confermato',
+    loadFailed: 'Impossibile caricare gli allarmi',
+    none: 'Nessuna stampante segnala problemi.',
+    noneRecorded: 'Nessun allarme registrato.',
+    since: 'Da {{when}}',
+    clearedAt: 'risolto {{when}}',
+    seenBy: 'Visto da {{name}}',
+    severity: {
+      fatal: 'Critico',
+      serious: 'Grave',
+      warning: 'Avviso',
+    },
+  },
   nav: {
+    alarms: 'Allarmi',
     printers: 'Stampanti',
     archives: 'Archivi',
     queue: 'Coda di stampa',

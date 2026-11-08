@@ -1,6 +1,27 @@
 export default {
   // Navigation
+  alarms: {
+    title: 'Alarms',
+    subtitle: 'What every printer is reporting right now. An alarm clears by itself when the printer stops reporting it; acknowledging marks it seen.',
+    includeCleared: 'Include cleared',
+    allPrinters: 'All printers',
+    acknowledgeAll: 'Acknowledge all on this printer',
+    acknowledge: 'Acknowledge',
+    acknowledged: 'Acknowledged',
+    loadFailed: 'Could not load the alarms',
+    none: 'No printer is reporting a problem.',
+    noneRecorded: 'No alarms recorded.',
+    since: 'Since {{when}}',
+    clearedAt: 'cleared {{when}}',
+    seenBy: 'Seen by {{name}}',
+    severity: {
+      fatal: 'Fatal',
+      serious: 'Serious',
+      warning: 'Warning',
+    },
+  },
   nav: {
+    alarms: 'Alarms',
     printers: 'Printers',
     archives: 'Archives',
     queue: 'Print Queue',

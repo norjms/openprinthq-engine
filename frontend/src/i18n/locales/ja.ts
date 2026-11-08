@@ -1,6 +1,27 @@
 export default {
   // Navigation
+  alarms: {
+    title: 'アラーム',
+    subtitle: '各プリンターが現在報告している問題。プリンターが報告をやめると自動的に解除されます。確認すると既読になります。',
+    includeCleared: '解除済みを含める',
+    allPrinters: 'すべてのプリンター',
+    acknowledgeAll: 'このプリンターのすべてを確認',
+    acknowledge: '確認',
+    acknowledged: '確認しました',
+    loadFailed: 'アラームを読み込めませんでした',
+    none: '問題を報告しているプリンターはありません。',
+    noneRecorded: '記録されたアラームはありません。',
+    since: '{{when}}から',
+    clearedAt: '{{when}}に解除',
+    seenBy: '{{name}}が確認',
+    severity: {
+      fatal: '致命的',
+      serious: '重大',
+      warning: '警告',
+    },
+  },
   nav: {
+    alarms: 'アラーム',
     printers: 'プリンター',
     archives: 'アーカイブ',
     queue: '印刷キュー',

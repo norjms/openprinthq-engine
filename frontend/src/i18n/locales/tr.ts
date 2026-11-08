@@ -1,6 +1,27 @@
 export default {
   // Navigasyon
+  alarms: {
+    title: 'Alarmlar',
+    subtitle: 'Her yazıcının şu anda bildirdiği sorunlar. Yazıcı bildirmeyi bıraktığında alarm kendiliğinden kalkar; onaylamak görüldü olarak işaretler.',
+    includeCleared: 'Kalkanları göster',
+    allPrinters: 'Tüm yazıcılar',
+    acknowledgeAll: 'Bu yazıcıdakilerin tümünü onayla',
+    acknowledge: 'Onayla',
+    acknowledged: 'Onaylandı',
+    loadFailed: 'Alarmlar yüklenemedi',
+    none: 'Hiçbir yazıcı sorun bildirmiyor.',
+    noneRecorded: 'Kayıtlı alarm yok.',
+    since: '{{when}} itibarıyla',
+    clearedAt: '{{when}} kalktı',
+    seenBy: '{{name}} gördü',
+    severity: {
+      fatal: 'Kritik',
+      serious: 'Ciddi',
+      warning: 'Uyarı',
+    },
+  },
   nav: {
+    alarms: 'Alarmlar',
     printers: 'Yazıcılar',
     archives: 'Arşivler',
     queue: 'Baskı Kuyruğu',

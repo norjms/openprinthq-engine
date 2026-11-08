@@ -1,6 +1,27 @@
 export default {
   // Navigation
+  alarms: {
+    title: '警报',
+    subtitle: '每台打印机当前报告的问题。打印机不再报告时警报会自动清除；确认会将其标记为已查看。',
+    includeCleared: '包括已清除',
+    allPrinters: '所有打印机',
+    acknowledgeAll: '确认此打印机的全部警报',
+    acknowledge: '确认',
+    acknowledged: '已确认',
+    loadFailed: '无法加载警报',
+    none: '没有打印机报告问题。',
+    noneRecorded: '没有警报记录。',
+    since: '自{{when}}',
+    clearedAt: '{{when}}已清除',
+    seenBy: '{{name}}已查看',
+    severity: {
+      fatal: '致命',
+      serious: '严重',
+      warning: '警告',
+    },
+  },
   nav: {
+    alarms: '警报',
     printers: '打印机',
     archives: '归档',
     queue: '打印队列',
