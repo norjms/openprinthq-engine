@@ -18,6 +18,7 @@ import { SlicerPipelinesPanel } from '../components/SlicerPipelinesPanel';
 import { CameraTokensSection } from './CameraTokensPage';
 import { Collapsible } from '../components/Collapsible';
 import { Button } from '../components/Button';
+import { WebRtcCameraSettings } from '../components/WebRtcCameraSettings';
 import { SmartPlugCard } from '../components/SmartPlugCard';
 import { AddSmartPlugModal } from '../components/AddSmartPlugModal';
 import { NotificationProviderCard } from '../components/NotificationProviderCard';
@@ -927,7 +928,7 @@ export function SettingsPage() {
   });
 
   const updatePrinterMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: Partial<{ external_camera_url: string | null; external_camera_type: string | null; external_camera_enabled: boolean; external_camera_snapshot_url: string | null; camera_rotation: number }> }) =>
+    mutationFn: ({ id, data }: { id: number; data: Partial<{ external_camera_url: string | null; external_camera_type: string | null; external_camera_enabled: boolean; external_camera_snapshot_url: string | null; camera_webrtc_url: string | null; go2rtc_url: string; go2rtc_stream: string; camera_rotation: number }> }) =>
       api.updatePrinter(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printers'] });
@@ -1239,6 +1240,26 @@ export function SettingsPage() {
         data: { external_camera_snapshot_url: url || null }
       });
     }, 800);
+  };
+
+  const handleWebrtcUrlSave = (printerId: number, url: string | null) => {
+    updatePrinterMutation.mutate({ id: printerId, data: { camera_webrtc_url: url } });
+  };
+
+  // go2rtc base + stream name expand server-side into the MJPEG, snapshot and
+  // WHEP URLs (#56). The URL inputs above keep local drafts, so refresh them
+  // from the saved printer rather than leaving the old values on screen.
+  const handleApplyGo2rtc = async (printerId: number, baseUrl: string, stream: string) => {
+    try {
+      const updated = await updatePrinterMutation.mutateAsync({
+        id: printerId,
+        data: { go2rtc_url: baseUrl, go2rtc_stream: stream },
+      });
+      setLocalCameraUrls(prev => ({ ...prev, [printerId]: updated.external_camera_url ?? '' }));
+      setLocalSnapshotUrls(prev => ({ ...prev, [printerId]: updated.external_camera_snapshot_url ?? '' }));
+    } catch {
+      // onError already showed the toast
+    }
   };
 
   const handleUpdatePrinterCamera = (printerId: number, updates: { type?: string; enabled?: boolean; rotation?: number }) => {
@@ -2004,6 +2025,14 @@ export function SettingsPage() {
                             <div className="w-9 h-5 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-bambu-green"></div>
                           </label>
                         </div>
+
+                        <WebRtcCameraSettings
+                          printerId={printer.id}
+                          webrtcUrl={printer.camera_webrtc_url}
+                          disabled={updatePrinterMutation.isPending}
+                          onSaveUrl={handleWebrtcUrlSave}
+                          onApplyGo2rtc={handleApplyGo2rtc}
+                        />
 
                         {printer.external_camera_enabled && (
                           <div className="space-y-2 mt-2">

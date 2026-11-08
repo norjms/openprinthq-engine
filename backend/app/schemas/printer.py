@@ -51,7 +51,30 @@ class PrinterBase(BaseModel):
     external_camera_type: str | None = None  # "mjpeg", "rtsp", "snapshot", "usb"
     external_camera_enabled: bool = False
     external_camera_snapshot_url: str | None = None  # Optional single-frame override; #1177
+    camera_webrtc_url: str | None = None  # WHEP endpoint for browser playback; #56
     camera_rotation: int = 0  # 0, 90, 180, 270 degrees
+
+
+def _validate_webrtc_url(value: str | None) -> str | None:
+    """WHEP URLs follow the shared camera URL rules (http/https, no metadata or loopback hosts)."""
+    if value is None or not value.strip():
+        return None
+    from backend.app.services.webrtc_camera import sanitize_whep_url
+
+    safe = sanitize_whep_url(value)
+    if not safe:
+        raise ValueError("camera_webrtc_url must be an http(s) URL on an allowed host")
+    return safe
+
+
+def _validate_go2rtc_pair(base: str | None, stream: str | None) -> None:
+    if not base and not stream:
+        return
+    if not base or not stream:
+        raise ValueError("go2rtc_url and go2rtc_stream must be given together")
+    from backend.app.services.webrtc_camera import derive_go2rtc_urls
+
+    derive_go2rtc_urls(base, stream)  # raises ValueError with the reason
 
 
 class PrinterCreate(PrinterBase):
@@ -70,6 +93,19 @@ class PrinterCreate(PrinterBase):
     # succeed from a cloud-hosted engine. The connection is validated once the
     # route is active. Direct/local adds keep the pre-flight (typo protection).
     defer_connection_test: bool = Field(default=False)
+    # Write-only go2rtc convenience (#56), see PrinterUpdate.
+    go2rtc_url: str | None = Field(default=None, max_length=400)
+    go2rtc_stream: str | None = Field(default=None, max_length=100)
+
+    @field_validator("camera_webrtc_url")
+    @classmethod
+    def _check_webrtc_url(cls, v: str | None) -> str | None:
+        return _validate_webrtc_url(v)
+
+    @model_validator(mode="after")
+    def _check_go2rtc(self) -> "PrinterCreate":
+        _validate_go2rtc_pair(self.go2rtc_url, self.go2rtc_stream)
+        return self
 
     @model_validator(mode="after")
     def _check_per_type_requirements(self) -> "PrinterCreate":
@@ -122,6 +158,11 @@ class PrinterUpdate(BaseModel):
     external_camera_type: str | None = None
     external_camera_enabled: bool | None = None
     external_camera_snapshot_url: str | None = None  # #1177
+    camera_webrtc_url: str | None = None  # #56
+    # Write-only go2rtc convenience (#56): base URL + stream name, expanded into
+    # the MJPEG, snapshot and WHEP URLs above. Never stored or returned.
+    go2rtc_url: str | None = Field(default=None, max_length=400)
+    go2rtc_stream: str | None = Field(default=None, max_length=100)
     camera_rotation: int | None = None  # 0, 90, 180, 270 degrees
     plate_detection_enabled: bool | None = None
     plate_detection_roi: PlateDetectionROI | None = None
@@ -131,6 +172,16 @@ class PrinterUpdate(BaseModel):
     show_bed_ejection: bool | None = None
     auto_eject: bool | None = None
     ejection_profile_id: int | None = None
+
+    @field_validator("camera_webrtc_url")
+    @classmethod
+    def _check_webrtc_url(cls, v: str | None) -> str | None:
+        return _validate_webrtc_url(v)
+
+    @model_validator(mode="after")
+    def _check_go2rtc(self) -> "PrinterUpdate":
+        _validate_go2rtc_pair(self.go2rtc_url, self.go2rtc_stream)
+        return self
 
 
 def _controls_of(printer) -> dict[str, bool]:
@@ -152,6 +203,7 @@ class PrinterResponse(PrinterBase):
     external_camera_type: str | None = None
     external_camera_enabled: bool = False
     external_camera_snapshot_url: str | None = None  # #1177
+    camera_webrtc_url: str | None = None  # #56
     camera_rotation: int = 0  # 0, 90, 180, 270 degrees
     plate_detection_enabled: bool = False
     plate_detection_roi: PlateDetectionROI | None = None
@@ -199,6 +251,7 @@ class PrinterResponse(PrinterBase):
             "external_camera_type": printer.external_camera_type,
             "external_camera_enabled": printer.external_camera_enabled,
             "external_camera_snapshot_url": printer.external_camera_snapshot_url,
+            "camera_webrtc_url": getattr(printer, "camera_webrtc_url", None),
             "camera_rotation": printer.camera_rotation,
             "is_active": printer.is_active,
             "nozzle_count": printer.nozzle_count,
