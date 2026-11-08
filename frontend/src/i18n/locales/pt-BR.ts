@@ -167,6 +167,14 @@ export default {
     verifyWithCamera: "Verificar com a câmera que a mesa está vazia antes de liberar a placa",
   },
   printers: {
+    materialUnit: {
+      cfs: 'CFS',
+      qidi_box: 'QIDI Box',
+      ace: 'ACE',
+      canvas: 'CANVAS',
+      untested: 'Não testado em hardware',
+      untestedHelp: 'Criado a partir da documentação pública do protocolo e de dados capturados; ainda não verificado em uma impressora real.',
+    },
     addPreflight: {
       checking: 'Verificando a conexão...',
       warning: 'Algumas verificações de conexão falharam. Esta impressora pode aparecer como offline. Revise as verificações abaixo, corrija o que puder ou salve mesmo assim.',

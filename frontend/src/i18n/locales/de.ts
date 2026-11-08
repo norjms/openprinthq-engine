@@ -167,6 +167,14 @@ export default {
     verifyWithCamera: "Vor der Freigabe mit der Kamera prüfen, ob das Bett leer ist",
   },
   printers: {
+    materialUnit: {
+      cfs: 'CFS',
+      qidi_box: 'QIDI Box',
+      ace: 'ACE',
+      canvas: 'CANVAS',
+      untested: 'Nicht an Hardware getestet',
+      untestedHelp: 'Nach veröffentlichter Protokolldokumentation und mitgeschnittenen Daten gebaut; noch nicht an einem echten Drucker geprüft.',
+    },
     addPreflight: {
       checking: 'Verbindung wird geprüft...',
       warning: 'Einige Verbindungsprüfungen sind fehlgeschlagen. Dieser Drucker wird möglicherweise als offline angezeigt. Prüfe die Punkte unten, behebe was möglich ist, oder speichere trotzdem.',

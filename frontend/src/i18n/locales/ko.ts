@@ -162,6 +162,14 @@ export default {
     verifyWithCamera: "플레이트를 비우기 전에 카메라로 베드가 비었는지 확인",
   },
   printers: {
+    materialUnit: {
+      cfs: 'CFS',
+      qidi_box: 'QIDI Box',
+      ace: 'ACE',
+      canvas: 'CANVAS',
+      untested: '실제 하드웨어 미검증',
+      untestedHelp: '공개된 프로토콜 문서와 수집된 데이터를 바탕으로 만들었으며, 아직 실제 프린터에서 확인하지 않았습니다.',
+    },
     title: '프린터',
     addPrinter: '프린터 추가',
     editPrinter: '프린터 편집',
