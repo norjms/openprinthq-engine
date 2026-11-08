@@ -8,7 +8,9 @@ reads them as: ``attr`` = module id (bits 24-31), module number (16-23), part id
 
 An H2C printing normally reported 0C00_0100_0002_0015 (XCam module, toolhead
 camera part, level 2) and the engine graded it fatal, because it took the
-severity from the part id (attr bits 8-11) instead of the level.
+severity from the part id (attr bits 8-11) instead of the level. Bambu
+publishes that code with no text: it is internal, and Bambu Studio does not
+show it.
 """
 
 from __future__ import annotations
@@ -59,18 +61,15 @@ class TestHMSLevelDecoding:
         assert _severities(client, [{"attr": 0x07FF0100, "code": 0x8011}]) == [2]
         assert _severities(client, [{"attr": 0x07FF0100, "code": 0x00078011}]) == [2]
 
-    def test_alarm_feed_grades_the_h2c_code_serious_with_text(self, client):
+    def test_alarm_feed_leaves_out_the_internal_h2c_code(self, client):
         client._update_state({"hms": [{"attr": 0x0C000100, "code": 0x00020015}]})
+        assert [e.full_code for e in client.state.hms_errors] == ["0C00010000020015"]
         state = SimpleNamespace(connected=True, state="RUNNING", hms_errors=client.state.hms_errors, raw_data={})
-        alarms = af.active_alarms(state, "bambu")
-        assert [(a.code, a.severity) for a in alarms] == [("0C00_0015", "serious")]
-        assert alarms[0].message != "HMS 0C00_0015"
-        assert "camera" in alarms[0].message.lower()
+        assert af.active_alarms(state, "bambu") == []
 
 
 class TestCatalog:
     def test_long_code_wins_over_short(self):
-        assert "toolhead camera" in get_error_description("0C00_0015", "0C00010000020015").lower()
         assert "Laser Protective Insert" in get_error_description("0C00_0015", "0C00040000010015")
         assert "Foreign object detection" in get_error_description("0C00_0015", "0C00030000020015")
 
@@ -118,3 +117,46 @@ class TestNotificationGrade:
         from backend.app.main import _hms_severity_notifies
 
         assert _hms_severity_notifies(severity) is notify
+
+
+class TestH2CProdPayload:
+    """The four hms[] entries an H2C reported together during a normal print.
+
+    Before the level fix 0C00_0015 was graded fatal, 0700_0025 serious with no
+    text, and the two mainboard entries had "severity" 6 (part id 0x06), which
+    the feed dropped. All four are level 2. Bambu publishes text only for
+    0700220000020025 (H2C catalog, hms_en_31B.json): the other three are
+    internal codes, which Bambu Studio does not show.
+    """
+
+    ENTRIES = [
+        {"code": "0x20015", "attr": 201326848, "module": 12, "full_code": "0C00010000020015"},
+        {"code": "0x20025", "attr": 117449216, "module": 7, "full_code": "0700220000020025"},
+        {"code": "0x20005", "attr": 83887616, "module": 5, "full_code": "0500060000020005"},
+        {"code": "0x20006", "attr": 83887616, "module": 5, "full_code": "0500060000020006"},
+    ]
+
+    def test_parser_grades_all_four_serious(self, client):
+        client._update_state({"hms": [dict(e) for e in self.ENTRIES]})
+        got = [(e.full_code, e.severity, e.module) for e in client.state.hms_errors]
+        assert got == [(e["full_code"], 2, e["module"]) for e in self.ENTRIES]
+
+    def test_feed_raises_only_the_ams_feed_resistance_warning(self, client):
+        client._update_state({"hms": [dict(e) for e in self.ENTRIES]})
+        state = SimpleNamespace(connected=True, state="RUNNING", hms_errors=client.state.hms_errors, raw_data={})
+        alarms = af.active_alarms(state, "bambu")
+        assert [(a.code, a.severity) for a in alarms] == [("0700_0025", "serious")]
+        assert alarms[0].message.startswith("AMS A slot 3 feed resistance is too high.")
+
+    def test_catalog(self):
+        from backend.app.services.hms_errors import is_internal_code
+
+        assert get_error_description("0700_0025", "0700220000020025").startswith("AMS A slot 3 feed resistance")
+        assert get_error_description("0700_0025", "0703200000020025").startswith("AMS D slot 1 feed resistance")
+        # Four AMS slots share the short form, so it stays out of the short catalog.
+        assert get_error_description("0700_0025") is None
+        for code in ("0C00010000020015", "0500060000020005", "0500060000020006"):
+            assert is_internal_code(code)
+            assert get_error_description(f"{code[:4]}_{code[12:]}", code) is None
+        assert not is_internal_code("0700220000020025")
+        assert not is_internal_code(None)
