@@ -13,7 +13,7 @@ feed answers "what is each printer complaining about?" and has no hold.
 
 | Source | Alarm | Code | Severity |
 |---|---|---|---|
-| `bambu` | Any HMS code of severity fatal (1), serious (2) or common (3); info (4) is left out, and so is `0500_400E` (the printer's own cancel). Text from the bundled HMS catalog. | HMS short code, for example `0700_8010` | fatal, serious, warning |
+| `bambu` | Any HMS code of severity fatal (1), serious (2) or common (3); info (4) is left out, and so is `0500_400E` (the printer's own cancel). The severity of an `hms[]` entry is its message level, the high half of `code` (as Bambu Studio reads it; `attr` bits 8-15 are the part id). Codes Bambu publishes with no text are internal and left out, as Bambu Studio does (`HMS_INTERNAL_CODES`). Text from the bundled HMS catalog, by the 16-character long code first, since different HMS codes share a short code. | HMS short code, for example `0700_8010` | fatal, serious, warning |
 | `klipper` | Klippy shutdown or disconnect | `klippy_shutdown`, `klippy_disconnected` | fatal |
 | `klipper` | A print that ended in error, with Klipper's message (a cancel has no message and raises nothing) | `print_error` | serious |
 | `prusalink` | ATTENTION: filament runout, MMU or a detected crash; the printer waits for someone | `attention` | warning |
