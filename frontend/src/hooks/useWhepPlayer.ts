@@ -51,8 +51,8 @@ export function useWhepPlayer(endpoint: string | null, timeoutMs: number = WHEP_
     let closed = false;
     const abort = new AbortController();
     const pc = new RTCPeerConnection();
-    let timer: ReturnType<typeof setTimeout> | undefined;
 
+    // `timer` is declared below; teardown only runs after it exists.
     const teardown = () => {
       if (closed) return;
       closed = true;
@@ -76,7 +76,7 @@ export function useWhepPlayer(endpoint: string | null, timeoutMs: number = WHEP_
       teardown();
     };
 
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       if (!playingRef.current) fail({ type: 'timeout' });
     }, timeoutMs);
 
