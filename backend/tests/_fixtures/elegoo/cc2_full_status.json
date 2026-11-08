@@ -1,0 +1,24 @@
+{
+  "id": 1,
+  "method": 6000,
+  "result": {
+    "error_code": 0,
+    "machine_status": {"status": 2, "sub_status": 2075, "exception_status": [], "progress": 45},
+    "print_status": {
+      "filename": "benchy.gcode",
+      "uuid": "b52af24c-764e-4092-8a50-00e5f8f02b46",
+      "current_layer": 225,
+      "total_layer": 500,
+      "print_duration": 3600,
+      "total_duration": 8000,
+      "remaining_time_sec": 4400,
+      "progress": 45
+    },
+    "extruder": {"temperature": 215.0, "target": 220, "filament_detect_enable": 1, "filament_detected": 1},
+    "heater_bed": {"temperature": 58.5, "target": 60},
+    "ztemperature_sensor": {"temperature": 33.0, "measured_max_temperature": 0, "measured_min_temperature": 0},
+    "fans": {"fan": {"speed": 255, "rpm": 5000}, "aux_fan": {"speed": 178, "rpm": 3500}},
+    "led": {"status": 1},
+    "toolhead": {"homed_axes": "xyz"}
+  }
+}

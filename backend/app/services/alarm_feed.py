@@ -63,6 +63,8 @@ _CLASS_SOURCE = {
     "FlashForgeClient": "flashforge",
     "MKSClient": "mks",
     "SnapmakerClient": "snapmaker",
+    "ElegooSDCPClient": "elegoo",
+    "ElegooCC2Client": "elegoo_cc2",
     "ObicoClient": "obico",
 }
 
