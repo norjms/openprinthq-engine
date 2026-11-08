@@ -1661,6 +1661,133 @@ async def mark_queue_item(
     return _enrich_response(result.scalar_one())
 
 
+class PreflightDryRun(BaseModel):
+    """What a job would need, before it is queued (a slicer's pre-send check)."""
+
+    library_file_id: int | None = Field(None, description="An uploaded file; its metadata fills what is not given")
+    printer_id: int | None = Field(None, description="Check only this printer")
+    target_model: str | None = Field(None, description="Check only printers of this model")
+    target_location: str | None = None
+    filament_types: list[str] = Field(default_factory=list, description="Materials the job uses, e.g. PLA, PETG-CF")
+    nozzle_diameter: float | None = Field(None, gt=0, le=2)
+    bed_type: str | None = Field(None, description="Build plate the file was sliced for")
+    sliced_for_model: str | None = None
+    skip_filament_check: bool = False
+
+
+def _check_printers(printers, job: dict, types: list[str], sliced_for, skip_filament_check: bool) -> list[dict]:
+    """Per printer: can it take this job right now, and why not. The same checks the dispatcher makes;
+    shared by the queued-item preflight and the dry run (POST /queue/preflight)."""
+    from backend.app.services.farm_match import hardware_mismatch, normalize_plate
+    from backend.app.services.print_scheduler import scheduler
+    from backend.app.services.printer_manager import printer_manager
+
+    out = []
+    for p in printers:
+        reasons: list[str] = []
+        if getattr(p, "out_of_service", False):
+            why = getattr(p, "out_of_service_reason", None)
+            reasons.append(f"out of service: {why}" if why else "out of service")
+        if not printer_manager.is_connected(p.id):
+            reasons.append("offline")
+        else:
+            status = printer_manager.get_status(p.id)
+            reasons += [f"needs {r}" for r in hardware_mismatch(job, status, p.installed_plate)]
+        # Structured plate fields, so a client (Artisan Hub's plate reslicer) can tell a
+        # plate-only hold from the other reasons without parsing the text above.
+        plate_mismatch = bool(
+            job.get("bed_type")
+            and p.installed_plate
+            and normalize_plate(job["bed_type"]) != normalize_plate(p.installed_plate)
+        )
+        if printer_manager.is_connected(p.id):
+            if not scheduler._is_printer_idle(p.id, require_plate_clear=False):
+                reasons.append("busy")
+            elif printer_manager.is_awaiting_plate_clear(p.id):
+                reasons.append("plate not cleared")
+            if types and not skip_filament_check:
+                missing = scheduler._get_missing_filament_types(p.id, types)
+                if missing:
+                    reasons.append(f"missing filament: {', '.join(missing)}")
+        if sliced_for and not is_gcode_compatible(sliced_for, p.model):
+            reasons.append(f"file sliced for {sliced_for}")
+        out.append(
+            {
+                "printer_id": p.id,
+                "name": p.name,
+                "model": p.model,
+                "eligible": not reasons,
+                "reasons": reasons,
+                "has_plate": p.installed_plate,
+                "plate_mismatch": plate_mismatch,
+            }
+        )
+    return out
+
+
+@router.post("/preflight")
+async def preflight_dry_run(
+    body: PreflightDryRun,
+    db: AsyncSession = Depends(get_db),
+    _=RequirePermissionIfAuthEnabled(Permission.QUEUE_READ_OWN),
+):
+    """Pre-send check: which printers could take this job right now, and why each other one can't, before
+    anything is queued. Same checks and answer shape as GET /queue/{id}/preflight. Explicit fields win over
+    the uploaded file's metadata; with no printer or model, every active printer is checked."""
+    from types import SimpleNamespace
+
+    from backend.app.services.farm_match import job_hardware
+
+    library_file = None
+    if body.library_file_id is not None:
+        library_file = await db.get(LibraryFile, body.library_file_id)
+        if library_file is None or getattr(library_file, "deleted_at", None) is not None:
+            raise HTTPException(404, "Library file not found")
+
+    if body.printer_id is not None:
+        printers = list((await db.execute(select(Printer).where(Printer.id == body.printer_id))).scalars())
+        if not printers:
+            raise HTTPException(404, "Printer not found")
+        target = {"printer_id": body.printer_id}
+    elif body.target_model:
+        model = normalize_printer_model(body.target_model) or body.target_model
+        q = select(Printer).where(func.lower(Printer.model) == model.lower()).where(Printer.is_active == True)  # noqa: E712
+        if body.target_location:
+            q = q.where(Printer.location == body.target_location)
+        printers = list((await db.execute(q)).scalars())
+        target = {"model": model, "location": body.target_location}
+    else:
+        printers = list((await db.execute(select(Printer).where(Printer.is_active == True))).scalars())  # noqa: E712
+        target = {}
+
+    types = sorted({t.strip().upper() for t in body.filament_types if t and t.strip()})
+    if not types and library_file is not None:
+        lib_path = Path(library_file.file_path)
+        path = lib_path if lib_path.is_absolute() else settings.base_dir / library_file.file_path
+        if path.exists() and path.suffix.lower() == ".3mf":
+            types = sorted(set(_extract_filament_types_from_3mf(path, None) or []))
+
+    job = job_hardware(SimpleNamespace(archive=None, library_file=library_file), types)
+    if body.nozzle_diameter is not None:
+        job["nozzle_diameter"] = float(body.nozzle_diameter)
+    if body.bed_type:
+        job["bed_type"] = body.bed_type
+    sliced_for = body.sliced_for_model
+    if sliced_for is None and library_file is not None and library_file.file_metadata:
+        sliced_for = library_file.file_metadata.get("sliced_for_model")
+
+    out = _check_printers(printers, job, types, sliced_for, body.skip_filament_check)
+    return {
+        "library_file_id": body.library_file_id,
+        "job_plate": job.get("bed_type"),
+        "filament_types": types,
+        "target": target,
+        "needs": {**job, "filament_types": types, "sliced_for_model": sliced_for},
+        "eligible": [p["name"] for p in out if p["eligible"]],
+        "printers": out,
+    }
+
+
 @router.get("/{item_id}/preflight")
 async def preflight_queue_item(
     item_id: int,
@@ -1676,9 +1803,7 @@ async def preflight_queue_item(
     offline, busy, plate not cleared, missing filament, hardware (nozzle size,
     hardened nozzle for abrasive filament, build plate) or a file sliced for an
     incompatible model. Uses the same checks as the dispatcher."""
-    from backend.app.services.farm_match import hardware_mismatch, job_hardware, normalize_plate
-    from backend.app.services.print_scheduler import scheduler
-    from backend.app.services.printer_manager import printer_manager
+    from backend.app.services.farm_match import job_hardware
 
     current_user, can_read_all = auth_result
     item = (
@@ -1730,46 +1855,7 @@ async def preflight_queue_item(
     elif item.library_file and item.library_file.file_metadata:
         sliced_for = item.library_file.file_metadata.get("sliced_for_model")
 
-    out = []
-    for p in printers:
-        reasons: list[str] = []
-        if getattr(p, "out_of_service", False):
-            why = getattr(p, "out_of_service_reason", None)
-            reasons.append(f"out of service: {why}" if why else "out of service")
-        if not printer_manager.is_connected(p.id):
-            reasons.append("offline")
-        else:
-            status = printer_manager.get_status(p.id)
-            reasons += [f"needs {r}" for r in hardware_mismatch(job, status, p.installed_plate)]
-        # Structured plate fields, so a client (Artisan Hub's plate reslicer) can tell a
-        # plate-only hold from the other reasons without parsing the text above.
-        plate_mismatch = bool(
-            job.get("bed_type")
-            and p.installed_plate
-            and normalize_plate(job["bed_type"]) != normalize_plate(p.installed_plate)
-        )
-        if printer_manager.is_connected(p.id):
-            if not scheduler._is_printer_idle(p.id, require_plate_clear=False):
-                reasons.append("busy")
-            elif printer_manager.is_awaiting_plate_clear(p.id):
-                reasons.append("plate not cleared")
-            if types and not item.skip_filament_check:
-                missing = scheduler._get_missing_filament_types(p.id, types)
-                if missing:
-                    reasons.append(f"missing filament: {', '.join(missing)}")
-        if sliced_for and not is_gcode_compatible(sliced_for, p.model):
-            reasons.append(f"file sliced for {sliced_for}")
-        out.append(
-            {
-                "printer_id": p.id,
-                "name": p.name,
-                "model": p.model,
-                "eligible": not reasons,
-                "reasons": reasons,
-                "has_plate": p.installed_plate,
-                "plate_mismatch": plate_mismatch,
-            }
-        )
+    out = _check_printers(printers, job, types, sliced_for, bool(item.skip_filament_check))
     return {
         "item_id": item.id,
         "status": item.status,

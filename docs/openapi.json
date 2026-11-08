@@ -16900,6 +16900,109 @@
     "title": "PlateDetectionROI",
     "type": "object"
    },
+   "PreflightDryRun": {
+    "description": "What a job would need, before it is queued (a slicer's pre-send check).",
+    "properties": {
+     "bed_type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Build plate the file was sliced for",
+      "title": "Bed Type"
+     },
+     "filament_types": {
+      "description": "Materials the job uses, e.g. PLA, PETG-CF",
+      "items": {
+       "type": "string"
+      },
+      "title": "Filament Types",
+      "type": "array"
+     },
+     "library_file_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "An uploaded file; its metadata fills what is not given",
+      "title": "Library File Id"
+     },
+     "nozzle_diameter": {
+      "anyOf": [
+       {
+        "exclusiveMinimum": 0.0,
+        "maximum": 2.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Nozzle Diameter"
+     },
+     "printer_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Check only this printer",
+      "title": "Printer Id"
+     },
+     "skip_filament_check": {
+      "default": false,
+      "title": "Skip Filament Check",
+      "type": "boolean"
+     },
+     "sliced_for_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sliced For Model"
+     },
+     "target_location": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Target Location"
+     },
+     "target_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Check only printers of this model",
+      "title": "Target Model"
+     }
+    },
+    "title": "PreflightDryRun",
+    "type": "object"
+   },
    "PresetRef": {
     "description": "A source-aware reference to a printer / process / filament preset.\n\nThe SliceModal pulls dropdown options from four tiers (orca_cloud /\ncloud / local / standard). At submit time the client sends one of these\nper slot so the backend knows where to fetch the preset content from at\nslice time. ``cloud`` is Bambu Cloud (kept as the bare name for backward\ncompatibility with existing requests); ``orca_cloud`` is Orca Cloud.",
     "properties": {
@@ -43713,6 +43816,52 @@
     ]
    }
   },
+  "/api/v1/library/files/by-hash/{sha256}": {
+   "get": {
+    "description": "The library file with this SHA-256, if one is already stored (not in the trash). Lets a client skip\nuploading a file the library already has: hash locally, ask here, and queue the existing file on a hit.\n404 when there is none.",
+    "operationId": "library_file_by_hash",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "sha256",
+      "required": true,
+      "schema": {
+       "title": "Sha256",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "File By Hash",
+    "tags": [
+     "library"
+    ]
+   }
+  },
   "/api/v1/library/files/extract-zip": {
    "post": {
     "description": "Upload and extract a ZIP file to the library.\n\nArgs:\n    file: The ZIP file to extract\n    folder_id: Target folder ID (None = root)\n    preserve_structure: If True, recreate folder structure from ZIP; if False, extract all files flat\n    create_folder_from_zip: If True, create a folder named after the ZIP file and extract into it\n    generate_stl_thumbnails: If True, generate thumbnails for STL files",
@@ -59246,6 +59395,51 @@
      }
     ],
     "summary": "Bulk Update Queue Items",
+    "tags": [
+     "queue"
+    ]
+   }
+  },
+  "/api/v1/queue/preflight": {
+   "post": {
+    "description": "Pre-send check: which printers could take this job right now, and why each other one can't, before\nanything is queued. Same checks and answer shape as GET /queue/{id}/preflight. Explicit fields win over\nthe uploaded file's metadata; with no printer or model, every active printer is checked.",
+    "operationId": "queue_preflight_dry_run",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PreflightDryRun"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Preflight Dry Run",
     "tags": [
      "queue"
     ]
