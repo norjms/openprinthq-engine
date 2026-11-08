@@ -1948,7 +1948,7 @@ export interface CloudDevice {
 export interface SmartPlug {
   id: number;
   name: string;
-  plug_type: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest';
+  plug_type: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest' | 'kasa';
   ip_address: string | null;  // Required for Tasmota
   ha_entity_id: string | null;  // Required for Home Assistant (e.g., "switch.printer_plug", "script.turn_on_printer")
   // Home Assistant energy sensor entities (optional)
@@ -2029,7 +2029,7 @@ export interface SmartPlug {
 
 export interface SmartPlugCreate {
   name: string;
-  plug_type?: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest';
+  plug_type?: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest' | 'kasa';
   ip_address?: string | null;  // Required for Tasmota
   ha_entity_id?: string | null;  // Required for Home Assistant
   // Home Assistant energy sensor entities (optional)
@@ -2100,7 +2100,7 @@ export interface SmartPlugCreate {
 
 export interface SmartPlugUpdate {
   name?: string;
-  plug_type?: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest';
+  plug_type?: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest' | 'kasa';
   ip_address?: string | null;
   ha_entity_id?: string | null;
   // Home Assistant energy sensor entities (optional)
@@ -5109,6 +5109,12 @@ export const api = {
     request<SmartPlugStatus>(`/smart-plugs/${id}/status`),
   testSmartPlugConnection: (ip_address: string, username?: string | null, password?: string | null) =>
     request<SmartPlugTestResult>('/smart-plugs/test-connection', {
+      method: 'POST',
+      body: JSON.stringify({ ip_address, username, password }),
+    }),
+  // TP-Link Kasa: username/password are the TP-Link account, needed on newer (KLAP) firmware.
+  testKasaConnection: (ip_address: string, username?: string | null, password?: string | null) =>
+    request<SmartPlugTestResult>('/smart-plugs/test-kasa', {
       method: 'POST',
       body: JSON.stringify({ ip_address, username, password }),
     }),

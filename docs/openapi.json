@@ -23575,7 +23575,8 @@
        "tasmota",
        "homeassistant",
        "mqtt",
-       "rest"
+       "rest",
+       "kasa"
       ],
       "title": "Plug Type",
       "type": "string"
@@ -24275,7 +24276,8 @@
        "tasmota",
        "homeassistant",
        "mqtt",
-       "rest"
+       "rest",
+       "kasa"
       ],
       "title": "Plug Type",
       "type": "string"
@@ -25002,7 +25004,8 @@
          "tasmota",
          "homeassistant",
          "mqtt",
-         "rest"
+         "rest",
+         "kasa"
         ],
         "type": "string"
        },
@@ -61882,6 +61885,51 @@
      }
     ],
     "summary": "Test Connection",
+    "tags": [
+     "smart-plugs"
+    ]
+   }
+  },
+  "/api/v1/smart-plugs/test-kasa": {
+   "post": {
+    "description": "Test connection to a TP-Link Kasa plug (username/password: the TP-Link account, needed on newer firmware).",
+    "operationId": "smart_plugs_test_kasa_connection",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SmartPlugTestConnection"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Test Kasa Connection",
     "tags": [
      "smart-plugs"
     ]
