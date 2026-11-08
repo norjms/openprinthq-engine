@@ -13,6 +13,7 @@ from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.services.farm_match import (
     hardware_mismatch,
+    installed_nozzles,
     is_abrasive,
     job_hardware,
     normalize_plate,
@@ -57,6 +58,24 @@ class TestMatching:
         assert hardware_mismatch(job, _status(("", "")), None) == []
         # dual nozzle: either one may match
         assert hardware_mismatch({"nozzle_diameter": 0.6}, _status((0.4, ""), (0.6, "")), None) == []
+
+    def test_manual_nozzle_overrides_win_over_the_report(self):
+        job = {"nozzle_diameter": 0.6, "bed_type": None, "abrasive": ["PA-CF"]}
+        # A printer that reports no nozzles (PrusaLink, OctoPrint) gets its size from the override.
+        assert installed_nozzles(None, {0: (0.6, "hardened_steel")}) == [(0.6, "hardened_steel")]
+        assert hardware_mismatch(job, None, None, {0: (0.6, "hardened_steel")}) == []
+        assert "a 0.6mm nozzle (has 0.4mm)" in hardware_mismatch(job, None, None, {0: (0.4, "hardened_steel")})[0]
+        # The override replaces the reported extruder it names and leaves the other one.
+        status = _status((0.4, "stainless_steel"), (0.4, "stainless_steel"))
+        assert installed_nozzles(status, {1: (0.6, "hardened_steel")}) == [
+            (0.4, "stainless_steel"),
+            (0.6, "hardened_steel"),
+        ]
+        assert hardware_mismatch(job, status, None, {1: (0.6, "hardened_steel")}) == []
+        # "undefine" is the hardware model's unknown material: it never fails the hardened check.
+        assert installed_nozzles(None, {0: (0.4, "undefine")}) == [(0.4, "")]
+        assert hardware_mismatch({"abrasive": ["PLA-CF"]}, None, None, {0: (0.4, "undefine")}) == []
+        assert hardware_mismatch(job, status, None, None) == hardware_mismatch(job, status, None)
 
 
 class _FakeManager:
@@ -120,6 +139,26 @@ class TestSchedulerHardware:
         assert not sched._is_busy_only(reason)  # actionable, so the waiting notification fires
         pid, reason = await sched._find_idle_printer_for_model(db_session, "X1C", set())
         assert pid == a.id  # without hardware info nothing changes
+
+    async def test_manual_nozzle_override_steers_dispatch(self, db_session, monkeypatch):
+        from backend.app.services.printer_hardware import load_manual_nozzles, set_manual_nozzle
+
+        a = await _printer(db_session, "A")
+        b = await _printer(db_session, "B")
+        await db_session.commit()
+        sched = PrintScheduler()
+        # Neither printer reports its nozzles (a PrusaLink or OctoPrint printer).
+        monkeypatch.setattr("backend.app.services.print_scheduler.printer_manager", _FakeManager({}))
+        monkeypatch.setattr(sched, "_is_printer_idle", lambda pid, require_plate_clear=True: True)
+        await set_manual_nozzle(db_session, a.id, 0, 0.4, "brass", "Standard")
+        await set_manual_nozzle(db_session, b.id, 0, 0.6, "brass", "Standard")
+        job = {"nozzle_diameter": 0.6, "bed_type": None, "abrasive": []}
+        pid, reason = await sched._find_idle_printer_for_model(db_session, "X1C", set(), job_hw=job)
+        assert pid == b.id
+        pid, reason = await sched._find_idle_printer_for_model(db_session, "X1C", {b.id}, job_hw=job)
+        assert pid is None and "Hardware: A (needs a 0.6mm nozzle (has 0.4mm))" in reason
+        # The copy the dispatcher reads is rebuilt from the database on every pass.
+        assert (await load_manual_nozzles(db_session)) == {a.id: {0: (0.4, "brass")}, b.id: {0: (0.6, "brass")}}
 
 
 class TestRetry:

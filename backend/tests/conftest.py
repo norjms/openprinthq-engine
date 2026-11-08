@@ -128,6 +128,19 @@ def reset_auth_enabled_cache():
     invalidate_auth_enabled_cache()
 
 
+@pytest.fixture(autouse=True)
+def reset_manual_nozzle_cache():
+    """Drop the in-memory copy of manual nozzle overrides between tests.
+
+    Printer ids repeat across tests, so an override set in one test would
+    otherwise reach the hardware checks of a later one."""
+    from backend.app.services.printer_hardware import _MANUAL_NOZZLES
+
+    _MANUAL_NOZZLES.clear()
+    yield
+    _MANUAL_NOZZLES.clear()
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """Create an instance of the default event loop for each test session."""

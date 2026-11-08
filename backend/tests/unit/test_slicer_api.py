@@ -130,6 +130,46 @@ class TestPreflightDryRun:
         assert (await async_client.post("/api/v1/queue/preflight", json={"printer_id": 99999})).status_code == 404
         assert (await async_client.post("/api/v1/queue/preflight", json={"library_file_id": 99999})).status_code == 404
 
+    async def test_nozzle_set_through_the_api_is_checked(self, async_client, db_session, farm):
+        """A nozzle size set with PUT /printers/{id}/nozzles/{index} (a slicer's nozzle dropdown) is what the
+        pre-send check compares against, also for printers that report no nozzles themselves."""
+        p = await _printer(db_session, "MK4S", model="MK4S")
+        await db_session.commit()
+        r = await async_client.put(
+            f"/api/v1/printers/{p.id}/nozzles/0", json={"diameter_mm": 0.6, "nozzle_type": "brass"}
+        )
+        assert r.status_code == 200, r.text
+        r = await async_client.post("/api/v1/queue/preflight", json={"printer_id": p.id, "nozzle_diameter": 0.4})
+        assert r.json()["printers"][0]["reasons"] == ["needs a 0.4mm nozzle (has 0.6mm)"]
+        r = await async_client.post("/api/v1/queue/preflight", json={"printer_id": p.id, "nozzle_diameter": 0.6})
+        assert r.json()["printers"][0]["eligible"] is True
+        # Dropping the override goes back to what the printer reports (nothing here): no nozzle check.
+        assert (await async_client.delete(f"/api/v1/printers/{p.id}/nozzles/0")).status_code == 200
+        r = await async_client.post("/api/v1/queue/preflight", json={"printer_id": p.id, "nozzle_diameter": 0.4})
+        assert r.json()["printers"][0]["eligible"] is True
+
+    async def test_queued_item_preflight_sees_the_nozzle_override(self, async_client, db_session, farm):
+        from backend.app.models.printer_hardware import PrinterNozzle
+
+        p = await _printer(db_session, "Q2", model="MK4S")
+        f = LibraryFile(
+            filename="p.gcode",
+            file_path="/nonexistent/p.gcode",
+            file_type="gcode",
+            file_size=10,
+            file_metadata={"nozzle_diameter": 0.6},
+        )
+        db_session.add(f)
+        await db_session.flush()
+        # Written straight to the database, as another process would: the route reloads the overrides.
+        db_session.add(PrinterNozzle(printer_id=p.id, extruder_index=0, diameter_mm=0.4, source="manual"))
+        item = PrintQueueItem(status="pending", position=1, printer_id=p.id, library_file_id=f.id)
+        db_session.add(item)
+        await db_session.commit()
+        r = await async_client.get(f"/api/v1/queue/{item.id}/preflight")
+        assert r.status_code == 200, r.text
+        assert r.json()["printers"][0]["reasons"] == ["needs a 0.6mm nozzle (has 0.4mm)"]
+
     async def test_queued_preflight_still_answers_the_same_way(self, async_client, db_session, farm):
         p = await _printer(db_session, "Q", out_of_service=True, out_of_service_reason="nozzle swap")
         item = PrintQueueItem(status="pending", position=1, printer_id=p.id)

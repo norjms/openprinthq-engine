@@ -36,6 +36,7 @@ from backend.app.services.bambu_ftp import (
 from backend.app.services.farm_match import hardware_mismatch, job_hardware
 from backend.app.services.filament_deficit import compute_deficit_for_queue_item
 from backend.app.services.notification_service import notification_service
+from backend.app.services.printer_hardware import load_manual_nozzles, manual_nozzles
 from backend.app.services.printer_manager import (
     printer_manager,
     supports_airduct,
@@ -333,6 +334,12 @@ class PrintScheduler:
         can loop again quickly instead of sleeping the full interval (#2555).
         """
         async with async_session() as db:
+            # Manual nozzle overrides feed the hardware match below (one small query per pass).
+            try:
+                await load_manual_nozzles(db)
+            except Exception as e:  # noqa: BLE001 - never block dispatch on the override copy
+                logger.warning("Could not load manual nozzle overrides: %s", e)
+
             # Check if shortest-job-first scheduling is enabled
             sjf_enabled = await self._get_bool_setting(db, "queue_shortest_first")
 
@@ -1171,7 +1178,10 @@ class PrintScheduler:
             # job is reported as such rather than as merely busy.
             if job_hw:
                 hw_reasons = hardware_mismatch(
-                    job_hw, printer_manager.get_status(printer.id), getattr(printer, "installed_plate", None)
+                    job_hw,
+                    printer_manager.get_status(printer.id),
+                    getattr(printer, "installed_plate", None),
+                    manual_nozzles(printer.id),
                 )
                 if hw_reasons:
                     printers_hardware.append((printer.name, hw_reasons))
