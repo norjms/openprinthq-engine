@@ -319,6 +319,17 @@ async def resolve_request_scope(request: Request) -> PrinterScope | None:
 
     from backend.app.core import auth as _auth
 
+    if not request.headers.get("x-api-key") and not request.headers.get("authorization"):
+        # No header credentials: auth is disabled (no scoping), or the route
+        # authenticates with a ?token= (its checker sets the scope and runs any
+        # deferred checks), or the route's own dependency answers 401. Nothing
+        # to look up, so do not open a database session for it.
+        setattr(state, _STATE_SCOPE, None)
+        setattr(state, _STATE_USER_ID, None)
+        setattr(state, _STATE_KNOWN, False)
+        setattr(state, _STATE_RESOLVED, True)
+        return None
+
     scope: PrinterScope | None = None
     user_id: int | None = None
     # "known" is False when the request carries no usable header credentials:
