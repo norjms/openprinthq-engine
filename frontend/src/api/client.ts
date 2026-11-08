@@ -2029,7 +2029,7 @@ export interface SmartPlug {
 
 export interface SmartPlugCreate {
   name: string;
-  plug_type?: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest';
+  plug_type?: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest' | 'kasa';
   ip_address?: string | null;  // Required for Tasmota
   ha_entity_id?: string | null;  // Required for Home Assistant
   // Home Assistant energy sensor entities (optional)
@@ -2100,7 +2100,7 @@ export interface SmartPlugCreate {
 
 export interface SmartPlugUpdate {
   name?: string;
-  plug_type?: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest';
+  plug_type?: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest' | 'kasa';
   ip_address?: string | null;
   ha_entity_id?: string | null;
   // Home Assistant energy sensor entities (optional)
