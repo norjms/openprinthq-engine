@@ -21,8 +21,9 @@ import logging
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
-from backend.app.core.auth import is_auth_enabled, verify_websocket_token
+from backend.app.core.auth import is_auth_enabled, verify_websocket_token, websocket_token_scope_user_id
 from backend.app.core.database import async_session
+from backend.app.core.printer_scope import scope_for_user_id, visible_printer_ids
 from backend.app.core.websocket import ws_manager
 from backend.app.models.user import User
 from backend.app.services.printer_manager import printer_manager, printer_state_to_dict
@@ -78,6 +79,25 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(def
             await websocket.close(code=_WS_CLOSE_UNAUTHORIZED)
             return
 
+    # Per-printer scoping (#57): work out which printers this socket may hear
+    # about BEFORE it joins active_connections, so no broadcast slips through
+    # in between. None = every printer. Fail closed: if the scope cannot be
+    # resolved, refuse the connection.
+    scope_user_id: int | None = None
+    printer_visible: set[int] | None = None
+    if auth_required and token:
+        try:
+            scope_user_id = await websocket_token_scope_user_id(token)
+            if scope_user_id is not None:
+                async with async_session() as db:
+                    printer_visible = await visible_printer_ids(db, await scope_for_user_id(db, scope_user_id))
+        except Exception:  # SEC-AUTH-EXC: scope resolution failure → refuse connect (fail-closed)
+            logger.error("WebSocket printer scope resolve failed; refusing connection", exc_info=True)
+            await websocket.close(code=_WS_CLOSE_UNAUTHORIZED)
+            return
+    websocket.state.printer_scope_user_id = scope_user_id
+    websocket.state.printer_visible_ids = printer_visible
+
     # Token verified (or auth disabled); now safe to admit the connection.
     logger.info("WebSocket client connecting (principal=%s)", principal if principal else "<anonymous>")
     await ws_manager.connect(websocket)
@@ -108,6 +128,9 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(def
         # Send initial status of all printers.
         statuses = printer_manager.get_all_statuses()
         for printer_id, state in statuses.items():
+            visible = websocket.state.printer_visible_ids
+            if visible is not None and printer_id not in visible:
+                continue
             await websocket.send_json(
                 {
                     "type": "printer_status",
@@ -134,7 +157,8 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(def
             # Handle status request
             elif data.get("type") == "get_status":
                 printer_id = data.get("printer_id")
-                if printer_id:
+                visible = websocket.state.printer_visible_ids
+                if printer_id and (visible is None or printer_id in visible):
                     state = printer_manager.get_status(printer_id)
                     if state:
                         await websocket.send_json(

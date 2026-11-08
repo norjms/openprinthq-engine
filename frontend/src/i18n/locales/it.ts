@@ -3263,6 +3263,18 @@ export default {
       noResults: 'Nessun permesso corrisponde alla ricerca',
       websocketHint: "Necessario per gli aggiornamenti in tempo reale. Senza questo permesso, l'interfaccia ripiega sul polling periodico.",
     },
+    scope: {
+      title: "Accesso alle stampanti",
+      all: "Tutte le stampanti",
+      limited: "Solo stampanti e posizioni selezionate",
+      hint: "I membri di un gruppo limitato vedono solo queste stampanti. Tutte le altre sono nascoste ovunque: dashboard, coda, telecamere, allarmi, cronologia, statistiche e notifiche. Chi appartiene a più gruppi ottiene le stampanti di tutti, e qualsiasi gruppo senza limiti dà accesso all'intera farm. Gli amministratori vedono sempre tutte le stampanti.",
+      printers: "Stampanti",
+      locations: "Posizioni",
+      noPrinters: "Nessuna stampante ancora configurata.",
+      noLocations: "Nessuna stampante ha una posizione impostata.",
+      emptyWarning: "Nessuna selezione: i membri di questo gruppo non vedranno alcuna stampante.",
+      adminLocked: "Il gruppo Amministratori ha sempre accesso a tutte le stampanti.",
+    },
   },
 
   // Users management

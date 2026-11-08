@@ -1612,6 +1612,12 @@ class TestEncryptionStatusEndpoint:
         from sqlalchemy.exc import SQLAlchemyError
 
         token = await self._create_admin_and_login(async_client)
+        # Login warmed the auth-enabled cache (the printer-scope guard reads it),
+        # which would let the middleware skip its probe. Clear it so this test
+        # still exercises the probe failing closed.
+        from backend.app.core.auth import invalidate_auth_enabled_cache
+
+        invalidate_auth_enabled_cache()
 
         async def _raise(*args, **kwargs):
             raise SQLAlchemyError("simulated DB failure")

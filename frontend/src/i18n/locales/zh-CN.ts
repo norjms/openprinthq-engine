@@ -3263,6 +3263,18 @@ export default {
       noResults: '没有权限匹配您的搜索',
       websocketHint: '实时更新所需。缺少此权限时，界面将回退到定期轮询。',
     },
+    scope: {
+      title: "打印机访问",
+      all: "所有打印机",
+      limited: "仅选定的打印机和位置",
+      hint: "受限组的成员只能看到这些打印机。其他所有打印机在各处都对他们隐藏：仪表板、队列、摄像头、警报、历史、统计和通知。属于多个组的成员可使用所有这些组的打印机，任何不受限的组都会授予整个打印农场的访问权限。管理员始终可以看到所有打印机。",
+      printers: "打印机",
+      locations: "位置",
+      noPrinters: "尚未配置打印机。",
+      noLocations: "没有打印机设置了位置。",
+      emptyWarning: "未选择任何内容：此组的成员将看不到任何打印机。",
+      adminLocked: "Administrators 组始终可以访问所有打印机。",
+    },
   },
 
   // Users management

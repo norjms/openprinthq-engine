@@ -36,6 +36,7 @@ from backend.app.core.auth import (
 )
 from backend.app.core.database import async_session, get_db
 from backend.app.core.permissions import ALL_PERMISSIONS
+from backend.app.core.printer_scope import get_scope_user_id
 from backend.app.models.auth_ephemeral import AuthEphemeralToken, AuthRateLimitEvent, EventType, TokenType
 from backend.app.models.group import Group
 from backend.app.models.settings import Settings
@@ -598,6 +599,7 @@ async def login(raw_request: Request, request: LoginRequest, response: Response,
 
 @router.post("/ws-token")
 async def mint_websocket_token(
+    request: Request,
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.WEBSOCKET_CONNECT),
 ):
     """Mint a short-lived token for ``/api/v1/ws`` connections (GHSA-r2qv follow-up).
@@ -616,7 +618,9 @@ async def mint_websocket_token(
     passes via the standard allowlist (``can_read_status`` covers it).
     """
     username = current_user.username if current_user is not None else None
-    return {"token": await create_websocket_token(username)}
+    # The socket only receives events for printers in this user's scope (#57);
+    # for an API key that is the key owner.
+    return {"token": await create_websocket_token(username, await get_scope_user_id(request))}
 
 
 @router.get("/me", response_model=UserResponse)

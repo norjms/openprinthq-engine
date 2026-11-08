@@ -3263,6 +3263,18 @@ export default {
       noResults: '沒有權限匹配您的搜尋',
       websocketHint: '即時更新所需。缺少此權限時，介面將回退到定期輪詢。',
     },
+    scope: {
+      title: "印表機存取",
+      all: "所有印表機",
+      limited: "僅限選定的印表機和位置",
+      hint: "受限群組的成員只能看到這些印表機。其他所有印表機在各處都對他們隱藏：儀表板、佇列、攝影機、警報、歷史、統計和通知。屬於多個群組的成員可使用所有這些群組的印表機，任何不受限的群組都會授予整個印表機農場的存取權。管理員一律可以看到所有印表機。",
+      printers: "印表機",
+      locations: "位置",
+      noPrinters: "尚未設定印表機。",
+      noLocations: "沒有印表機設定了位置。",
+      emptyWarning: "未選擇任何項目：此群組的成員將看不到任何印表機。",
+      adminLocked: "Administrators 群組一律可以存取所有印表機。",
+    },
   },
 
   // Users management

@@ -29,6 +29,7 @@ from backend.app.core.auth import (
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import async_session, get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import PrinterScope, ensure_printer_visible, get_printer_scope
 from backend.app.core.tasks import spawn_background_task
 from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile, LibraryFileTag, LibraryFolder, LibraryMeshReport
@@ -2596,7 +2597,8 @@ def is_sliced_file(filename: str) -> bool:
 async def add_files_to_queue(
     request: AddToQueueRequest,
     db: AsyncSession = Depends(get_db),
-    _: User | None = Depends(require_permission_if_auth_enabled(Permission.QUEUE_CREATE)),
+    current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.QUEUE_CREATE)),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Add library files to the print queue.
 
@@ -2613,6 +2615,8 @@ async def add_files_to_queue(
         printer = await db.get(Printer, request.printer_id)
         if printer is None or not printer.is_active:
             raise HTTPException(status_code=404, detail="Printer not found")
+        # Per-printer scoping (#57): a hidden printer looks like a missing one.
+        await ensure_printer_visible(db, scope, request.printer_id)
 
     # Get all requested files
     result = await db.execute(LibraryFile.active().where(LibraryFile.id.in_(request.file_ids)))
@@ -2657,6 +2661,9 @@ async def add_files_to_queue(
                 library_file_id=file_id,
                 position=max_position,
                 status="pending",
+                # Record the owner so a scoped caller still sees its unassigned
+                # rows and the scheduler keeps them on its printers (#57).
+                created_by_id=current_user.id if current_user is not None else (scope.user_id if scope else None),
             )
             db.add(queue_item)
 

@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.app.core.config import settings
 from backend.app.core.database import async_session, run_with_retry
+from backend.app.core.printer_scope import visible_printer_ids_for_user_id
 from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
 from backend.app.models.archive import PrintArchive
@@ -716,6 +717,7 @@ class PrintScheduler:
                             filament_overrides=filament_overrides,
                             require_plate_clear=require_plate_clear,
                             job_hw=job_hardware(item, effective_types),
+                            allowed_ids=await visible_printer_ids_for_user_id(db, item.created_by_id),
                         )
                         # Notifications take a single "what was this aimed at"
                         # string; groups reuse the same field as models.
@@ -730,6 +732,7 @@ class PrintScheduler:
                             filament_overrides=filament_overrides,
                             require_plate_clear=require_plate_clear,
                             job_hw=job_hardware(item, effective_types),
+                            allowed_ids=await visible_printer_ids_for_user_id(db, item.created_by_id),
                         )
                         target_desc = item.target_model
 
@@ -1021,6 +1024,7 @@ class PrintScheduler:
         filament_overrides: list[dict] | None = None,
         require_plate_clear: bool = True,
         job_hw: dict | None = None,
+        allowed_ids: set[int] | None = None,
     ) -> tuple[int | None, str | None]:
         """Find an idle, connected printer matching the model with compatible filaments.
 
@@ -1055,6 +1059,10 @@ class PrintScheduler:
 
         result = await db.execute(query)
         printers = list(result.scalars().all())
+        if allowed_ids is not None:
+            # The job's creator is limited to some printers (#57): never hand
+            # their job to a printer they cannot see.
+            printers = [p for p in printers if p.id in allowed_ids]
 
         location_suffix = f" in {target_location}" if target_location else ""
         if not printers:
@@ -1079,6 +1087,7 @@ class PrintScheduler:
         filament_overrides: list[dict] | None = None,
         require_plate_clear: bool = True,
         job_hw: dict | None = None,
+        allowed_ids: set[int] | None = None,
     ) -> tuple[int | None, str | None]:
         """Find an idle, connected member of a printer group.
 
@@ -1097,7 +1106,7 @@ class PrintScheduler:
             # must not silently vanish from the operator's view if it happens.
             return None, "Target printer group no longer exists"
 
-        printers = [p for p in group.printers if p.is_active]
+        printers = [p for p in group.printers if p.is_active and (allowed_ids is None or p.id in allowed_ids)]
         label = f"printers in group '{group.name}'"
         if not printers:
             return None, f"No active {label} configured"

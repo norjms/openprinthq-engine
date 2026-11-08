@@ -10653,6 +10653,36 @@
       },
       "title": "Permissions",
       "type": "array"
+     },
+     "scope_locations": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Printer scope: printer locations (matched case-insensitively) whose printers members may see.",
+      "title": "Scope Locations"
+     },
+     "scope_printer_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Printer scope: ids of the printers members may see. Leave both scope fields null for an unscoped group (every printer). Members see the union of these printers and the printers in scope_locations; an empty list with no locations grants no printers.",
+      "title": "Scope Printer Ids"
      }
     },
     "required": [
@@ -10698,6 +10728,34 @@
       },
       "title": "Permissions",
       "type": "array"
+     },
+     "scope_locations": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Scope Locations"
+     },
+     "scope_printer_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Scope Printer Ids"
      },
      "updated_at": {
       "format": "date-time",
@@ -10768,6 +10826,34 @@
       "title": "Permissions",
       "type": "array"
      },
+     "scope_locations": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Scope Locations"
+     },
+     "scope_printer_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Scope Printer Ids"
+     },
      "updated_at": {
       "format": "date-time",
       "title": "Updated At",
@@ -10829,6 +10915,36 @@
        }
       ],
       "title": "Permissions"
+     },
+     "scope_locations": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Printer scope: printer locations (matched case-insensitively) whose printers members may see.",
+      "title": "Scope Locations"
+     },
+     "scope_printer_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Printer scope: ids of the printers members may see. Leave both scope fields null for an unscoped group (every printer). Members see the union of these printers and the printers in scope_locations; an empty list with no locations grants no printers.",
+      "title": "Scope Printer Ids"
      }
     },
     "title": "GroupUpdate",
@@ -50090,7 +50206,7 @@
   },
   "/api/v1/print-log/": {
    "delete": {
-    "description": "Clear the print log.\n\nOnly deletes log entries. Archives and queue items are never touched.",
+    "description": "Clear the print log.\n\nOnly deletes log entries. Archives and queue items are never touched. A\ncaller limited to some printers (#57) clears only those printers' entries.",
     "operationId": "print_log_clear_print_log",
     "responses": {
      "200": {
@@ -51060,7 +51176,7 @@
   },
   "/api/v1/printers/camera/stream-token": {
    "post": {
-    "description": "Create a reusable token for camera stream/snapshot access.\n\nReturns a token valid for 60 minutes that can be appended as ?token=xxx\nto camera stream/snapshot URLs loaded via <img> tags.",
+    "description": "Create a reusable token for camera stream/snapshot access.\n\nReturns a token valid for 60 minutes that can be appended as ?token=xxx\nto camera stream/snapshot URLs loaded via <img> tags. The token carries the\ncaller's printer scope (the key owner's, for an API key).",
     "operationId": "camera_create_stream_token",
     "responses": {
      "200": {

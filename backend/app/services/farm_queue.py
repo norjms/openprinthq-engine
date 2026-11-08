@@ -83,15 +83,15 @@ def _aware(d: datetime | None) -> datetime | None:
     return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
-async def queue_stats(db: AsyncSession, days: int = 30) -> dict:
+async def queue_stats(db: AsyncSession, days: int = 30, row_filter=None) -> dict:
     """Throughput, success rate, waiting and print times over the last ``days`` days,
-    overall and per printer. Counts items created in the window."""
+    overall and per printer. Counts items created in the window. ``row_filter`` is
+    an extra SQL predicate on the queue rows (a scoped caller's printer scope)."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    rows = (
-        (await db.execute(select(PrintQueueItem).where(PrintQueueItem.created_at >= since.replace(tzinfo=None))))
-        .scalars()
-        .all()
-    )
+    query = select(PrintQueueItem).where(PrintQueueItem.created_at >= since.replace(tzinfo=None))
+    if row_filter is not None:
+        query = query.where(row_filter)
+    rows = (await db.execute(query)).scalars().all()
     by_status: dict[str, int] = {}
     per_printer: dict[int, dict] = {}
     waits: list[float] = []
