@@ -42,14 +42,19 @@ API key; no session, cookie or CSRF dance.
 | Finished, failed, cancelled events | polling `GET /jobs/{id}` | polling `GET /queue/{id}`, or a webhook notification provider |
 | Alarms | (none) | `GET /alarms`, `GET /alarms/summary` (`docs/alarm-feed.md`) |
 
-Not covered yet, tracked in the farm-parity backlog:
+Two Watchtower needs map differently:
 
-- Recolouring a manually tracked spool to the G-code colour when the material
-  already matches (Watchtower `PUT /api/filament/assignment`). Engine side of
-  issue #52.
-- Setting a printer's nozzle size from the slicer (Watchtower
-  `POST /api/printer/update`). The engine records nozzles per printer
-  (`printer_nozzles`); a write route for the plugin is still to do.
+- **Setting a printer's nozzle size from the slicer** (Watchtower
+  `POST /api/printer/update`, which rewrites the whole printer record):
+  `PUT /printers/{id}/nozzles/{extruder_index}` with
+  `{"diameter_mm", "nozzle_type", "volume_type"}` sets one extruder;
+  `GET /printers/{id}/nozzles` reads them all.
+- **Recolouring a manually tracked spool so a job is not held** (Watchtower
+  `PUT /api/filament/assignment`): not needed. Watchtower holds a job until the
+  loaded colour matches; the engine's dispatcher holds only on material type
+  (`missing filament: <type>`), and uses colour just to prefer the printer whose
+  slots match best. A slicer that still wants to correct a spool's colour edits
+  the spool in the inventory (`PATCH /inventory/spools/{id}`).
 
 ## POST /queue/preflight
 
