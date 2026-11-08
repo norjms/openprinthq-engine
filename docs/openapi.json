@@ -19105,6 +19105,17 @@
       "title": "Camera Rotation",
       "type": "integer"
      },
+     "camera_webrtc_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Camera Webrtc Url"
+     },
      "connection_type": {
       "default": "bambu",
       "title": "Connection Type",
@@ -19152,6 +19163,30 @@
        }
       ],
       "title": "External Camera Url"
+     },
+     "go2rtc_stream": {
+      "anyOf": [
+       {
+        "maxLength": 100,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Go2Rtc Stream"
+     },
+     "go2rtc_url": {
+      "anyOf": [
+       {
+        "maxLength": 400,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Go2Rtc Url"
      },
      "installed_plate": {
       "anyOf": [
@@ -19715,6 +19750,17 @@
       "default": 0,
       "title": "Camera Rotation",
       "type": "integer"
+     },
+     "camera_webrtc_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Camera Webrtc Url"
      },
      "chamber_heater": {
       "default": false,
@@ -20584,6 +20630,17 @@
       ],
       "title": "Camera Rotation"
      },
+     "camera_webrtc_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Camera Webrtc Url"
+     },
      "chamber_heater": {
       "anyOf": [
        {
@@ -20661,6 +20718,30 @@
        }
       ],
       "title": "External Camera Url"
+     },
+     "go2rtc_stream": {
+      "anyOf": [
+       {
+        "maxLength": 100,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Go2Rtc Stream"
+     },
+     "go2rtc_url": {
+      "anyOf": [
+       {
+        "maxLength": 400,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Go2Rtc Url"
      },
      "installed_plate": {
       "anyOf": [
@@ -53253,6 +53334,61 @@
      }
     ],
     "summary": "Test Camera",
+    "tags": [
+     "camera"
+    ]
+   }
+  },
+  "/api/v1/printers/{printer_id}/camera/webrtc": {
+   "post": {
+    "description": "Relay a browser's WHEP SDP offer to the printer's WebRTC camera.\n\nSend the offer as the raw request body (``Content-Type: application/sdp``);\nthe SDP answer comes back the same way. Authenticated like the MJPEG stream\n(``?token=`` camera stream token when auth is enabled), so a Cam Wall kiosk\ncan use it too. Returns 404 when the printer has no WebRTC URL, 502/504 when\nthe WebRTC server fails; the player then falls back to the MJPEG stream.",
+    "operationId": "camera_camera_webrtc_offer",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "printer_id",
+      "required": true,
+      "schema": {
+       "title": "Printer Id",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "token",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Token"
+      }
+     }
+    ],
+    "responses": {
+     "201": {
+      "content": {
+       "application/sdp": {}
+      },
+      "description": "SDP answer"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Camera Webrtc Offer",
     "tags": [
      "camera"
     ]

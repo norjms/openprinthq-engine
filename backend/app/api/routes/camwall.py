@@ -56,6 +56,10 @@ async def list_camwall_printers(
             "id": printer.id,
             "name": printer.name,
             "camera_rotation": printer.camera_rotation or 0,
+            # Whether the tile should try WebRTC first (#56). A flag, not the
+            # URL: the WHEP endpoint is usually an internal address, and the
+            # kiosk negotiates through /printers/{id}/camera/webrtc anyway.
+            "webrtc": bool(printer.camera_webrtc_url),
             # Mirrors get_printer_status(): no state object at all means the
             # printer was never connected this run; a state object still has
             # to be asked whether its link is currently up.
