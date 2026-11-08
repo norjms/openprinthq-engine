@@ -39,6 +39,12 @@ class Group(Base):
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     permissions: Mapped[list[str]] = mapped_column(JSON, default=list)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Printer scope (see core/printer_scope.py). Both NULL = the group is not
+    # scoped and grants every printer (every group created before scoping
+    # existed). Either set = members see only the listed printers plus the
+    # printers whose location is listed; an empty list grants nothing.
+    scope_printer_ids: Mapped[list[int] | None] = mapped_column(JSON(none_as_null=True), nullable=True, default=None)
+    scope_locations: Mapped[list[str] | None] = mapped_column(JSON(none_as_null=True), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

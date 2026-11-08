@@ -280,4 +280,87 @@ describe('GroupEditPage', () => {
       expect(cached!.permissions).toContain('archives:read');
     });
   });
+
+  describe('printer scope', () => {
+    const scopePrinters = [
+      { id: 1, name: 'Voron', location: 'Bay 1' },
+      { id: 2, name: 'H2D', location: 'Bay 2' },
+    ];
+
+    it('sends null scope (all printers) by default', async () => {
+      let posted: Record<string, unknown> | null = null;
+      server.use(
+        http.get('/api/v1/printers/', () => HttpResponse.json(scopePrinters)),
+        http.post('/api/v1/groups/', async ({ request }) => {
+          posted = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ id: 11, ...posted, is_system: false, user_count: 0 });
+        })
+      );
+      const user = userEvent.setup();
+      render(<GroupEditPage />);
+      await waitFor(() => expect(screen.getByText('Printer access')).toBeInTheDocument());
+      await user.type(screen.getByPlaceholderText(/group name/i), 'Night shift');
+      await user.click(screen.getByText('Save'));
+      await waitFor(() => expect(posted).not.toBeNull());
+      expect(posted!.scope_printer_ids).toBeNull();
+      expect(posted!.scope_locations).toBeNull();
+    });
+
+    it('limits the group to picked printers and locations', async () => {
+      let posted: Record<string, unknown> | null = null;
+      server.use(
+        http.get('/api/v1/printers/', () => HttpResponse.json(scopePrinters)),
+        http.post('/api/v1/groups/', async ({ request }) => {
+          posted = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ id: 12, ...posted, is_system: false, user_count: 0 });
+        })
+      );
+      const user = userEvent.setup();
+      render(<GroupEditPage />);
+      await waitFor(() => expect(screen.getByText('Printer access')).toBeInTheDocument());
+      await user.click(screen.getByLabelText('Only selected printers and locations'));
+      expect(screen.getByText(/members of this group will see no printers/)).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByText('Voron')).toBeInTheDocument());
+      await user.click(screen.getByText('Voron'));
+      await user.click(screen.getByText('Bay 2'));
+      await user.type(screen.getByPlaceholderText(/group name/i), 'Bay crew');
+      await user.click(screen.getByText('Save'));
+      await waitFor(() => expect(posted).not.toBeNull());
+      expect(posted!.scope_printer_ids).toEqual([1]);
+      expect(posted!.scope_locations).toEqual(['Bay 2']);
+    });
+
+    it('loads an existing scope in edit mode', async () => {
+      server.use(
+        http.get('/api/v1/printers/', () => HttpResponse.json(scopePrinters)),
+        http.get('/api/v1/groups/:id', () =>
+          HttpResponse.json({ ...mockGroup, is_system: false, name: 'Bay crew', scope_printer_ids: [2], scope_locations: null })
+        )
+      );
+      const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
+      const { MemoryRouter, Routes, Route } = await import('react-router-dom');
+      const { AuthProvider } = await import('../../contexts/AuthContext');
+      const { ToastProvider } = await import('../../contexts/ToastContext');
+      const { ThemeProvider } = await import('../../contexts/ThemeContext');
+      const { render: rtlRender } = await import('@testing-library/react');
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      rtlRender(
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider>
+            <ThemeProvider>
+              <ToastProvider>
+                <MemoryRouter initialEntries={['/groups/5/edit']}>
+                  <Routes>
+                    <Route path="/groups/:id/edit" element={<GroupEditPage />} />
+                  </Routes>
+                </MemoryRouter>
+              </ToastProvider>
+            </ThemeProvider>
+          </AuthProvider>
+        </QueryClientProvider>
+      );
+      await waitFor(() => expect(screen.getByLabelText('Only selected printers and locations')).toBeChecked());
+      await waitFor(() => expect(screen.getByText('H2D')).toBeInTheDocument());
+    });
+  });
 });

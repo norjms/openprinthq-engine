@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import PrinterScope, apply_printer_scope, get_printer_scope, printer_resource_guard
 from backend.app.models.maintenance import MaintenanceHistory, MaintenanceType, PrinterMaintenance
 from backend.app.models.printer import Printer
 from backend.app.models.user import User
@@ -32,7 +33,18 @@ from backend.app.utils.printer_models import get_rod_type
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/maintenance", tags=["maintenance"])
+# Per-printer scoping (#57): maintenance items and log entries of printers
+# outside the caller's scope answer 404; overview and summary list only the
+# printers in scope. /maintenance/printers/{printer_id}/... is covered by the
+# app-wide printer_id guard.
+router = APIRouter(
+    prefix="/maintenance",
+    tags=["maintenance"],
+    dependencies=[
+        Depends(printer_resource_guard(PrinterMaintenance, "item_id", not_found="Maintenance item not found")),
+        Depends(printer_resource_guard(MaintenanceHistory, "entry_id", not_found="Log entry not found")),
+    ],
+)
 
 # Default maintenance types
 DEFAULT_MAINTENANCE_TYPES = [
@@ -452,11 +464,12 @@ async def get_printer_maintenance(
 async def get_all_maintenance_overview(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Get maintenance overview for all active printers."""
     await ensure_default_types(db)
 
-    result = await db.execute(select(Printer).where(Printer.is_active.is_(True)))
+    result = await db.execute(apply_printer_scope(select(Printer).where(Printer.is_active.is_(True)), scope))
     printers = result.scalars().all()
 
     overviews = []
@@ -768,11 +781,12 @@ async def delete_maintenance_log(
 async def get_maintenance_summary(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Get a summary of maintenance status across all printers."""
     await ensure_default_types(db)
 
-    result = await db.execute(select(Printer).where(Printer.is_active.is_(True)))
+    result = await db.execute(apply_printer_scope(select(Printer).where(Printer.is_active.is_(True)), scope))
     printers = result.scalars().all()
 
     total_due = 0

@@ -18,6 +18,13 @@ from backend.app.core.auth import (
 from backend.app.core.catalog_defaults import DEFAULT_COLOR_CATALOG, DEFAULT_SPOOL_CATALOG
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import (
+    PrinterScope,
+    column_in_scope,
+    ensure_printer_visible,
+    get_printer_scope,
+    visible_printer_ids,
+)
 from backend.app.core.websocket import ws_manager
 from backend.app.models.ams_label import AmsLabel
 from backend.app.models.color_catalog import ColorCatalogEntry
@@ -1850,6 +1857,7 @@ async def list_assignments(
     printer_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_VIEW_ASSIGNMENTS),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """List spool assignments, optionally filtered by printer."""
     from backend.app.services.printer_manager import printer_manager
@@ -1858,6 +1866,9 @@ async def list_assignments(
         selectinload(SpoolAssignment.spool).selectinload(Spool.k_profiles),
         selectinload(SpoolAssignment.printer),
     )
+    in_scope = column_in_scope(SpoolAssignment.printer_id, await visible_printer_ids(db, scope))
+    if in_scope is not None:
+        query = query.where(in_scope)
     if printer_id is not None:
         query = query.where(SpoolAssignment.printer_id == printer_id)
     result = await db.execute(query)
@@ -1915,9 +1926,13 @@ async def assign_spool(
     data: SpoolAssignmentCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Assign a spool to an AMS slot and auto-configure via MQTT."""
     from backend.app.services.printer_manager import printer_manager
+
+    # Per-printer scoping (#57): a hidden printer looks like a missing one.
+    await ensure_printer_visible(db, scope, data.printer_id)
 
     # 1. Validate spool exists and is not archived
     result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == data.spool_id))
@@ -2712,6 +2727,7 @@ async def create_spool_from_slot(
     req: CreateSpoolFromSlotRequest,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Explicit user action: create an inventory spool from an AMS slot's current tray data.
 
@@ -2722,6 +2738,7 @@ async def create_spool_from_slot(
     from backend.app.services.printer_manager import printer_manager
     from backend.app.services.spool_tag_matcher import auto_assign_spool, create_spool_from_tray
 
+    await ensure_printer_visible(db, scope, req.printer_id)
     state = printer_manager.get_status(req.printer_id)
     if not state or not state.raw_data:
         raise HTTPException(status_code=404, detail="Printer not connected or no state available")

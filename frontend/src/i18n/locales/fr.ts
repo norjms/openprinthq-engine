@@ -3264,6 +3264,18 @@ export default {
       noResults: 'Aucune permission ne correspond à votre recherche',
       websocketHint: "Requis pour les mises à jour en direct. Sans cette permission, l'interface bascule sur une actualisation périodique.",
     },
+    scope: {
+      title: "Accès aux imprimantes",
+      all: "Toutes les imprimantes",
+      limited: "Uniquement les imprimantes et emplacements sélectionnés",
+      hint: "Les membres d'un groupe limité ne voient que ces imprimantes. Toutes les autres leur sont masquées partout : tableau de bord, file d'attente, caméras, alarmes, historique, statistiques et notifications. Un membre de plusieurs groupes obtient les imprimantes de chacun, et tout groupe sans limite donne accès à toute la ferme. Les administrateurs voient toujours toutes les imprimantes.",
+      printers: "Imprimantes",
+      locations: "Emplacements",
+      noPrinters: "Aucune imprimante configurée pour le moment.",
+      noLocations: "Aucune imprimante n'a d'emplacement défini.",
+      emptyWarning: "Rien de sélectionné : les membres de ce groupe ne verront aucune imprimante.",
+      adminLocked: "Le groupe Administrateurs a toujours accès à toutes les imprimantes.",
+    },
   },
 
   // Users management

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import PrinterScope, apply_printer_scope, get_printer_scope
 from backend.app.models.printer import Printer
 from backend.app.models.user import User
 from backend.app.services.firmware_check import get_firmware_service
@@ -145,6 +146,7 @@ async def _firmware_info_for(printer, current_version, firmware_service) -> dict
 async def check_firmware_updates(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.FIRMWARE_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """
     Check for firmware updates for all connected printers.
@@ -158,7 +160,7 @@ async def check_firmware_updates(
     firmware_service = get_firmware_service()
 
     # Get all printers from database
-    result = await db.execute(select(Printer).where(Printer.is_active.is_(True)))
+    result = await db.execute(apply_printer_scope(select(Printer).where(Printer.is_active.is_(True)), scope))
     printers = result.scalars().all()
 
     updates = []

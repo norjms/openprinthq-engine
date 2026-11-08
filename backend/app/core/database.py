@@ -3900,6 +3900,14 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN cancel_reason TEXT")
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN cancelled_by VARCHAR(100)")
 
+    # Migration: per-printer permission scoping (#57). Both columns are added
+    # NULL, which means "not scoped": every existing group keeps full access to
+    # the farm. Camera and websocket tokens record whose scope they carry.
+    if_not_exists = "" if is_sqlite() else "IF NOT EXISTS "
+    await _safe_execute(conn, f"ALTER TABLE groups ADD COLUMN {if_not_exists}scope_printer_ids JSON")
+    await _safe_execute(conn, f"ALTER TABLE groups ADD COLUMN {if_not_exists}scope_locations JSON")
+    await _safe_execute(conn, f"ALTER TABLE auth_ephemeral_tokens ADD COLUMN {if_not_exists}scope_user_id INTEGER")
+
 
 async def _migrate_maintenance_history_log(conn) -> None:
     """Let maintenance_history hold free-form entries (no schedule).

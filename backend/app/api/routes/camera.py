@@ -20,6 +20,7 @@ from backend.app.core.auth import (
 )
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import get_scope_user_id
 from backend.app.models.printer import Printer
 from backend.app.models.user import User
 from backend.app.services.camera import (
@@ -613,14 +614,16 @@ async def generate_rtsp_mjpeg_stream(
 
 @router.post("/camera/stream-token")
 async def create_stream_token(
+    request: Request,
     _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
 ):
     """Create a reusable token for camera stream/snapshot access.
 
     Returns a token valid for 60 minutes that can be appended as ?token=xxx
-    to camera stream/snapshot URLs loaded via <img> tags.
+    to camera stream/snapshot URLs loaded via <img> tags. The token carries the
+    caller's printer scope (the key owner's, for an API key).
     """
-    return {"token": await create_camera_stream_token()}
+    return {"token": await create_camera_stream_token(await get_scope_user_id(request))}
 
 
 @router.get("/{printer_id}/camera/stream")

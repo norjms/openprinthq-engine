@@ -37,6 +37,12 @@ from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import async_session, get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import (
+    PrinterScope,
+    ensure_printer_visible,
+    get_printer_scope,
+    visible_printer_ids_for_user_id,
+)
 from backend.app.core.websocket import ws_manager
 from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile
@@ -416,6 +422,7 @@ async def _pick_assignments(
     db: AsyncSession,
     pipeline: SlicerPipeline,
     copies: int,
+    allowed_ids: set[int] | None = None,
 ) -> list[tuple[int | None, str | None]]:
     """Return ``[(printer_id_or_None, target_model_or_None), ...]`` of length
     ``copies`` per the pipeline's fanout strategy. ``target_model_class``
@@ -439,6 +446,9 @@ async def _pick_assignments(
         .scalars()
         .all()
     )
+    if allowed_ids is not None:
+        # The run's creator is limited to some printers (#57).
+        matching = [p for p in matching if p.id in allowed_ids]
     if not matching:
         # Shouldn't reach here when eligibility passes, but failing gracefully
         # is better than a TypeError on next-slot pick.
@@ -554,7 +564,9 @@ def _make_orchestration_callable(
                 return slice_response.model_dump()
 
             # PR C: enqueue N copies per the picked assignment strategy.
-            assignments = await _pick_assignments(session, pipeline, copies)
+            assignments = await _pick_assignments(
+                session, pipeline, copies, await visible_printer_ids_for_user_id(session, creator_user_id)
+            )
 
             jobs = (
                 (
@@ -664,11 +676,15 @@ async def run_pipeline(
     body: PipelineRunCreateRequest,
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.PIPELINES_RUN),
     db: AsyncSession = Depends(get_db),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     from backend.app.api.routes.settings import get_setting
     from backend.app.services.slice_dispatch import slice_dispatch
 
     pipeline = await _load_pipeline(db, pipeline_id)
+    if pipeline.target_printer_id is not None:
+        # A pipeline aimed at a printer outside the caller's scope (#57).
+        await ensure_printer_visible(db, scope, pipeline.target_printer_id)
     src_kind, src_id, src_filename, src_path = await _resolve_source(
         db,
         library_file_id=body.source_library_file_id,
