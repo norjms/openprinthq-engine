@@ -5417,6 +5417,7 @@ export default {
     username: 'Nombre de usuario',
     password: 'Contraseña',
     authHint: 'Déjelo vacío si su dispositivo Tasmota no requiere autenticación',
+    kasaAuthHint: 'Solo para firmware Kasa reciente: el correo y la contraseña de tu cuenta TP-Link. Los enchufes antiguos no necesitan nada.',
     linkToPrinter: 'Vincular a una impresora',
     noPrinter: 'Sin impresora (solo control manual)',
     linkingDescription: 'La vinculación activa el encendido/apagado automático cuando las impresiones comienzan/terminan',

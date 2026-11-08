@@ -5135,6 +5135,7 @@ export default {
     username: '사용자 이름',
     password: '비밀번호',
     authHint: 'Tasmota 장치에 인증이 필요하지 않으면 비워두세요',
+    kasaAuthHint: '최신 Kasa 펌웨어에만 해당: TP-Link 계정 이메일과 비밀번호. 이전 플러그는 필요 없습니다.',
     linkToPrinter: '프린터에 연결',
     noPrinter: '프린터 없음 (수동 제어만)',
     linkingDescription: '연결하면 인쇄 시작/완료 시 자동 켜기/끄기가 활성화됩니다',

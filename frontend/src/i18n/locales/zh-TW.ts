@@ -5397,6 +5397,7 @@ export default {
     username: '使用者名稱',
     password: '密碼',
     authHint: '如果您的Tasmota裝置不需要認證，請留空',
+    kasaAuthHint: '僅適用於較新的Kasa韌體：您的TP-Link帳戶電子郵件和密碼。舊插座無需填寫。',
     linkToPrinter: '連結印表機',
     noPrinter: '無印表機（僅手動控制）',
     linkingDescription: '連結後可在列印開始/完成時自動開關',
