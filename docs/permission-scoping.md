@@ -118,6 +118,10 @@ a route, depend on `get_printer_scope` and filter with `apply_printer_scope`
 Artisan Hub talks to the engine with an API key whose owner is unlimited, so
 it keeps seeing the whole farm.
 
+The Slack / Discord chat agent acts as the linked engine user: its in-process API
+calls carry that user's token, so the scope guard applies, and it filters its printer
+list again with `visible_printer_ids_for_user` ([chat-agent.md](chat-agent.md)).
+
 ## Upgrading
 
 The upgrade adds `groups.scope_printer_ids`, `groups.scope_locations` and

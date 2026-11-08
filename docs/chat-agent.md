@@ -202,9 +202,19 @@ engine user, like any web UI action. Reads are not audit-logged.
 All printer lists, name lookups and per-printer reads in the chat agent start from one
 function, `EngineApi.visible_printers()` in `services/chat_agent/engine_api.py`, which
 reads `GET /api/v1/printers/` as the linked user and passes the result through
-`filter_visible_printers(user, printers)`. Per-printer scoping in the API applies
-automatically; `filter_visible_printers` is the place to add the scoping helper as a
-second filter. Queue items, failures and alarms on printers the user cannot see are
+`filter_visible_printers(user, printers)`. Per-printer scoping
+([permission-scoping.md](permission-scoping.md)) applies on both layers:
+
+- The engine API calls run as the linked user (a two-minute JWT), so the app-wide
+  printer scope guard answers 404 for any out-of-scope `printer_id` and the printer
+  list only holds printers in scope.
+- `filter_visible_printers` filters the list again with
+  `visible_printer_ids_for_user` from `core/printer_scope.py` (admins and unscoped
+  users see every printer).
+
+A printer outside the user's scope is never named in a reply; asking about it or
+trying to pause, resume, cancel or queue on it answers "I do not see a printer
+called ...". Queue items, failures and alarms on printers the user cannot see are
 dropped from replies.
 
 ## Limits
