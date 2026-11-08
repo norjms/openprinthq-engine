@@ -612,6 +612,29 @@ export interface KlipperProfileInfo {
   experimental: boolean;
 }
 
+export interface PrinterAlarm {
+  id: number;
+  printer_id: number;
+  printer_name: string | null;
+  source: string;
+  code: string;
+  severity: 'fatal' | 'serious' | 'warning';
+  message: string;
+  first_seen: string | null;
+  last_seen: string | null;
+  cleared_at: string | null;
+  active: boolean;
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
+}
+
+export interface AlarmSummary {
+  active: number;
+  unacknowledged: number;
+  by_severity: Record<string, number>;
+  printers: number[];
+}
+
 export interface EjectionProfileInput {
   name: string;
   gcode: string;
@@ -3925,6 +3948,16 @@ export const api = {
     request<EjectionProfile>(`/ejection-profiles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteEjectionProfile: (id: number) => request<{ success: boolean }>(`/ejection-profiles/${id}`, { method: 'DELETE' }),
   getEjectStatus: (printerId: number) => request<EjectStatus>(`/printers/${printerId}/eject`),
+  // Alarm feed (docs/alarm-feed.md)
+  getAlarms: (opts: { state?: 'active' | 'cleared' | 'all'; printerId?: number | null } = {}) => {
+    const qs = new URLSearchParams({ state: opts.state ?? 'active' });
+    if (opts.printerId != null) qs.set('printer_id', String(opts.printerId));
+    return request<PrinterAlarm[]>(`/alarms?${qs}`);
+  },
+  getAlarmSummary: () => request<AlarmSummary>('/alarms/summary'),
+  ackAlarm: (id: number) => request<{ acknowledged: number }>(`/alarms/${id}/ack`, { method: 'POST', body: '{}' }),
+  ackPrinterAlarms: (printerId: number) =>
+    request<{ acknowledged: number }>(`/printers/${printerId}/alarms/ack`, { method: 'POST', body: '{}' }),
   ackPrinterFailures: (printerId: number) =>
     request<{ acknowledged: number; held: boolean }>(`/printers/${printerId}/failure-events/ack`, { method: 'POST', body: '{}' }),
   ejectNow: (printerId: number) => request<EjectStatus>(`/printers/${printerId}/eject`, { method: 'POST' }),
