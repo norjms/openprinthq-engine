@@ -24,12 +24,14 @@ from collections.abc import Callable
 import httpx
 
 from backend.app.services.bambu_mqtt import PrinterState
+from backend.app.services.klipper.material_units import UNIT_QIDI_BOX, MaterialObjectTracker
 from backend.app.services.klipper.profiles import KlipperProfile, get_profile
 from backend.app.services.klipper.status_map import (
     ACTIVE_KLIPPER_STATES,
     KLIPPER_COMPLETION_STATUS,
     apply_status_objects,
 )
+from backend.app.services.material_slots import apply_units_to_state
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,10 @@ _SUBSCRIBE_OBJECTS = {
     "fan": None,
     "toolhead": ["homed_axes", "print_time"],
 }
+
+# QIDI Box filament tables live in this file in the Moonraker config root.
+_QIDI_FILAS_FILE = "officiall_filas_list.cfg"
+_QIDI_FILAS_MAX_BYTES = 512 * 1024
 
 # Reconnect cadence after a dropped websocket. The short head keeps a printer
 # that is rebooting or briefly off-wifi feeling instantaneous; the long tail
@@ -112,6 +118,11 @@ class MoonrakerClient:
         # chamber / temperature_fan chamber / heater_generic chamber), so we
         # auto-discover it from /printer/objects/list on connect.
         self._chamber_object: str | None = self.profile.chamber_object
+
+        # Multi-material units inside Klipper (Creality CFS ``box`` object,
+        # QIDI Box save_variables). Detected from the object list on connect;
+        # see klipper/material_units.py. Untested on hardware.
+        self._materials = MaterialObjectTracker()
 
         # transition / change tracking
         self._prev_raw_state: str | None = None
@@ -258,6 +269,7 @@ class MoonrakerClient:
         objects = dict(_SUBSCRIBE_OBJECTS)
         if self._chamber_object:
             objects[self._chamber_object] = None
+        objects.update(self._materials.subscribe_objects())
         return objects
 
     async def _resolve_chamber_object(self) -> None:
@@ -279,6 +291,12 @@ class MoonrakerClient:
             logger.info("[%s] chamber object discovery skipped: %s", self.serial_number, exc)
             return
 
+        self._materials.detect(names)
+        if self._materials.kind:
+            logger.info("[%s] multi-material unit detected: %s", self.serial_number, self._materials.kind)
+        if self._materials.kind == UNIT_QIDI_BOX:
+            await self._load_qidi_tables()
+
         # Prefer a real heater (has a target), then a temperature_fan, then a
         # plain sensor. Only consider objects whose name mentions "chamber".
         candidates = [n for n in names if "chamber" in n.lower()]
@@ -291,6 +309,19 @@ class MoonrakerClient:
         # No chamber object on this printer — clear so we don't subscribe to a
         # non-existent object (the profile default may not exist here).
         self._chamber_object = None
+
+    async def _load_qidi_tables(self) -> None:
+        """Fetch the QIDI Box filament/colour/vendor tables from the config root."""
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                headers = {"X-Api-Key": self.api_key} if self.api_key else None
+                resp = await client.get(f"{self._http_base}/server/files/config/{_QIDI_FILAS_FILE}", headers=headers)
+                resp.raise_for_status()
+                text = resp.content[:_QIDI_FILAS_MAX_BYTES].decode("utf-8", errors="replace")
+        except Exception as exc:  # noqa: BLE001
+            logger.info("[%s] QIDI filament table not loaded: %s", self.serial_number, exc)
+            return
+        self._materials.qidi_tables.load(text)
 
     async def _subscribe(self, ws) -> None:
         req_id = self._next_id()
@@ -346,6 +377,8 @@ class MoonrakerClient:
     def _apply_and_signal(self, objects: dict) -> None:
         self.state.raw_data.pop("klippy_alarm", None)
         raw_state = apply_status_objects(self.state, objects, self._chamber_object)
+        if self._materials.update(objects):
+            apply_units_to_state(self.state, self._materials.units())
         self._detect_transitions(raw_state)
         self._signal_layer_and_bed()
         self._emit_state_change()
@@ -447,7 +480,19 @@ class MoonrakerClient:
     ) -> bool:
         # Bambu-specific args are ignored on Klipper; the file must already be
         # uploaded to Moonraker's gcode store (see moonraker_files.upload_gcode).
+        # With a CFS / QIDI Box and a slot remap (#52) the remap and the start
+        # go in ONE gcode script so the table is written before the file runs.
+        remap = self._materials.remap_gcode(ams_mapping) if ams_mapping else ""
+        if remap:
+            self.state.ams_mapping = list(ams_mapping or [])
+            safe_name = filename.replace('"', "")
+            return self.send_gcode(f'{remap}\nSDCARD_PRINT_FILE FILENAME="{safe_name}"')
         return self._send_rpc("printer.print.start", {"filename": filename})
+
+    @property
+    def material_unit_kind(self) -> str | None:
+        """``cfs`` / ``qidi_box`` when a multi-material unit was detected."""
+        return self._materials.kind
 
     def stop_print(self) -> bool:
         return self._send_rpc("printer.print.cancel")

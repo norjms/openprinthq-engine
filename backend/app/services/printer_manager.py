@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 import re
 import traceback
@@ -913,19 +914,29 @@ class PrinterManager:
             caller.name,
         )
         if printer_id in self._clients:
-            return self._clients[printer_id].start_print(
-                filename,
-                plate_id,
-                ams_mapping=ams_mapping,
-                timelapse=timelapse,
-                bed_levelling=bed_levelling,
-                flow_cali=flow_cali,
-                vibration_cali=vibration_cali,
-                layer_inspect=layer_inspect,
-                use_ams=use_ams,
-                nozzle_offset_cali=nozzle_offset_cali,
-                nozzle_mapping=nozzle_mapping,
-            )
+            client = self._clients[printer_id]
+            kwargs = {
+                "ams_mapping": ams_mapping,
+                "timelapse": timelapse,
+                "bed_levelling": bed_levelling,
+                "flow_cali": flow_cali,
+                "vibration_cali": vibration_cali,
+                "layer_inspect": layer_inspect,
+                "use_ams": use_ams,
+                "nozzle_offset_cali": nozzle_offset_cali,
+                "nozzle_mapping": nozzle_mapping,
+            }
+            # Non-Bambu clients implement the PrinterClient signature, which has
+            # no nozzle_offset_cali / nozzle_mapping. Passing them raised
+            # TypeError, so a queued job never started on a Klipper printer.
+            # Pass only what the client's start_print accepts.
+            try:
+                params = inspect.signature(client.start_print).parameters
+                if not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+                    kwargs = {k: v for k, v in kwargs.items() if k in params}
+            except (TypeError, ValueError):
+                pass
+            return client.start_print(filename, plate_id, **kwargs)
         return False
 
     def stop_print(self, printer_id: int) -> bool:

@@ -124,6 +124,8 @@ import { PrinterInfoModal } from '../components/PrinterInfoModal';
 import { getAmsLabel, getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, isBambuLabSpool, resolveSlotNozzleDiameter } from '../utils/amsHelpers';
 import { getPrinterImage, getWifiStrength, filterCompatibleQueueItems } from '../utils/printer';
 import { FilamentSlotCircle } from '../components/FilamentSlotCircle';
+import { UntestedHardwareBadge } from '../components/UntestedHardwareBadge';
+import { isMaterialUnit, isUntestedConnection, materialUnitLabel } from '../utils/materialUnits';
 import { Collapsible } from '../components/Collapsible';
 import { ConnectionDiagnosticModal, DiagnosticChecklist } from '../components/ConnectionDiagnostic';
 import { getColorName, parseFilamentColor, isLightColor } from '../utils/colors';
@@ -1832,6 +1834,10 @@ function PrinterCard({
   // (Klipper, OctoPrint, PrusaLink, Duet, ...) hides them.
   const isBambu = (printer.connection_type || 'bambu') === 'bambu';
   const canHome = printer.controls?.home !== false;
+  // CFS / QIDI Box / ACE / CANVAS units arrive in the AMS list with their own
+  // module_type; label them by kind instead of "AMS-A".
+  const amsUnitLabel = (ams: { id: number; tray: unknown[]; module_type?: string }) =>
+    isMaterialUnit(ams.module_type) ? materialUnitLabel(t, ams.module_type, ams.id) : getAmsLabel(ams.id, ams.tray.length);
   // Voron/Klipper profile for this printer (cached, shared across cards) — drives
   // the levelling action's label (QGL vs Z-Tilt) and whether it's shown at all.
   const { data: klipperProfiles } = useQuery({
@@ -3066,6 +3072,9 @@ function PrinterCard({
     includeRfid?: boolean;
   }) => {
     const printerBusy = status?.state === 'RUNNING';
+    // RFID re-read and load/unload are Bambu MQTT commands; other printers'
+    // units (CFS, QIDI Box, ACE, CANVAS) are display and matching only.
+    if (!isBambu) return null;
 
     return (
       <>
@@ -3384,6 +3393,7 @@ function PrinterCard({
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2">
                     <h3 className={`font-semibold text-white ${getTitleSize()}`}>{printer.name}</h3>
+                    {isUntestedConnection(printer.connection_type) && <UntestedHardwareBadge compact={viewMode === 'compact'} />}
                     {/* Connection indicator dot for compact mode */}
                     {viewMode === 'compact' && (() => {
                       const hmsErrors = status?.connected && status.hms_errors ? filterKnownHMSErrors(status.hms_errors) : [];
@@ -4682,15 +4692,16 @@ function PrinterCard({
                                 <AmsNameHoverCard
                                   ams={ams}
                                   printerId={printer.id}
-                                  label={getAmsLabel(ams.id, ams.tray.length)}
+                                  label={amsUnitLabel(ams)}
                                   amsLabels={amsLabels}
                                   canEdit={hasPermission('printers:update')}
                                   onSaved={refetchAmsLabels}
                                 >
                                   <span className="block truncate text-[10px] text-white font-medium cursor-default select-none">
-                                    {amsLabels?.[ams.id] || getAmsLabel(ams.id, ams.tray.length)}
+                                    {amsLabels?.[ams.id] || amsUnitLabel(ams)}
                                   </span>
                                 </AmsNameHoverCard>
+                                {isMaterialUnit(ams.module_type) && <UntestedHardwareBadge compact />}
                                 {isDualNozzle && (isLeftNozzle || isRightNozzle) && (
                                   <NozzleBadge side={isLeftNozzle ? 'L' : 'R'} />
                                 )}
@@ -4704,7 +4715,7 @@ function PrinterCard({
                                       fairThreshold={amsThresholds?.humidityFair}
                                       onClick={() => setAmsHistoryModal({
                                         amsId: ams.id,
-                                        amsLabel: getAmsLabel(ams.id, ams.tray.length),
+                                        amsLabel: amsUnitLabel(ams),
                                         mode: 'humidity',
                                       })}
                                       compact
@@ -4718,7 +4729,7 @@ function PrinterCard({
                                         fairThreshold={amsThresholds?.tempFair}
                                         onClick={() => setAmsHistoryModal({
                                           amsId: ams.id,
-                                          amsLabel: getAmsLabel(ams.id, ams.tray.length),
+                                          amsLabel: amsUnitLabel(ams),
                                           mode: 'temperature',
                                         })}
                                         compact
@@ -5007,7 +5018,7 @@ function PrinterCard({
                                                   material: tray?.tray_type ?? undefined,
                                                   profile: filamentData.profile,
                                                   color: filamentData.colorHex || '',
-                                                  location: `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
+                                                  location: `${amsUnitLabel(ams)} Slot ${slotIdx + 1}`,
                                                 },
                                               }),
                                               onUnassignSpool: (spoolmanSpool && !isBambuLabSpool(tray)) ? () => onUnassignSpoolmanSpool?.(spoolmanSpool.id) : undefined,
@@ -5032,7 +5043,7 @@ function PrinterCard({
                                                 material: tray?.tray_type ?? undefined,
                                                 profile: filamentData.profile,
                                                 color: filamentData.colorHex || '',
-                                                location: `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
+                                                location: `${amsUnitLabel(ams)} Slot ${slotIdx + 1}`,
                                               },
                                             }),
                                             onUnassignSpool: (assignment && !isBambuLabSpool(tray)) ? () => onUnassignSpool?.(printer.id, ams.id, slotIdx) : undefined,
@@ -5040,7 +5051,7 @@ function PrinterCard({
                                           };
                                         })()}
                                         configureSlot={{
-                                          enabled: hasPermission('printers:control'),
+                                          enabled: isBambu && hasPermission('printers:control'),
                                           onConfigure: () => setConfigureSlotModal({
                                             amsId: ams.id,
                                             trayId: slotIdx,
@@ -5067,7 +5078,7 @@ function PrinterCard({
                                           isRefreshing,
                                         })}
                                         configureSlot={{
-                                          enabled: hasPermission('printers:control'),
+                                          enabled: isBambu && hasPermission('printers:control'),
                                           onConfigure: () => setConfigureSlotModal({
                                             amsId: ams.id,
                                             trayId: slotIdx,
@@ -5084,7 +5095,7 @@ function PrinterCard({
                                             material: undefined,
                                             profile: '',
                                             color: '',
-                                            location: `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
+                                            location: `${amsUnitLabel(ams)} Slot ${slotIdx + 1}`,
                                           },
                                         })}
                                       >
@@ -5245,15 +5256,16 @@ function PrinterCard({
                                 <AmsNameHoverCard
                                   ams={ams}
                                   printerId={printer.id}
-                                  label={getAmsLabel(ams.id, ams.tray.length)}
+                                  label={amsUnitLabel(ams)}
                                   amsLabels={amsLabels}
                                   canEdit={hasPermission('printers:update')}
                                   onSaved={refetchAmsLabels}
                                 >
                                   <span className="block truncate text-[10px] text-white font-medium cursor-default select-none">
-                                    {amsLabels?.[ams.id] || getAmsLabel(ams.id, ams.tray.length)}
+                                    {amsLabels?.[ams.id] || amsUnitLabel(ams)}
                                   </span>
                                 </AmsNameHoverCard>
+                                {isMaterialUnit(ams.module_type) && <UntestedHardwareBadge compact />}
                                 {isDualNozzle && (isLeftNozzle || isRightNozzle) && (
                                   <NozzleBadge side={isLeftNozzle ? 'L' : 'R'} />
                                 )}
@@ -5387,7 +5399,7 @@ function PrinterCard({
                                               material: tray?.tray_type ?? undefined,
                                               profile: filamentData.profile,
                                               color: filamentData.colorHex || '',
-                                              location: getAmsLabel(ams.id, ams.tray.length),
+                                              location: amsUnitLabel(ams),
                                             },
                                           }),
                                           onUnassignSpool: (spoolmanSpool && !isBambuLabSpool(tray)) ? () => onUnassignSpoolmanSpool?.(spoolmanSpool.id) : undefined,
@@ -5412,7 +5424,7 @@ function PrinterCard({
                                             material: tray?.tray_type ?? undefined,
                                             profile: filamentData.profile,
                                             color: filamentData.colorHex || '',
-                                            location: getAmsLabel(ams.id, ams.tray.length),
+                                            location: amsUnitLabel(ams),
                                           },
                                         }),
                                         onUnassignSpool: (assignment && !isBambuLabSpool(tray)) ? () => onUnassignSpool?.(printer.id, ams.id, htSlotId) : undefined,
@@ -5420,7 +5432,7 @@ function PrinterCard({
                                       };
                                     })()}
                                     configureSlot={{
-                                      enabled: hasPermission('printers:control'),
+                                      enabled: isBambu && hasPermission('printers:control'),
                                       onConfigure: () => setConfigureSlotModal({
                                         amsId: ams.id,
                                         trayId: htSlotId,
@@ -5447,7 +5459,7 @@ function PrinterCard({
                                       isRefreshing: isHtRefreshing,
                                     })}
                                     configureSlot={{
-                                      enabled: hasPermission('printers:control'),
+                                      enabled: isBambu && hasPermission('printers:control'),
                                       onConfigure: () => setConfigureSlotModal({
                                         amsId: ams.id,
                                         trayId: htSlotId,
@@ -5464,7 +5476,7 @@ function PrinterCard({
                                         material: undefined,
                                         profile: '',
                                         color: '',
-                                        location: getAmsLabel(ams.id, ams.tray.length),
+                                        location: amsUnitLabel(ams),
                                       },
                                     })}
                                   >
@@ -5482,7 +5494,7 @@ function PrinterCard({
                                       fairThreshold={amsThresholds?.tempFair}
                                       onClick={() => setAmsHistoryModal({
                                         amsId: ams.id,
-                                        amsLabel: getAmsLabel(ams.id, ams.tray.length),
+                                        amsLabel: amsUnitLabel(ams),
                                         mode: 'temperature',
                                       })}
                                       compact
@@ -5495,7 +5507,7 @@ function PrinterCard({
                                       fairThreshold={amsThresholds?.humidityFair}
                                       onClick={() => setAmsHistoryModal({
                                         amsId: ams.id,
-                                        amsLabel: getAmsLabel(ams.id, ams.tray.length),
+                                        amsLabel: amsUnitLabel(ams),
                                         mode: 'humidity',
                                       })}
                                       compact
@@ -5692,7 +5704,7 @@ function PrinterCard({
                                         };
                                       })()}
                                       configureSlot={{
-                                        enabled: hasPermission('printers:control'),
+                                        enabled: isBambu && hasPermission('printers:control'),
                                         onConfigure: () => setConfigureSlotModal({
                                           amsId: 255,
                                           trayId: slotTrayId,
@@ -5719,7 +5731,7 @@ function PrinterCard({
                                         includeRfid: false,
                                       })}
                                       configureSlot={{
-                                        enabled: hasPermission('printers:control'),
+                                        enabled: isBambu && hasPermission('printers:control'),
                                         onConfigure: () => setConfigureSlotModal({
                                           amsId: 255,
                                           trayId: slotTrayId,

@@ -167,6 +167,14 @@ export default {
     verifyWithCamera: "Comprobar con la cámara que la cama está vacía antes de liberar la placa",
   },
   printers: {
+    materialUnit: {
+      cfs: 'CFS',
+      qidi_box: 'QIDI Box',
+      ace: 'ACE',
+      canvas: 'CANVAS',
+      untested: 'No probado en hardware',
+      untestedHelp: 'Creado a partir de documentación pública del protocolo y datos capturados; aún no verificado en una impresora real.',
+    },
     addPreflight: {
       checking: 'Comprobando la conexión...',
       warning: 'Algunas comprobaciones de conexión fallaron. Esta impresora podría aparecer como desconectada. Revisa las comprobaciones de abajo, soluciona lo que puedas o guárdala de todos modos.',
