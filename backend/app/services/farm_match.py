@@ -53,19 +53,33 @@ _PLATE_ALIASES = {
 }
 
 
-def installed_nozzles(status) -> list[tuple[float | None, str]]:
-    """(diameter, material) per nozzle the printer reported; empty when unknown."""
-    out: list[tuple[float | None, str]] = []
-    for nozzle in getattr(status, "nozzles", None) or []:
-        raw = getattr(nozzle, "nozzle_diameter", "") or ""
-        try:
-            dia = float(raw)
-        except (TypeError, ValueError):
-            dia = None
-        material = (getattr(nozzle, "nozzle_type", "") or "").strip().lower()
-        if (dia and dia > 0) or material:
-            out.append((dia if dia and dia > 0 else None, material))
-    return out
+def _nozzle_entry(raw_diameter, raw_material) -> tuple[float | None, str]:
+    try:
+        dia = float(raw_diameter or "")
+    except (TypeError, ValueError):
+        dia = None
+    material = (raw_material or "").strip().lower()
+    if material == "undefine":  # the hardware model's "not known"
+        material = ""
+    return (dia if dia and dia > 0 else None), material
+
+
+def installed_nozzles(status, manual: dict | None = None) -> list[tuple[float | None, str]]:
+    """(diameter, material) per nozzle; empty when unknown.
+
+    ``status.nozzles`` is what the printer reported, indexed by extruder. ``manual`` maps
+    an extruder index to a ``(diameter_mm, nozzle_type)`` override someone set with
+    ``PUT /printers/{id}/nozzles/{extruder_index}`` (``printer_hardware.manual_nozzles``);
+    an override wins over the report for that extruder, as it does in the nozzle view.
+    Printers that report no nozzles (PrusaLink, OctoPrint, most Klipper setups) get
+    their size from the override alone.
+    """
+    by_index: dict[int, tuple[float | None, str]] = {}
+    for idx, nozzle in enumerate(getattr(status, "nozzles", None) or []):
+        by_index[idx] = _nozzle_entry(getattr(nozzle, "nozzle_diameter", ""), getattr(nozzle, "nozzle_type", ""))
+    for idx, (dia, material) in (manual or {}).items():
+        by_index[int(idx)] = _nozzle_entry(dia, material)
+    return [entry for _, entry in sorted(by_index.items()) if entry[0] or entry[1]]
 
 
 def job_hardware(item, filament_types: list[str] | None = None) -> dict:
@@ -91,12 +105,16 @@ def job_hardware(item, filament_types: list[str] | None = None) -> dict:
     return {"nozzle_diameter": nozzle, "bed_type": bed or None, "abrasive": abrasive}
 
 
-def hardware_mismatch(job: dict | None, status, installed_plate: str | None) -> list[str]:
-    """Why this printer cannot print the job, as short "needs ..." phrases. Empty = fine."""
+def hardware_mismatch(
+    job: dict | None, status, installed_plate: str | None, manual_nozzles: dict | None = None
+) -> list[str]:
+    """Why this printer cannot print the job, as short "needs ..." phrases. Empty = fine.
+
+    ``manual_nozzles`` are the printer's nozzle overrides (see ``installed_nozzles``)."""
     if not job:
         return []
     reasons: list[str] = []
-    nozzles = installed_nozzles(status)
+    nozzles = installed_nozzles(status, manual_nozzles)
 
     want = job.get("nozzle_diameter")
     diameters = [d for d, _ in nozzles if d]

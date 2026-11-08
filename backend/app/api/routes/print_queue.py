@@ -1690,9 +1690,11 @@ class PreflightDryRun(BaseModel):
 
 def _check_printers(printers, job: dict, types: list[str], sliced_for, skip_filament_check: bool) -> list[dict]:
     """Per printer: can it take this job right now, and why not. The same checks the dispatcher makes;
-    shared by the queued-item preflight and the dry run (POST /queue/preflight)."""
+    shared by the queued-item preflight and the dry run (POST /queue/preflight). Callers load the manual
+    nozzle overrides first (printer_hardware.load_manual_nozzles)."""
     from backend.app.services.farm_match import hardware_mismatch, normalize_plate
     from backend.app.services.print_scheduler import scheduler
+    from backend.app.services.printer_hardware import manual_nozzles
     from backend.app.services.printer_manager import printer_manager
 
     out = []
@@ -1705,7 +1707,7 @@ def _check_printers(printers, job: dict, types: list[str], sliced_for, skip_fila
             reasons.append("offline")
         else:
             status = printer_manager.get_status(p.id)
-            reasons += [f"needs {r}" for r in hardware_mismatch(job, status, p.installed_plate)]
+            reasons += [f"needs {r}" for r in hardware_mismatch(job, status, p.installed_plate, manual_nozzles(p.id))]
         # Structured plate fields, so a client (Artisan Hub's plate reslicer) can tell a
         # plate-only hold from the other reasons without parsing the text above.
         plate_mismatch = bool(
@@ -1789,6 +1791,9 @@ async def preflight_dry_run(
     if sliced_for is None and library_file is not None and library_file.file_metadata:
         sliced_for = library_file.file_metadata.get("sliced_for_model")
 
+    from backend.app.services.printer_hardware import load_manual_nozzles
+
+    await load_manual_nozzles(db)
     out = _check_printers(printers, job, types, sliced_for, body.skip_filament_check)
     return {
         "library_file_id": body.library_file_id,
@@ -1868,6 +1873,9 @@ async def preflight_queue_item(
     elif item.library_file and item.library_file.file_metadata:
         sliced_for = item.library_file.file_metadata.get("sliced_for_model")
 
+    from backend.app.services.printer_hardware import load_manual_nozzles
+
+    await load_manual_nozzles(db)
     out = _check_printers(printers, job, types, sliced_for, bool(item.skip_filament_check))
     return {
         "item_id": item.id,
