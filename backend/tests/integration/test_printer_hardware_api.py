@@ -18,7 +18,7 @@ def _dual_state(*, fila_switch: bool = False):
         "nozzle": {
             "info": [
                 {"id": 0, "type": "HS01", "diameter": "0.4"},
-                {"id": 1, "type": "SS00", "diameter": "0.6"},
+                {"id": 1, "type": "HH00", "diameter": "0.6"},
             ]
         }
     }
@@ -115,8 +115,9 @@ class TestNozzles:
             assert right["position"] == "right" and left["position"] == "left"
             assert right["source"] == "mqtt"
             assert right["nozzle_type"] == "hardened_steel"
-            assert right["volume_type"] == "High Flow"
+            assert right["volume_type"] == "Standard"  # HS01: H hotend, S standard flow, 01 hardened
             assert right["live"]["raw_type"] == "HS01"
+            assert (left["nozzle_type"], left["volume_type"]) == ("stainless_steel", "High Flow")
             assert right["active"] is True and left["active"] is False
             assert left["diameter_mm"] == 0.6
 

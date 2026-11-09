@@ -11,7 +11,7 @@ When the scheduler looks for an idle printer for an item, each candidate must fi
 | Check | The file says | The printer says | Blocks when |
 |---|---|---|---|
 | Nozzle size | sliced nozzle diameter (archive or library metadata) | reported nozzle diameters, or the manual override per extruder | no installed nozzle is within 0.05 mm |
-| Hardened nozzle | a filament type with CF or GF (PLA-CF, PA6-GF, PETG CF, ...) | reported nozzle material, or the manual override | no nozzle is `hardened_steel` or tungsten carbide |
+| Hardened nozzle | a filament type with CF or GF (PLA-CF, PA6-GF, PETG CF, ...) | reported nozzle material (H2 codes such as `HS01` decoded, see `nozzles-and-locations.md`), or the manual override | no nozzle is `hardened_steel`, `tungsten_carbide` or `E3D` (Bambu Studio's 40 HRC rule for CF/GF filament; stainless steel and brass do not qualify) |
 | Build plate | the plate type it was sliced for | `installed_plate` on the printer | both are known and differ |
 
 Plate names are compared loosely ("Textured PEI Plate", `textured_pei_plate` and "textured pei" are the
