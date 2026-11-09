@@ -18,7 +18,7 @@ class PrinterAlarm(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     printer_id: Mapped[int] = mapped_column(Integer, index=True)
     # Which transport reported it: bambu | klipper | octoprint | prusalink | duet |
-    # flashforge | mks | snapmaker
+    # flashforge | mks | snapmaker | elegoo | elegoo_cc2
     source: Mapped[str] = mapped_column(String(20))
     # Bambu HMS short code (0700_8010), or a transport code (printer_error,
     # attention, klippy_shutdown, ...)

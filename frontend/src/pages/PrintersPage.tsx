@@ -6737,6 +6737,7 @@ export function AddPrinterModal({
   const isFlashforge = form.connection_type === 'flashforge';
   const isMks = form.connection_type === 'mks';
   const isObico = form.connection_type === 'obico';
+  const isElegooCc2 = form.connection_type === 'elegoo_cc2';
   const isBambu = form.connection_type === 'bambu';
   // Supported Voron/Klipper profiles for the model dropdown (data-driven).
   const { data: klipperProfiles } = useQuery({
@@ -6800,7 +6801,8 @@ export function AddPrinterModal({
     // Bambu MQTT diagnostic. Skip the pre-flight and add directly.
     if (!isBambu) {
       const model = isKlipper ? (form.model || 'voron_2.4_350') : isObico ? form.model : undefined;
-      onAdd({ ...form, model, serial_number: undefined, access_code: undefined });
+      // The Centauri Carbon 2 uses the printer's optional access code as its MQTT password.
+      onAdd({ ...form, model, serial_number: undefined, access_code: isElegooCc2 ? (form.access_code || undefined) : undefined });
       return;
     }
     setCheckingSave(true);
@@ -7089,6 +7091,8 @@ export function AddPrinterModal({
                   { ct: 'flashforge', label: t('printers.modal.typeFlashforge'), patch: { connection_type: 'flashforge' as const, model: '', moonraker_port: 8899 } },
                   { ct: 'mks', label: t('printers.modal.typeMks'), patch: { connection_type: 'mks' as const, model: '', moonraker_port: 8080 } },
                   { ct: 'obico', label: t('printers.modal.typeObico'), patch: { connection_type: 'obico' as const, model: '' } },
+                  { ct: 'elegoo', label: t('printers.modal.typeElegoo'), patch: { connection_type: 'elegoo' as const, model: '', moonraker_port: 3030 } },
+                  { ct: 'elegoo_cc2', label: t('printers.modal.typeElegooCc2'), patch: { connection_type: 'elegoo_cc2' as const, model: '', moonraker_port: 1883 } },
                 ] as const).map(({ ct, label, patch }) => (
                   <button
                     key={ct}
@@ -7175,6 +7179,24 @@ export function AddPrinterModal({
                   placeholder={isKlipper ? t('printers.modal.moonrakerApiKeyPlaceholder') : ''}
                 />
                 <p className="text-xs text-bambu-gray mt-1">{isKlipper ? t('printers.modal.moonrakerApiKeyHelp') : t('printers.modal.apiKeyHelp')}</p>
+              </div>
+            )}
+            {isUntestedConnection(form.connection_type) && (
+              <div className="flex items-start gap-2 text-xs text-bambu-gray">
+                <UntestedHardwareBadge />
+                <span>{t('printers.materialUnit.untestedHelp')}</span>
+              </div>
+            )}
+            {isElegooCc2 && (
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.elegooAccessCode')}</label>
+                <input
+                  type="password"
+                  className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.access_code || ''}
+                  onChange={(e) => setForm({ ...form, access_code: e.target.value })}
+                />
+                <p className="text-xs text-bambu-gray mt-1">{t('printers.modal.elegooAccessCodeHelp')}</p>
               </div>
             )}
             {isObico && (
