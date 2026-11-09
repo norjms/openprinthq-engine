@@ -20,7 +20,7 @@ export function materialUnitLabel(t: (key: string) => string, kind: MaterialUnit
  * Connection types built from published protocol documentation without a
  * printer to test on. The card and the add dialog say so.
  */
-export const UNTESTED_CONNECTION_TYPES: readonly string[] = ['elegoo', 'elegoo_cc2'];
+export const UNTESTED_CONNECTION_TYPES: readonly string[] = ['elegoo', 'elegoo_cc2', 'anycubic'];
 
 export function isUntestedConnection(connectionType: string | null | undefined): boolean {
   return !!connectionType && UNTESTED_CONNECTION_TYPES.includes(connectionType);

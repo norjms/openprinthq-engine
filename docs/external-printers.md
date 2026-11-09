@@ -12,7 +12,7 @@ truth for what each one supports. The printer API exposes the result as
 | `octoprint` | yes | yes | yes | yes | nozzle 0 and bed | yes |
 | `prusalink` | yes | yes | yes | no | no | no |
 | `duet`, `flashforge`, `mks`, `snapmaker` | yes | yes | yes | yes | nozzle 0 and bed | yes |
-| `elegoo`, `elegoo_cc2` (untested on hardware) | yes | yes | yes | no | nozzle 0 and bed | no |
+| `elegoo`, `elegoo_cc2`, `anycubic` (untested on hardware) | yes | yes | yes | no | nozzle 0 and bed | no |
 | `obico` | no | no | yes (upload only) | no | no | no |
 
 ## `controls`
