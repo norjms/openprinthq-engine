@@ -15,35 +15,52 @@ class TestDecodeBambuNozzleType:
     @pytest.mark.parametrize(
         ("raw", "expected"),
         [
-            ("HS01", ("hardened_steel", "High Flow")),
-            ("HS00", ("stainless_steel", "High Flow")),
-            ("SS00", ("stainless_steel", "Standard")),
-            ("AS01", ("hardened_steel", "Standard")),
-            ("XS05", ("tungsten_carbide", "Standard")),
-            ("ES01", ("hardened_steel", "High Flow")),
-            ("US01", ("hardened_steel", "TPU High Flow")),
-            ("BS00", ("stainless_steel", "E3D High Flow")),
-            ("HS", ("undefine", "High Flow")),
+            # H2 compact codes: H (hotend) + flow family + material, as Bambu Studio parses them.
+            ("HS01", ("hardened_steel", "Standard")),
+            ("HS00", ("stainless_steel", "Standard")),
+            ("HH01", ("hardened_steel", "High Flow")),
+            ("HH00", ("stainless_steel", "High Flow")),
+            ("HS05", ("tungsten_carbide", "Standard")),
+            ("HA01", ("hardened_steel", "Standard")),
+            ("HX05", ("tungsten_carbide", "Standard")),
+            ("HE01", ("hardened_steel", "High Flow")),
+            ("HU01", ("hardened_steel", "TPU High Flow")),
+            ("HT01", ("hardened_steel", "TPU285")),
+            ("HB00", ("stainless_steel", "E3D High Flow")),
+            ("HH01-0.4", ("hardened_steel", "High Flow")),
+            ("hs01", ("hardened_steel", "Standard")),
+            ("HS", ("undefine", "Standard")),
+            ("HP01", ("hardened_steel", "Standard")),  # unknown flow letter reads as Standard
+            # Long names from X1/P1 firmware and the hardware model.
             ("hardened_steel", ("hardened_steel", "Standard")),
             ("stainless_steel", ("stainless_steel", "Standard")),
+            ("tungsten_carbide", ("tungsten_carbide", "Standard")),
+            ("brass", ("brass", "Standard")),
+            ("E3D", ("E3D", "Standard")),
+            ("e3d", ("E3D", "Standard")),
+            ("undefine", ("undefine", "Standard")),
         ],
     )
     def test_known_codes(self, raw, expected):
         assert hw.decode_bambu_nozzle_type(raw) == expected
 
-    @pytest.mark.parametrize("raw", [None, "", "N/A", "n/a", "Q", "ZZ99"])
+    # Not a nozzle or not a known string: cutter (C), laser (L) and fan (F) tool heads,
+    # the old reading of the first letter as the flow family ("SS00"), free text.
+    @pytest.mark.parametrize(
+        "raw", [None, "", "N/A", "n/a", "Q", "ZZ99", "SS00", "XS05", "CP00", "L000", "F000", "hardened", "H"]
+    )
     def test_unset_or_unknown(self, raw):
         assert hw.decode_bambu_nozzle_type(raw) is None
 
     def test_unknown_material_code_falls_back_to_undefine(self):
-        assert hw.decode_bambu_nozzle_type("HS09") == ("undefine", "High Flow")
+        assert hw.decode_bambu_nozzle_type("HS09") == ("undefine", "Standard")
 
     def test_live_block_keeps_raw_type(self):
         live = hw.decode_live_nozzle("HS01", "0.6")
         assert live == {
             "diameter_mm": 0.6,
             "nozzle_type": "hardened_steel",
-            "volume_type": "High Flow",
+            "volume_type": "Standard",
             "raw_type": "HS01",
         }
 
@@ -60,7 +77,7 @@ class TestMqttNozzleInfoDecode:
                     "nozzle": {
                         "info": [
                             {"id": 0, "type": "HS01", "diameter": "0.4"},
-                            {"id": 1, "type": "SS00", "diameter": "0.6"},
+                            {"id": 1, "type": "HH00", "diameter": "0.6"},
                         ]
                     }
                 }
@@ -69,11 +86,11 @@ class TestMqttNozzleInfoDecode:
         mqtt_client._process_message(payload)
         live = hw.live_nozzles_from_state(mqtt_client.state)
         assert live[0]["nozzle_type"] == "hardened_steel"
-        assert live[0]["volume_type"] == "High Flow"
+        assert live[0]["volume_type"] == "Standard"
         assert live[0]["raw_type"] == "HS01"
         assert live[0]["diameter_mm"] == 0.4
         assert live[1]["nozzle_type"] == "stainless_steel"
-        assert live[1]["volume_type"] == "Standard"
+        assert live[1]["volume_type"] == "High Flow"
         assert live[1]["diameter_mm"] == 0.6
 
     def test_h2c_rack_excludes_mounted_hotends(self, mqtt_client):
@@ -84,7 +101,7 @@ class TestMqttNozzleInfoDecode:
                         "info": [
                             {"id": 0, "type": "HS01", "diameter": "0.4"},
                             {"id": 1, "type": "HS01", "diameter": "0.4"},
-                            {"id": 16, "type": "US01", "diameter": "0.6", "wear": 2, "sn": "R1"},
+                            {"id": 16, "type": "HU01", "diameter": "0.6", "wear": 2, "sn": "R1"},
                             {"id": 17, "type": "N/A", "diameter": ""},
                         ]
                     }
