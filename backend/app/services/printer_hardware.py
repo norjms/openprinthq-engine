@@ -5,7 +5,7 @@ Vocabulary follows OrcaSlicer / Bambu Studio:
 - ``extruder_index`` is DEVICE numbering. Bambu dual-nozzle: 0 = main = RIGHT,
   1 = deputy = LEFT. Klipper/Prusa: the tool number.
 - ``nozzle_type``: hardened_steel | stainless_steel | tungsten_carbide | brass | E3D | undefine.
-- ``volume_type``: Standard | High Flow | TPU High Flow | E3D High Flow | Hybrid | Extra High Flow.
+- ``volume_type``: Standard | High Flow | TPU High Flow | TPU285 | E3D High Flow | Hybrid | Extra High Flow.
 
 Slot identity is ``(ams_id, tray_id)``: 0-7 AMS units, 128+ AMS HT, 255 external.
 External trays follow the engine's existing convention: tray 0 = vt 254, tray 1 =
@@ -16,6 +16,7 @@ extruder 1 (left); on a single-nozzle printer tray 0 is the only external holder
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,6 +41,7 @@ VOLUME_TYPES: tuple[str, ...] = (
     "Standard",
     "High Flow",
     "TPU High Flow",
+    "TPU285",
     "E3D High Flow",
     "Hybrid",
     "Extra High Flow",
@@ -52,13 +54,20 @@ DEFAULT_VOLUME_TYPE = "Standard"
 
 EXTERNAL_AMS_ID = 255
 
-_VOLUME_BY_PREFIX = {
+# H2-series compact nozzle codes, decoded the way Bambu Studio does it
+# (src/slic3r/GUI/DeviceCore/DevNozzleSystem.cpp, s_parse_nozzle_type): "H" + flow
+# family letter + two-digit material, optionally followed by "-<diameter>". The first
+# character is the tool head kind ("H" hotend nozzle; "C" cutter, "L" laser and "F" fan
+# heads are not nozzles), not the flow family.
+_COMPACT_NOZZLE_CODE = re.compile(r"^H([A-Z])([0-9]{2})?(?:-.*)?$", re.IGNORECASE)
+_VOLUME_BY_FLOW = {
     "S": "Standard",
     "A": "Standard",
     "X": "Standard",
     "H": "High Flow",
     "E": "High Flow",
     "U": "TPU High Flow",
+    "T": "TPU285",
     "B": "E3D High Flow",
 }
 _MATERIAL_BY_CODE = {
@@ -76,12 +85,14 @@ _MATERIAL_BY_CODE = {
 def decode_bambu_nozzle_type(raw: str | None) -> tuple[str, str] | None:
     """Decode a Bambu nozzle type string into ``(nozzle_type, volume_type)``.
 
-    Handles both the H2-series compact code from ``device.nozzle.info[].type``
-    (e.g. ``"HS01"``: char0 = flow family S/A/X Standard, H/E High Flow,
-    U TPU High Flow, B E3D High Flow; trailing digits 00 stainless steel,
-    01 hardened steel, 05 tungsten carbide) and the
-    legacy long names older firmware sends in ``nozzle_type`` (e.g.
-    ``"hardened_steel"``). Returns None for empty or ``"N/A"`` values.
+    Handles both the H2-series compact code from ``device.nozzle.info[].type`` and the
+    long names X1/P1 firmware sends in ``nozzle_type`` (``"hardened_steel"``, ``"brass"``,
+    ...). A compact code is ``H`` (hotend), the flow family (S/A/X Standard, H/E High
+    Flow, U TPU High Flow, T TPU285, B E3D High Flow) and the material (00 stainless
+    steel, 01 hardened steel, 05 tungsten carbide), as in ``"HS01"`` or ``"HH00-0.4"``.
+    An unknown flow letter reads as Standard and an unknown or missing material as
+    ``undefine``, as Bambu Studio does. Returns None for empty, ``"N/A"`` and anything
+    else (another tool head, an unknown string): the material is unknown.
     """
     if raw is None:
         return None
@@ -95,15 +106,12 @@ def decode_bambu_nozzle_type(raw: str | None) -> tuple[str, str] | None:
         return lowered, DEFAULT_VOLUME_TYPE
     if lowered == "e3d":
         return "E3D", DEFAULT_VOLUME_TYPE
-    # Compact code: first char is the flow family, the trailing two digits the
-    # material ("HS01" -> High Flow, hardened steel). Short forms such as "HS"
-    # carry no material code.
-    if 2 <= len(value) <= 8:
-        volume = _VOLUME_BY_PREFIX.get(value[0].upper())
-        material = _MATERIAL_BY_CODE.get(value[-2:]) if len(value) >= 4 else None
-        if volume:
-            return material or DEFAULT_NOZZLE_TYPE, volume
-    return None
+    match = _COMPACT_NOZZLE_CODE.match(value)
+    if match is None:
+        return None
+    flow, material = match.groups()
+    volume = _VOLUME_BY_FLOW.get(flow.upper(), DEFAULT_VOLUME_TYPE)
+    return _MATERIAL_BY_CODE.get(material or "", DEFAULT_NOZZLE_TYPE), volume
 
 
 def _parse_diameter(raw: Any) -> float | None:

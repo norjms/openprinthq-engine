@@ -18,7 +18,7 @@ The names follow OrcaSlicer / Bambu Studio.
 | `extruder_index` | DEVICE numbering. Bambu dual-nozzle: `0` = main = RIGHT, `1` = deputy = LEFT. Klipper/Prusa: the tool number. |
 | `position` | `right` / `left` on a Bambu dual-nozzle printer, otherwise `T0`, `T1`, ... (display only) |
 | `nozzle_type` | `hardened_steel`, `stainless_steel`, `tungsten_carbide`, `brass`, `E3D`, `undefine` |
-| `volume_type` | `Standard`, `High Flow`, `TPU High Flow`, `E3D High Flow`, `Hybrid`, `Extra High Flow` |
+| `volume_type` | `Standard`, `High Flow`, `TPU High Flow`, `TPU285`, `E3D High Flow`, `Hybrid`, `Extra High Flow` |
 
 A slot is `(ams_id, tray_id)`: `0`-`7` AMS units, `128`+ AMS HT, `255` external.
 External trays keep the engine's existing numbering: tray `0` is virtual tray
@@ -30,11 +30,24 @@ external holder, tray 0.
 ### Bambu nozzle type codes
 
 H2-series printers report `device.nozzle.info[].type` as a short code such as
-`HS01`. The first character is the flow family (`S`, `A`, `X` Standard; `H`,
-`E` High Flow; `U` TPU High Flow; `B` E3D High Flow) and the trailing two digits
-the material (`00` stainless steel, `01` hardened steel, `05` tungsten carbide).
-`N/A` means unset. Older firmware sends the long names (`hardened_steel`) in
-`nozzle_type`; both are decoded, and the original string is kept as `raw_type`.
+`HS01`, decoded the way Bambu Studio does it (`s_parse_nozzle_type` in
+`src/slic3r/GUI/DeviceCore/DevNozzleSystem.cpp`):
+
+| Position | Meaning |
+|---|---|
+| 1st character | tool head: `H` hotend nozzle. `C` (cutter), `L` (laser) and `F` (fan) heads are not nozzles |
+| 2nd character | flow family: `S`, `A`, `X` Standard; `H`, `E` High Flow; `U` TPU High Flow; `T` TPU285; `B` E3D High Flow. Another letter reads as Standard |
+| 3rd and 4th | material: `00` stainless steel, `01` hardened steel, `05` tungsten carbide. Another value, or none (`HS`), reads as `undefine` |
+| `-<diameter>` | optional, ignored (the diameter comes from the `diameter` field) |
+
+So `HS01` is a Standard flow hardened steel nozzle and `HH00` a High Flow
+stainless steel one. `N/A` means unset. Older firmware sends the long names
+(`hardened_steel`) in `nozzle_type`; both are decoded, and the original string is
+kept as `raw_type`. Anything else decodes to nothing: the material is unknown.
+
+The same decoding feeds the farm hardware match (`farm_match.installed_nozzles`):
+the dispatcher, `POST /api/v1/queue/preflight` and `GET /api/v1/queue/{id}/preflight`
+see `hardened_steel`, not the raw code, so they agree with the nozzle view.
 
 ## Nozzles
 

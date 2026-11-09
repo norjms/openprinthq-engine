@@ -19,9 +19,14 @@ from __future__ import annotations
 
 import re
 
-# Nozzle materials that tolerate abrasive filament. Bambu reports
-# "hardened_steel" / "stainless_steel"; tungsten carbide shows up on newer hotends.
-HARDENED_NOZZLES = frozenset({"hardened_steel", "tungsten_carbide", "hardened", "carbide"})
+from backend.app.services.printer_hardware import decode_bambu_nozzle_type
+
+# Nozzle materials that tolerate abrasive filament, as named by
+# printer_hardware.NOZZLE_TYPES. Bambu Studio rates each material's hardness
+# (resources/info/nozzle_info.json: hardened steel 55 HRC, tungsten carbide 85,
+# E3D 55, stainless steel 20, brass 2) and its CF/GF filament profiles require
+# 40 HRC (required_nozzle_HRC), so stainless steel and brass do not qualify.
+HARDENED_NOZZLES = frozenset({"hardened_steel", "tungsten_carbide", "E3D"})
 
 _ABRASIVE = re.compile(r"(^|[^A-Z])(CF|GF)([^A-Z]|$)")
 
@@ -58,8 +63,12 @@ def _nozzle_entry(raw_diameter, raw_material) -> tuple[float | None, str]:
         dia = float(raw_diameter or "")
     except (TypeError, ValueError):
         dia = None
-    material = (raw_material or "").strip().lower()
-    if material == "undefine":  # the hardware model's "not known"
+    # The same decoding as the nozzle view: an H2 compact code ("HS01") or a long name
+    # ("hardened_steel") becomes the material name; anything undecodable, and the
+    # hardware model's "undefine", is unknown ("") and never fails a check.
+    decoded = decode_bambu_nozzle_type(raw_material)
+    material = decoded[0] if decoded else ""
+    if material == "undefine":
         material = ""
     return (dia if dia and dia > 0 else None), material
 

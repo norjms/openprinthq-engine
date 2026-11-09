@@ -37,7 +37,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/printers", tags=["printers"])
 
 NozzleTypeLiteral = Literal["hardened_steel", "stainless_steel", "tungsten_carbide", "brass", "E3D", "undefine"]
-VolumeTypeLiteral = Literal["Standard", "High Flow", "TPU High Flow", "E3D High Flow", "Hybrid", "Extra High Flow"]
+VolumeTypeLiteral = Literal[
+    "Standard", "High Flow", "TPU High Flow", "TPU285", "E3D High Flow", "Hybrid", "Extra High Flow"
+]
 
 
 class NozzleUpdate(BaseModel):
