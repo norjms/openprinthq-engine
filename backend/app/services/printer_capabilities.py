@@ -31,6 +31,8 @@ CONNECTION_FLASHFORGE = "flashforge"  # FlashForge legacy TCP transport
 CONNECTION_MKS = "mks"  # MKS WiFi module (HTTP upload + TCP console) transport
 CONNECTION_OBICO = "obico"  # Obico cloud relay (upload-only) transport
 CONNECTION_SNAPMAKER = "snapmaker"  # Snapmaker 2.0 / Artisan / J1 LAN HTTP transport
+CONNECTION_ELEGOO = "elegoo"  # Elegoo SDCP v3 WebSocket (Centauri Carbon); untested on hardware
+CONNECTION_ELEGOO_CC2 = "elegoo_cc2"  # Elegoo Centauri Carbon 2 MQTT; untested on hardware
 
 # Transport families — which client implementation drives the connection.
 MOONRAKER_TYPES = frozenset({CONNECTION_KLIPPER})
@@ -40,9 +42,22 @@ FLASHFORGE_TYPES = frozenset({CONNECTION_FLASHFORGE})
 MKS_TYPES = frozenset({CONNECTION_MKS})
 OBICO_TYPES = frozenset({CONNECTION_OBICO})
 SNAPMAKER_TYPES = frozenset({CONNECTION_SNAPMAKER})
+ELEGOO_TYPES = frozenset({CONNECTION_ELEGOO})
+ELEGOO_CC2_TYPES = frozenset({CONNECTION_ELEGOO_CC2})
 NON_BAMBU_TYPES = (
-    MOONRAKER_TYPES | OCTOPRINT_TYPES | DUET_TYPES | FLASHFORGE_TYPES | MKS_TYPES | OBICO_TYPES | SNAPMAKER_TYPES
+    MOONRAKER_TYPES
+    | OCTOPRINT_TYPES
+    | DUET_TYPES
+    | FLASHFORGE_TYPES
+    | MKS_TYPES
+    | OBICO_TYPES
+    | SNAPMAKER_TYPES
+    | ELEGOO_TYPES
+    | ELEGOO_CC2_TYPES
 )
+# Connection types built from protocol documentation without a printer to
+# test on. The UI marks them "Untested on hardware".
+UNTESTED_TYPES = ELEGOO_TYPES | ELEGOO_CC2_TYPES
 # All connection types the API/schema accepts.
 KNOWN_CONNECTION_TYPES = frozenset({CONNECTION_BAMBU}) | NON_BAMBU_TYPES
 
@@ -55,6 +70,8 @@ TRANSPORT_FLASHFORGE = "flashforge"
 TRANSPORT_MKS = "mks"
 TRANSPORT_OBICO = "obico"
 TRANSPORT_SNAPMAKER = "snapmaker"
+TRANSPORT_ELEGOO = "elegoo"
+TRANSPORT_ELEGOO_CC2 = "elegoo_cc2"
 
 
 @dataclass(frozen=True)
@@ -154,6 +171,26 @@ def capabilities_for(printer) -> PrinterCapabilities:
             can_send_gcode=not prusalink,
         )
 
+    if conn in ELEGOO_TYPES or conn in ELEGOO_CC2_TYPES:
+        # Elegoo SDCP / Centauri Carbon 2: pause/resume/stop, temperatures,
+        # light and printing. Neither protocol has a raw G-code command, and
+        # the home route sends G28, so homing is not offered either. CANVAS
+        # slots are reported as material units.
+        return PrinterCapabilities(
+            connection_type=conn,
+            has_ams=False,
+            has_drying=False,
+            has_kprofiles=False,
+            has_cloud=False,
+            has_3mf_archive=False,
+            has_chamber=False,
+            can_control=True,
+            can_print=True,
+            klipper_profile=None,
+            can_home=False,
+            can_send_gcode=False,
+        )
+
     if conn in OBICO_TYPES:
         # Obico: upload-only relay — no live status, no pause/resume/stop/gcode/
         # light API (see services/obico/__init__.py for why). can_control is
@@ -201,6 +238,10 @@ def transport_of(printer) -> str:
         return TRANSPORT_MKS
     if conn in SNAPMAKER_TYPES:
         return TRANSPORT_SNAPMAKER
+    if conn in ELEGOO_TYPES:
+        return TRANSPORT_ELEGOO
+    if conn in ELEGOO_CC2_TYPES:
+        return TRANSPORT_ELEGOO_CC2
     if conn in OBICO_TYPES:
         return TRANSPORT_OBICO
     return TRANSPORT_BAMBU

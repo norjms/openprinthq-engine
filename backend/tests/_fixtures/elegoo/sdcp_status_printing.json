@@ -1,0 +1,24 @@
+{
+  "Status": {
+    "CurrentStatus": [1],
+    "PreviousStatus": 0,
+    "TempOfNozzle": 210.5,
+    "TempTargetNozzle": 210.0,
+    "TempOfHotbed": 60.1,
+    "TempTargetHotbed": 60,
+    "TempOfBox": 31.0,
+    "PrintInfo": {
+      "Status": 3,
+      "CurrentLayer": 150,
+      "TotalLayer": 500,
+      "CurrentTicks": 60000,
+      "TotalTicks": 200000,
+      "Filename": "test_print.gcode",
+      "ErrorNumber": 0,
+      "TaskId": "0b1a2c3d"
+    }
+  },
+  "MainboardID": "000000000001d354",
+  "TimeStamp": 1687069655,
+  "Topic": "sdcp/status/000000000001d354"
+}
