@@ -33,6 +33,7 @@ CONNECTION_OBICO = "obico"  # Obico cloud relay (upload-only) transport
 CONNECTION_SNAPMAKER = "snapmaker"  # Snapmaker 2.0 / Artisan / J1 LAN HTTP transport
 CONNECTION_ELEGOO = "elegoo"  # Elegoo SDCP v3 WebSocket (Centauri Carbon); untested on hardware
 CONNECTION_ELEGOO_CC2 = "elegoo_cc2"  # Elegoo Centauri Carbon 2 MQTT; untested on hardware
+CONNECTION_ANYCUBIC = "anycubic"  # Anycubic Kobra LAN-mode MQTT (TLS); untested on hardware
 
 # Transport families — which client implementation drives the connection.
 MOONRAKER_TYPES = frozenset({CONNECTION_KLIPPER})
@@ -44,6 +45,7 @@ OBICO_TYPES = frozenset({CONNECTION_OBICO})
 SNAPMAKER_TYPES = frozenset({CONNECTION_SNAPMAKER})
 ELEGOO_TYPES = frozenset({CONNECTION_ELEGOO})
 ELEGOO_CC2_TYPES = frozenset({CONNECTION_ELEGOO_CC2})
+ANYCUBIC_TYPES = frozenset({CONNECTION_ANYCUBIC})
 NON_BAMBU_TYPES = (
     MOONRAKER_TYPES
     | OCTOPRINT_TYPES
@@ -54,10 +56,11 @@ NON_BAMBU_TYPES = (
     | SNAPMAKER_TYPES
     | ELEGOO_TYPES
     | ELEGOO_CC2_TYPES
+    | ANYCUBIC_TYPES
 )
 # Connection types built from protocol documentation without a printer to
 # test on. The UI marks them "Untested on hardware".
-UNTESTED_TYPES = ELEGOO_TYPES | ELEGOO_CC2_TYPES
+UNTESTED_TYPES = ELEGOO_TYPES | ELEGOO_CC2_TYPES | ANYCUBIC_TYPES
 # All connection types the API/schema accepts.
 KNOWN_CONNECTION_TYPES = frozenset({CONNECTION_BAMBU}) | NON_BAMBU_TYPES
 
@@ -72,6 +75,7 @@ TRANSPORT_OBICO = "obico"
 TRANSPORT_SNAPMAKER = "snapmaker"
 TRANSPORT_ELEGOO = "elegoo"
 TRANSPORT_ELEGOO_CC2 = "elegoo_cc2"
+TRANSPORT_ANYCUBIC = "anycubic"
 
 
 @dataclass(frozen=True)
@@ -171,11 +175,11 @@ def capabilities_for(printer) -> PrinterCapabilities:
             can_send_gcode=not prusalink,
         )
 
-    if conn in ELEGOO_TYPES or conn in ELEGOO_CC2_TYPES:
-        # Elegoo SDCP / Centauri Carbon 2: pause/resume/stop, temperatures,
-        # light and printing. Neither protocol has a raw G-code command, and
+    if conn in ELEGOO_TYPES or conn in ELEGOO_CC2_TYPES or conn in ANYCUBIC_TYPES:
+        # Elegoo SDCP / Centauri Carbon 2 / Anycubic LAN: pause/resume/stop,
+        # temperatures, light and printing. Neither protocol has a raw G-code command, and
         # the home route sends G28, so homing is not offered either. CANVAS
-        # slots are reported as material units.
+        # and ACE slots are reported as material units.
         return PrinterCapabilities(
             connection_type=conn,
             has_ams=False,
@@ -242,6 +246,8 @@ def transport_of(printer) -> str:
         return TRANSPORT_ELEGOO
     if conn in ELEGOO_CC2_TYPES:
         return TRANSPORT_ELEGOO_CC2
+    if conn in ANYCUBIC_TYPES:
+        return TRANSPORT_ANYCUBIC
     if conn in OBICO_TYPES:
         return TRANSPORT_OBICO
     return TRANSPORT_BAMBU

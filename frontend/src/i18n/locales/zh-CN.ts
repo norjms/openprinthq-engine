@@ -535,6 +535,8 @@ export default {
       typeObico: 'Obico',
       typeElegoo: 'Elegoo (SDCP)',
       typeElegooCc2: 'Elegoo Centauri Carbon 2',
+      typeAnycubic: 'Anycubic Kobra (LAN)',
+      anycubicLanHelp: '请先在打印机上开启局域网模式。OpenPrintHQ 会自行获取打印机的本地凭据，无需其他设置。',
       elegooAccessCode: '访问码（可选）',
       elegooAccessCodeHelp: '仅当打印机设置了访问码时填写。请先在打印机上开启仅局域网模式。',
       obicoApiKey: 'Obico API 密钥',

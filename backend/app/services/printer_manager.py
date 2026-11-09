@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.models.printer import Printer
 from backend.app.services.bambu_mqtt import BambuMQTTClient, MQTTLogEntry, PrinterState, get_stage_name
 from backend.app.services.printer_capabilities import (
+    TRANSPORT_ANYCUBIC,
     TRANSPORT_DUET,
     TRANSPORT_ELEGOO,
     TRANSPORT_ELEGOO_CC2,
@@ -776,6 +777,23 @@ class PrinterManager:
                     on_layer_change=on_layer_change,
                     on_bed_temp_update=on_bed_temp_update,
                 )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_ANYCUBIC:
+            # Anycubic Kobra in LAN mode: the client runs the LAN handshake for
+            # its broker credentials, so nothing but the IP is stored. Untested
+            # on hardware (docs/anycubic-printers.md).
+            from backend.app.services.anycubic.anycubic_client import AnycubicClient
+
+            client = AnycubicClient(
+                ip_address=printer.ip_address,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
             client.connect(loop=self._loop or asyncio.get_event_loop())
         elif transport == TRANSPORT_OBICO:
             # Obico (upload-only relay). ip_address holds the Obico server
