@@ -293,6 +293,9 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
         "manual_start": item.manual_start,
         "max_retries": item.max_retries or 0,
         "priority": item.priority if item.priority is not None else 50,
+        "match_level": getattr(item, "match_level", None),
+        "filament_confirmed": bool(getattr(item, "filament_confirmed", False)),
+        "filament_unmatched": _json_or_none(getattr(item, "filament_unmatched", None)),
         "retry_count": item.retry_count or 0,
         "retry_of_id": item.retry_of_id,
         "filament_short": bool(item.filament_short),
@@ -393,6 +396,15 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
     if item.printer:
         response.printer_name = item.printer.name
     return response
+
+
+def _json_or_none(text: str | None):
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 @router.get("/", response_model=list[PrintQueueItemResponse])
@@ -791,6 +803,9 @@ async def add_to_queue(
             manual_start=data.manual_start,
             max_retries=data.max_retries,
             priority=data.priority,
+            match_level=data.match_level,
+            # A mapping chosen when the job was queued is the user's choice: not checked again.
+            filament_confirmed=bool(data.ams_mapping),
             skip_filament_check=data.skip_filament_check,
             ams_mapping=ams_mapping_json,
             plate_id=data.plate_id,
@@ -1380,8 +1395,17 @@ async def update_queue_item(
     if claimed is not None:
         raise HTTPException(409, "Item is being dispatched — cancel it first to make changes")
 
+    # Another printer or file: a filament mapping someone confirmed no longer applies.
+    if ("printer_id" in update_data and update_data["printer_id"] != item.printer_id) or (
+        "library_file_id" in update_data and update_data["library_file_id"] != item.library_file_id
+    ):
+        item.filament_confirmed = False
+        item.filament_unmatched = None
+
     for field, value in update_data.items():
         setattr(item, field, value)
+    if update_data.get("ams_mapping"):
+        item.filament_confirmed = True
 
     await db.commit()
     await db.refresh(item, ["archive", "printer", "library_file", "created_by", "batch"])

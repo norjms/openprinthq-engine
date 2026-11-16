@@ -25,6 +25,7 @@ from backend.app.models.settings import Settings
 from backend.app.models.smart_plug import SmartPlug
 from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
+from backend.app.services import filament_match as fm
 from backend.app.services.bambu_ftp import (
     UploadCancelled,
     cache_3mf_download,
@@ -471,6 +472,9 @@ class PrintScheduler:
             # Log skip reasons once per queue check (not per item)
             skip_reasons: dict[str, int] = {}
 
+            # Filament matching settings and saved mappings, read once per pass.
+            fctx = await self._filament_context(db)
+
             # Items selected for dispatch in this pass, one per printer. The
             # loop below only *decides* — the uploads happen afterwards, in
             # parallel (#2555). See _dispatch_selected().
@@ -621,6 +625,13 @@ class PrintScheduler:
                     # must be recomputed from live trays rather than trusted.
                     await self._ensure_ams_mapping(db, item.printer_id, item)
 
+                    # Filament matching: the loaded filament must fit the job at its level, or
+                    # the item waits (and holds its printer's queue) until someone maps it.
+                    if await self._hold_for_filament(db, item, item.printer_id, fctx):
+                        skip_reasons["filament_unmatched"] = skip_reasons.get("filament_unmatched", 0) + 1
+                        busy_printers.add(item.printer_id)
+                        continue
+
                     # Filament-deficit pre-dispatch check (#1496). If the
                     # assigned spool can't satisfy any required slot grams,
                     # promote the item to manual_start so the user must
@@ -690,6 +701,7 @@ class PrintScheduler:
                             effective_types = sorted(set(required_types or []) | set(override_types))
 
                     target_desc = item.target_model or (f"group {item.target_group_id}" if item.target_group_id else "")
+                    item_fctx = await self._item_filament_ctx(db, item, fctx)
                     # Cross-model safety gate (#2578): never hand a 3MF sliced
                     # for an incompatible model to a printer, no matter how the
                     # row got into the DB (old rows, direct API writes). Held
@@ -718,6 +730,7 @@ class PrintScheduler:
                             require_plate_clear=require_plate_clear,
                             job_hw=job_hardware(item, effective_types),
                             allowed_ids=await visible_printer_ids_for_user_id(db, item.created_by_id),
+                            filament_ctx=item_fctx,
                         )
                         # Notifications take a single "what was this aimed at"
                         # string; groups reuse the same field as models.
@@ -733,8 +746,16 @@ class PrintScheduler:
                             require_plate_clear=require_plate_clear,
                             job_hw=job_hardware(item, effective_types),
                             allowed_ids=await visible_printer_ids_for_user_id(db, item.created_by_id),
+                            filament_ctx=item_fctx,
                         )
                         target_desc = item.target_model
+
+                    # Filament matching: idle printers that only failed on filament make the
+                    # item "unmatched", so the hub can ask someone to map it.
+                    if not printer_id and item_fctx and item_fctx.get("unmatched"):
+                        await self._mark_unmatched(db, item, item_fctx["unmatched"], item_fctx["level"])
+                    elif item.filament_unmatched:
+                        item.filament_unmatched = None
 
                     # Update waiting_reason if changed and send notification when first waiting
                     if item.waiting_reason != waiting_reason:
@@ -815,6 +836,9 @@ class PrintScheduler:
                         # jobs where mapping wasn't computed upfront, and it also
                         # self-heals a bogus stored [-1] (#2589).
                         await self._ensure_ams_mapping(db, printer_id, item)
+                        # The matcher already accepted this printer; make sure the slot map it
+                        # judged is the one sent, if the default mapping picked another tray.
+                        await self._hold_for_filament(db, item, printer_id, fctx)
 
                         # Filament-deficit pre-dispatch check (#1496).
                         if await self._block_on_filament_deficit(db, item):
@@ -1025,6 +1049,7 @@ class PrintScheduler:
         require_plate_clear: bool = True,
         job_hw: dict | None = None,
         allowed_ids: set[int] | None = None,
+        filament_ctx: dict | None = None,
     ) -> tuple[int | None, str | None]:
         """Find an idle, connected printer matching the model with compatible filaments.
 
@@ -1076,6 +1101,7 @@ class PrintScheduler:
             filament_overrides=filament_overrides,
             require_plate_clear=require_plate_clear,
             job_hw=job_hw,
+            filament_ctx=filament_ctx,
         )
 
     async def _find_idle_printer_for_group(
@@ -1088,6 +1114,7 @@ class PrintScheduler:
         require_plate_clear: bool = True,
         job_hw: dict | None = None,
         allowed_ids: set[int] | None = None,
+        filament_ctx: dict | None = None,
     ) -> tuple[int | None, str | None]:
         """Find an idle, connected member of a printer group.
 
@@ -1119,6 +1146,7 @@ class PrintScheduler:
             filament_overrides=filament_overrides,
             require_plate_clear=require_plate_clear,
             job_hw=job_hw,
+            filament_ctx=filament_ctx,
         )
 
     def _select_idle_printer(
@@ -1130,6 +1158,7 @@ class PrintScheduler:
         filament_overrides: list[dict] | None = None,
         require_plate_clear: bool = True,
         job_hw: dict | None = None,
+        filament_ctx: dict | None = None,
     ) -> tuple[int | None, str | None]:
         """Pick an available printer from an already-resolved candidate list.
 
@@ -1264,7 +1293,14 @@ class PrintScheduler:
                 # Passed all force checks — immediately eligible (no preference ordering needed)
                 return printer.id, None
             else:
-                # No overrides at all - take first available (existing behavior)
+                # No overrides: the loaded filament must fit the file at the item's level
+                # (filament matching); a printer that doesn't report what's loaded isn't checked.
+                if filament_ctx:
+                    res = self._filament_result(printer.id, filament_ctx)
+                    if res is not None and not res.ok:
+                        printers_missing_filament.append((printer.name, [res.summary()]))
+                        filament_ctx.setdefault("unmatched", []).append((printer, res))
+                        continue
                 return printer.id, None
 
         # If we have candidates from preference override matching, pick the one with most color matches
@@ -1325,6 +1361,146 @@ class PrintScheduler:
         """
         parts = [p.strip() for p in waiting_reason.split(" | ")]
         return all(p.startswith("Busy:") for p in parts)
+
+    # ---------------------------------------------------------------- filament matching
+
+    async def _filament_context(self, db: AsyncSession) -> dict:
+        """The farm's default match level, material groups and saved mappings, for one queue pass."""
+        from backend.app.models.filament_alias import FilamentAlias
+
+        level = (await self._get_setting(db, "filament_match_level")) or fm.DEFAULT_LEVEL
+        try:
+            groups = json.loads(await self._get_setting(db, "filament_material_groups") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            groups = {}
+        rows = (await db.execute(select(FilamentAlias))).scalars().all()
+        aliases = {fm.alias_key(r.req_type, r.req_color, r.tray_type, r.tray_color) for r in rows}
+        return {
+            "level": level if level in fm.LEVELS else fm.DEFAULT_LEVEL,
+            "groups": groups if isinstance(groups, dict) else {},
+            "aliases": aliases,
+        }
+
+    async def _item_filament_ctx(self, db: AsyncSession, item: PrintQueueItem, fctx: dict) -> dict | None:
+        """What filament matching needs for one item, or None when it doesn't apply: a mapping someone
+        confirmed, filament overrides (their own rules), the filament check skipped, external spool only,
+        or a file whose filaments can't be read."""
+        if (
+            getattr(item, "filament_confirmed", False)
+            or item.filament_overrides
+            or item.skip_filament_check
+            or item.use_ams is False
+        ):
+            return None
+        reqs = await self._cached_requirements(db, item)
+        if not reqs:
+            return None
+        level = item.match_level if item.match_level in fm.LEVELS else fctx["level"]
+        return {**fctx, "level": level, "requirements": reqs, "unmatched": []}
+
+    async def _cached_requirements(self, db: AsyncSession, item: PrintQueueItem) -> list[dict] | None:
+        """The item's per-slot filaments from its 3MF, cached by file and plate (read once, not every pass)."""
+        cache = self.__dict__.setdefault("_req_cache", {})
+        key = (item.archive_id, item.library_file_id, item.plate_id)
+        if key not in cache:
+            if len(cache) > 500:
+                cache.clear()
+            cache[key] = await self._get_filament_requirements(db, item)
+        return cache[key]
+
+    def _filament_result(self, printer_id: int, ctx: dict) -> fm.MatchResult | None:
+        """How the printer's loaded filament fits the item; None when the printer reports nothing loaded."""
+        status = printer_manager.get_status(printer_id)
+        if status is None:
+            return None
+        loaded = self._build_loaded_filaments(status)
+        if not loaded:
+            return None
+        fts = bool(getattr(getattr(status, "fila_switch", None), "installed", False))
+        return fm.match(ctx["requirements"], loaded, ctx["level"], ctx["groups"], ctx["aliases"], fts)
+
+    async def _hold_for_filament(self, db: AsyncSession, item: PrintQueueItem, printer_id: int, fctx: dict) -> bool:
+        """Check the item's filament on the printer it is about to go to.
+
+        The mapping it would be sent with is kept when every slot fits at the item's level (so prefer-lowest
+        and the other mapping rules still decide between good trays); otherwise the best fitting mapping
+        replaces it. When no mapping fits, the item is marked unmatched and True is returned: it waits.
+        """
+        ctx = await self._item_filament_ctx(db, item, fctx)
+        if ctx is None:
+            if item.filament_unmatched:
+                item.filament_unmatched = None
+                await db.commit()
+            return False
+        status = printer_manager.get_status(printer_id)
+        loaded = self._build_loaded_filaments(status) if status is not None else []
+        if not loaded:
+            return False
+        stored = None
+        if item.ams_mapping:
+            try:
+                stored = json.loads(item.ams_mapping)
+            except (json.JSONDecodeError, TypeError):
+                stored = None
+        given = fm.check_mapping(ctx["requirements"], loaded, stored, ctx["level"], ctx["groups"], ctx["aliases"])
+        if given is not None and given.ok:
+            if item.filament_unmatched:
+                item.filament_unmatched = None
+                await db.commit()
+            return False
+        fts = bool(getattr(getattr(status, "fila_switch", None), "installed", False))
+        best = fm.match(ctx["requirements"], loaded, ctx["level"], ctx["groups"], ctx["aliases"], fts)
+        if best.ok:
+            item.ams_mapping = json.dumps(best.mapping)
+            item.filament_unmatched = None
+            logger.info("Queue item %s: filament matched on printer %s, mapping %s", item.id, printer_id, best.mapping)
+            await db.commit()
+            return False
+        printer = await self._get_printer(db, printer_id)
+        await self._mark_unmatched(db, item, [(printer, best)], ctx["level"])
+        return True
+
+    async def _mark_unmatched(self, db: AsyncSession, item: PrintQueueItem, entries: list, level: str) -> None:
+        """Record why the item can't start because of filament, and tell the notification providers once."""
+        previous = None
+        if item.filament_unmatched:
+            try:
+                previous = json.loads(item.filament_unmatched)
+            except (json.JSONDecodeError, TypeError):
+                previous = None
+        printers = [
+            {
+                "printer_id": p.id if p else None,
+                "printer_name": p.name if p else None,
+                "summary": res.summary(),
+                "slots": [s.__dict__ for s in res.slots],
+            }
+            for p, res in entries
+        ]
+        since = (previous or {}).get("since") or datetime.now(timezone.utc).isoformat()
+        record = {"since": since, "level": level, "printers": printers}
+        reason = "Filament doesn't match: " + "; ".join(f"{x['printer_name']}: {x['summary']}" for x in printers)
+        changed = previous is None or previous.get("printers") != printers or previous.get("level") != level
+        if changed:
+            item.filament_unmatched = json.dumps(record)
+        if item.waiting_reason != reason:
+            item.waiting_reason = reason
+            changed = True
+        if not changed:
+            return
+        await db.commit()
+        if previous is None:
+            logger.info("Queue item %s waits for filament: %s", item.id, reason)
+            try:
+                job_name = await self._get_job_name(db, item)
+                await notification_service.on_queue_job_waiting(
+                    job_name=job_name,
+                    target_model=", ".join(x["printer_name"] or "?" for x in printers),
+                    waiting_reason=reason,
+                    db=db,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Queue item %s: waiting notification failed: %s", item.id, e)
 
     def _get_missing_force_color_slots(self, printer_id: int, force_overrides: list[dict]) -> list[str]:
         """Return descriptive strings for force_color_match slots not satisfied by the printer.

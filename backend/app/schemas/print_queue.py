@@ -60,6 +60,8 @@ class PrintQueueItemCreate(BaseModel):
     manual_start: bool = False  # Requires manual trigger to start (staged)
     max_retries: int = Field(default=0, ge=0, le=10)  # Requeue automatically after a failed print
     priority: int = Field(default=50, ge=0, le=100)  # 25 low, 50 normal, 75 high, 100 urgent; higher goes first
+    # Filament matching level: exact | close | family | any; None = the farm default
+    match_level: Literal["exact", "close", "family", "any"] | None = None
     insert_at_top: bool = False  # Insert ahead of other pending items in the same queue scope
     insert_position: int | None = None  # 1-indexed insertion position for priority queueing
     # Persistent "Print Anyway" acknowledgement (#1698-followup). When set,
@@ -119,6 +121,7 @@ class PrintQueueItemUpdate(BaseModel):
     manual_start: bool | None = None
     max_retries: int | None = Field(default=None, ge=0, le=10)
     priority: int | None = Field(default=None, ge=0, le=100)
+    match_level: Literal["exact", "close", "family", "any"] | None = None
     ams_mapping: list[int] | None = None
     plate_id: int | None = None
     # Print options
@@ -185,6 +188,11 @@ class PrintQueueItemResponse(BaseModel):
     created_at: UTCDatetime
     max_retries: int = 0
     priority: int = 50
+    # Filament matching: the item's level (None = farm default), whether someone mapped its
+    # filaments, and why it can't start because of filament (None when it can).
+    match_level: str | None = None
+    filament_confirmed: bool = False
+    filament_unmatched: dict | None = None
     retry_count: int = 0
     retry_of_id: int | None = None
 

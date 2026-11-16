@@ -3906,6 +3906,14 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE printer_alarms ADD COLUMN dismissed_at TIMESTAMP")
     await _safe_execute(conn, "ALTER TABLE printer_alarms ADD COLUMN dismissed_by VARCHAR(100)")
 
+    # Migration: filament matching on queue items (match level, a confirmed mapping, why it can't start).
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN match_level VARCHAR(10)")
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN filament_confirmed BOOLEAN DEFAULT 0")
+    else:
+        await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN filament_confirmed BOOLEAN DEFAULT false")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN filament_unmatched TEXT")
+
     # Migration: per-printer permission scoping (#57). Both columns are added
     # NULL, which means "not scoped": every existing group keeps full access to
     # the farm. Camera and websocket tokens record whose scope they carry.
