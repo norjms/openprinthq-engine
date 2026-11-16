@@ -41,7 +41,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select, update
 
 from backend.app.core import database
-from backend.app.models.printer_alarm import PrinterAlarm
+from backend.app.models.printer_alarm import AlarmSuppression, PrinterAlarm
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,7 @@ class Alarm:
     code: str
     severity: str
     message: str
+    full_code: str | None = None
 
     @property
     def key(self) -> tuple[str, str]:
@@ -126,7 +127,7 @@ def _hms_alarms(state) -> list[Alarm]:
         text = get_error_description(short, full_code) or getattr(err, "message", "") or f"HMS {short}"
         prev = out.get(short)
         if prev is None or SEVERITIES.index(severity) < SEVERITIES.index(prev.severity):
-            out[short] = Alarm("bambu", short, severity, text)
+            out[short] = Alarm("bambu", short, severity, text, full_code.upper() if full_code else None)
     return list(out.values())
 
 
@@ -170,8 +171,10 @@ def active_alarms(state, source: str | None) -> list[Alarm]:
 
 # ---------------------------------------------------------------- state
 
-# printer_id -> {(source, code): [row_id, last_touch_monotonic, missing_since or None]}
+# printer_id -> {(source, code): [row_id, last_touch_monotonic, missing_since or None, message]}
 _open: dict[int, dict[tuple[str, str], list]] = {}
+# printer_id -> the (source, code) pairs suppressed on it
+_suppressed: dict[int, frozenset[tuple[str, str]]] = {}
 _last_prune = 0.0
 
 
@@ -196,7 +199,7 @@ async def _load(printer_id: int) -> dict[tuple[str, str], list]:
             if (r.source, r.code) in out:
                 extra.append(r.id)
             else:
-                out[(r.source, r.code)] = [r.id, now, None]
+                out[(r.source, r.code)] = [r.id, now, None, r.message]
         if extra:
             await db.execute(update(PrinterAlarm).where(PrinterAlarm.id.in_(extra)).values(cleared_at=_now()))
             await db.commit()
@@ -230,6 +233,9 @@ async def _observe(printer_id: int, state, client=None) -> list[Alarm]:
     if source is None or not getattr(state, "connected", False):
         return []
     current = {a.key: a for a in active_alarms(state, source)}
+    if current:
+        muted = await suppressed(printer_id)
+        current = {k: a for k, a in current.items() if k not in muted}
     known = _open.get(printer_id)
     if known is None:
         known = _open[printer_id] = await _load(printer_id)
@@ -239,6 +245,8 @@ async def _observe(printer_id: int, state, client=None) -> list[Alarm]:
     mono = _clock()
     new = [a for k, a in current.items() if k not in known]
     touch = [k for k in current if k in known and mono - known[k][1] >= TOUCH_EVERY_S]
+    # Text that changed (a catalog update, or a row recorded before the code had text).
+    retext = [k for k in current if k in known and known[k][3] != current[k].message]
     gone: list[tuple[str, str]] = []
     for k, entry in known.items():
         if k in current:
@@ -248,7 +256,7 @@ async def _observe(printer_id: int, state, client=None) -> list[Alarm]:
         elif mono - entry[2] >= CLEAR_GRACE_S:
             gone.append(k)
 
-    if new or touch or gone:
+    if new or touch or gone or retext:
         now = _now()
         async with database.async_session() as db:
             rows = []
@@ -259,6 +267,7 @@ async def _observe(printer_id: int, state, client=None) -> list[Alarm]:
                     code=a.code[:40],
                     severity=a.severity,
                     message=a.message[:2000],
+                    full_code=a.full_code,
                     first_seen=now,
                     last_seen=now,
                 )
@@ -268,15 +277,24 @@ async def _observe(printer_id: int, state, client=None) -> list[Alarm]:
                 await db.execute(
                     update(PrinterAlarm).where(PrinterAlarm.id.in_([known[k][0] for k in touch])).values(last_seen=now)
                 )
+            for k in retext:
+                a = current[k]
+                await db.execute(
+                    update(PrinterAlarm)
+                    .where(PrinterAlarm.id == known[k][0])
+                    .values(message=a.message[:2000], full_code=a.full_code)
+                )
             if gone:
                 await db.execute(
                     update(PrinterAlarm).where(PrinterAlarm.id.in_([known[k][0] for k in gone])).values(cleared_at=now)
                 )
             await db.commit()
             for key, row in rows:
-                known[key] = [row.id, mono, None]
+                known[key] = [row.id, mono, None, row.message]
         for k in touch:
             known[k][1] = mono
+        for k in retext:
+            known[k][3] = current[k].message
         for k in gone:
             known.pop(k, None)
     if new:
@@ -337,14 +355,112 @@ async def acknowledge(alarm_ids: list[int] | None, printer_id: int | None, who: 
     return res.rowcount or 0
 
 
+async def dismiss(alarm_ids: list[int], who: str | None) -> int:
+    """Dismiss alarms: they leave the active list (and count as acknowledged) while the printer still reports them.
+
+    The printer clearing the code and reporting it again makes a new alarm.
+    """
+    if not alarm_ids:
+        return 0
+    now = _now()
+    async with database.async_session() as db:
+        res = await db.execute(
+            update(PrinterAlarm)
+            .where(PrinterAlarm.id.in_(alarm_ids), PrinterAlarm.dismissed_at.is_(None))
+            .values(dismissed_at=now, dismissed_by=(who or None))
+        )
+        await db.execute(
+            update(PrinterAlarm)
+            .where(PrinterAlarm.id.in_(alarm_ids), PrinterAlarm.acknowledged_at.is_(None))
+            .values(acknowledged_at=now, acknowledged_by=(who or None))
+        )
+        await db.commit()
+    return res.rowcount or 0
+
+
+async def suppressed(printer_id: int) -> frozenset[tuple[str, str]]:
+    """The (source, code) pairs nobody wants alerts for on this printer. Cached."""
+    out = _suppressed.get(printer_id)
+    if out is None:
+        async with database.async_session() as db:
+            rows = (
+                await db.execute(
+                    select(AlarmSuppression.source, AlarmSuppression.code).where(
+                        AlarmSuppression.printer_id == printer_id
+                    )
+                )
+            ).all()
+        out = _suppressed[printer_id] = frozenset((r[0], r[1]) for r in rows)
+    return out
+
+
+async def suppress(printer_id: int, source: str, code: str, message: str | None, who: str | None) -> AlarmSuppression:
+    """Stop alerting about one code on one printer, and dismiss its open alarms. Idempotent."""
+    async with database.async_session() as db:
+        row = (
+            await db.execute(
+                select(AlarmSuppression).where(
+                    AlarmSuppression.printer_id == printer_id,
+                    AlarmSuppression.source == source,
+                    AlarmSuppression.code == code,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            row = AlarmSuppression(
+                printer_id=printer_id,
+                source=source,
+                code=code[:40],
+                message=(message or None) and message[:2000],
+                created_by=(who or None),
+                created_at=_now(),
+            )
+            db.add(row)
+        open_ids = (
+            (
+                await db.execute(
+                    select(PrinterAlarm.id).where(
+                        PrinterAlarm.printer_id == printer_id,
+                        PrinterAlarm.source == source,
+                        PrinterAlarm.code == code,
+                        PrinterAlarm.cleared_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        await db.commit()
+        await db.refresh(row)
+    _suppressed.pop(printer_id, None)
+    await dismiss(list(open_ids), who)
+    logger.info("[ALARM] printer %s: %s %s suppressed by %s", printer_id, source, code, who or "someone")
+    return row
+
+
+async def unsuppress(suppression_id: int) -> AlarmSuppression | None:
+    """Alert about a suppressed code again. Returns the removed suppression, or None."""
+    async with database.async_session() as db:
+        row = await db.get(AlarmSuppression, suppression_id)
+        if row is None:
+            return None
+        printer_id = row.printer_id
+        await db.delete(row)
+        await db.commit()
+    _suppressed.pop(printer_id, None)
+    return row
+
+
 def forget(printer_id: int) -> None:
     """Drop a printer's cached open alarms (printer deleted or reconfigured)."""
     _open.pop(printer_id, None)
+    _suppressed.pop(printer_id, None)
 
 
 def reset() -> None:
     """Tests: clear the in-memory cache."""
     global _last_prune
     _open.clear()
+    _suppressed.clear()
     _locks.clear()
     _last_prune = 0.0

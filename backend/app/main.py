@@ -1446,6 +1446,14 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
                     printer_id, printer, logging.getLogger(__name__)
                 )
 
+                # Codes someone suppressed for this printer in the alarm feed are not sent.
+                try:
+                    from backend.app.services import alarm_feed
+
+                    muted = await alarm_feed.suppressed(printer_id)
+                except Exception:  # noqa: BLE001
+                    muted = frozenset()
+
                 # Notification sends need a session (provider/template lookups).
                 async with async_session() as db:
                     sent_count = 0
@@ -1460,7 +1468,11 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
                         # Only notify for errors with known descriptions — printers
                         # send many undocumented/phantom codes that aren't real errors.
                         description = get_error_description(short_code)
-                        if not description or short_code in _HMS_NOTIFICATION_SUPPRESS:
+                        if (
+                            not description
+                            or short_code in _HMS_NOTIFICATION_SUPPRESS
+                            or ("bambu", short_code) in muted
+                        ):
                             continue
 
                         error_type = f"{module_name} Error"

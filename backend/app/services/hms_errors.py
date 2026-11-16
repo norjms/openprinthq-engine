@@ -19,6 +19,9 @@ Two kinds of code reach this module:
   with no text are internal (``HMS_INTERNAL_CODES``) and are not alarms.
 """
 
+import json
+from pathlib import Path
+
 # HMS error code to human-readable description mapping
 # Format: "XXXX_YYYY" where XXXX is module code, YYYY is error code
 HMS_ERROR_DESCRIPTIONS: dict[str, str] = {
@@ -1325,7 +1328,41 @@ def get_error_description(error_code: str, full_code: str | None = None) -> str 
         Human-readable description or None if not found
     """
     if full_code:
-        text = HMS_LONG_DESCRIPTIONS.get(full_code.upper())
+        code = full_code.upper()
+        text = HMS_LONG_DESCRIPTIONS.get(code)
+        if text:
+            return text
+        text = catalog_text(code)
         if text:
             return text
     return HMS_ERROR_DESCRIPTIONS.get(error_code.upper())
+
+
+_CATALOG_FILE = Path(__file__).resolve().parent.parent / "data" / "hms_texts.json"
+_catalog: dict[str, dict[str, str]] | None = None
+
+
+def catalog_text(full_code: str | None) -> str | None:
+    """Bambu Studio's text for a full code (16 characters for hms[], 8 for print_error), if any.
+
+    data/hms_texts.json holds every code Bambu publishes text for, in every
+    printer family (scripts/update_hms_texts.py rebuilds it). Loaded on first use.
+    """
+    global _catalog
+    if not full_code:
+        return None
+    if _catalog is None:
+        try:
+            _catalog = json.loads(_CATALOG_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _catalog = {}
+    code = full_code.upper()
+    return (_catalog.get("hms" if len(code) == 16 else "print_error") or {}).get(code)
+
+
+def hms_wiki_code(full_code: str | None) -> str | None:
+    """A 16-character HMS code as Bambu writes it in the wiki and the app: HMS_0C00-0100-0002-0017."""
+    if not full_code or len(full_code) != 16:
+        return None
+    c = full_code.upper()
+    return f"HMS_{c[0:4]}-{c[4:8]}-{c[8:12]}-{c[12:16]}"
