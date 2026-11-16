@@ -178,8 +178,17 @@ class TestObserve:
         t = datetime(2026, 11, 15, 19, 48, 4)
         async with wired.maker() as db:
             for i in range(3):
-                db.add(PrinterAlarm(printer_id=8, source="bambu", code="0700_8011", severity="warning", message="x",
-                                    first_seen=t.replace(microsecond=i), last_seen=t))
+                db.add(
+                    PrinterAlarm(
+                        printer_id=8,
+                        source="bambu",
+                        code="0700_8011",
+                        severity="warning",
+                        message="x",
+                        first_seen=t.replace(microsecond=i),
+                        last_seen=t,
+                    )
+                )
             await db.commit()
         bambu = Bambu()
         await af.observe(8, st(), bambu)  # the printer no longer reports it
