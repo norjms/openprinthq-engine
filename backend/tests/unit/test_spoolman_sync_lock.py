@@ -24,9 +24,23 @@ def _isolate_locks_dict():
         main._spoolman_sync_locks.update(saved)
 
 
-def test_lock_is_per_printer():
+@pytest.mark.asyncio
+async def test_lock_is_per_printer():
     assert main._get_spoolman_sync_lock(7) is main._get_spoolman_sync_lock(7)
     assert main._get_spoolman_sync_lock(7) is not main._get_spoolman_sync_lock(8)
+
+
+def test_a_lock_held_in_a_finished_loop_does_not_block_the_next():
+    async def hold():
+        await main._get_spoolman_sync_lock(9).acquire()  # never released: its loop ends
+
+    asyncio.run(hold())
+
+    async def take():
+        async with main._get_spoolman_sync_lock(9):
+            return True
+
+    assert asyncio.run(asyncio.wait_for(take(), 2))
 
 
 @pytest.mark.asyncio
