@@ -3901,6 +3901,11 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN cancel_reason TEXT")
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN cancelled_by VARCHAR(100)")
 
+    # Migration: alarms keep Bambu's full HMS code, and can be dismissed.
+    await _safe_execute(conn, "ALTER TABLE printer_alarms ADD COLUMN full_code VARCHAR(20)")
+    await _safe_execute(conn, "ALTER TABLE printer_alarms ADD COLUMN dismissed_at TIMESTAMP")
+    await _safe_execute(conn, "ALTER TABLE printer_alarms ADD COLUMN dismissed_by VARCHAR(100)")
+
     # Migration: per-printer permission scoping (#57). Both columns are added
     # NULL, which means "not scoped": every existing group keeps full access to
     # the farm. Camera and websocket tokens record whose scope they carry.

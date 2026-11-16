@@ -73,3 +73,23 @@ class TestGetErrorDescription:
         for code in common_codes:
             result = get_error_description(code)
             assert result is not None, f"Missing description for common code: {code}"
+
+
+class TestBambuStudioCatalog:
+    """data/hms_texts.json: every code Bambu Studio publishes text for."""
+
+    def test_long_code_only_in_the_catalog(self):
+        from backend.app.services.hms_errors import catalog_text
+
+        text = get_error_description("0C00_0017", "0C00010000020017")
+        assert text is not None and text.startswith("Nozzle camera lens is dirty")
+        assert catalog_text("0c00010000020017") == text
+        assert catalog_text(None) is None
+        assert catalog_text("FFFFFFFFFFFFFFFF") is None
+
+    def test_wiki_code(self):
+        from backend.app.services.hms_errors import hms_wiki_code
+
+        assert hms_wiki_code("0c00010000020017") == "HMS_0C00-0100-0002-0017"
+        assert hms_wiki_code("0300400C") is None
+        assert hms_wiki_code(None) is None

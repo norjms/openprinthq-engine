@@ -1160,6 +1160,29 @@
       "title": "Code",
       "type": "string"
      },
+     "dismissed_at": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dismissed At"
+     },
+     "dismissed_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dismissed By"
+     },
      "first_seen": {
       "anyOf": [
        {
@@ -1171,6 +1194,28 @@
        }
       ],
       "title": "First Seen"
+     },
+     "full_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Full Code"
+     },
+     "hms_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hms Code"
      },
      "id": {
       "title": "Id",
@@ -28266,6 +28311,82 @@
     "title": "Subscription",
     "type": "object"
    },
+   "SuppressionOut": {
+    "properties": {
+     "code": {
+      "title": "Code",
+      "type": "string"
+     },
+     "created_at": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Created At"
+     },
+     "created_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Created By"
+     },
+     "id": {
+      "title": "Id",
+      "type": "integer"
+     },
+     "message": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Message"
+     },
+     "printer_id": {
+      "title": "Printer Id",
+      "type": "integer"
+     },
+     "printer_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Printer Name"
+     },
+     "source": {
+      "title": "Source",
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "printer_id",
+     "source",
+     "code",
+     "message",
+     "created_at",
+     "created_by"
+    ],
+    "title": "SuppressionOut",
+    "type": "object"
+   },
    "SyncResult": {
     "description": "Result of a Spoolman sync operation.",
     "properties": {
@@ -30458,9 +30579,114 @@
  },
  "openapi": "3.1.0",
  "paths": {
+  "/api/v1/alarm-suppressions": {
+   "get": {
+    "description": "The alarm codes nobody wants alerts for, per printer, newest first.",
+    "operationId": "alarms_list_suppressions",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "printer_id",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Printer Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/SuppressionOut"
+         },
+         "title": "Response List Suppressions Api V1 Alarm Suppressions Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "List Suppressions",
+    "tags": [
+     "alarms"
+    ]
+   }
+  },
+  "/api/v1/alarm-suppressions/{suppression_id}": {
+   "delete": {
+    "description": "Alert about a suppressed code again.",
+    "operationId": "alarms_delete_suppression",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "suppression_id",
+      "required": true,
+      "schema": {
+       "title": "Suppression Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Delete Suppression",
+    "tags": [
+     "alarms"
+    ]
+   }
+  },
   "/api/v1/alarms": {
    "get": {
-    "description": "The farm's alarms. Active ones come worst first, then newest; cleared and all come newest first.",
+    "description": "The farm's alarms. Active ones come worst first, then newest; cleared and all come newest first.\n\nThe active list leaves out dismissed alarms unless include_dismissed is set.",
     "operationId": "alarms_list_alarms",
     "parameters": [
      {
@@ -30531,6 +30757,18 @@
       }
      },
      {
+      "description": "Active list: also the alarms someone dismissed",
+      "in": "query",
+      "name": "include_dismissed",
+      "required": false,
+      "schema": {
+       "default": false,
+       "description": "Active list: also the alarms someone dismissed",
+       "title": "Include Dismissed",
+       "type": "boolean"
+      }
+     },
+     {
       "in": "query",
       "name": "limit",
       "required": false,
@@ -30593,7 +30831,7 @@
   },
   "/api/v1/alarms/summary": {
    "get": {
-    "description": "Counts for a badge: active alarms, unacknowledged ones, by severity, and which printers have any.",
+    "description": "Counts for a badge: active alarms, unacknowledged ones, by severity, and which printers have any.\n\nDismissed alarms are not counted.",
     "operationId": "alarms_alarm_summary",
     "responses": {
      "200": {
@@ -30733,6 +30971,134 @@
      }
     ],
     "summary": "Ack Alarm",
+    "tags": [
+     "alarms"
+    ]
+   }
+  },
+  "/api/v1/alarms/{alarm_id}/dismiss": {
+   "post": {
+    "description": "Dismiss one alarm: it leaves the active list now. If the printer clears it and reports it again, it is new.",
+    "operationId": "alarms_dismiss_alarm",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "alarm_id",
+      "required": true,
+      "schema": {
+       "title": "Alarm Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "anyOf": [
+         {
+          "$ref": "#/components/schemas/AckBody"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "title": "Body"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Dismiss Alarm",
+    "tags": [
+     "alarms"
+    ]
+   }
+  },
+  "/api/v1/alarms/{alarm_id}/suppress": {
+   "post": {
+    "description": "Stop alerting about this alarm's code on its printer (no alarm, no notification) and dismiss it.",
+    "operationId": "alarms_suppress_alarm",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "alarm_id",
+      "required": true,
+      "schema": {
+       "title": "Alarm Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "anyOf": [
+         {
+          "$ref": "#/components/schemas/AckBody"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "title": "Body"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SuppressionOut"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Suppress Alarm",
     "tags": [
      "alarms"
     ]

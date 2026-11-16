@@ -5,7 +5,7 @@ See services/alarm_feed.py.
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, Integer, String, Text, func
+from sqlalchemy import DateTime, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.core.database import Base
@@ -33,3 +33,29 @@ class PrinterAlarm(Base):
     cleared_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     acknowledged_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Bambu's full HMS code (16 hex characters) when the source is bambu.
+    full_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Set when someone dismissed it: it leaves the active list while the printer
+    # keeps reporting it, and comes back as a new alarm if it clears and recurs.
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    dismissed_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class AlarmSuppression(Base):
+    """An alarm code someone chose not to be alerted about on one printer.
+
+    The feed records nothing for a suppressed code on that printer, and Bambu HMS
+    notifications skip it, until the suppression is removed.
+    """
+
+    __tablename__ = "alarm_suppressions"
+    __table_args__ = (UniqueConstraint("printer_id", "source", "code", name="uq_alarm_suppression"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    printer_id: Mapped[int] = mapped_column(Integer, index=True)
+    source: Mapped[str] = mapped_column(String(20))
+    code: Mapped[str] = mapped_column(String(40))
+    # The alarm's text when it was suppressed, so the list says what it was.
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
