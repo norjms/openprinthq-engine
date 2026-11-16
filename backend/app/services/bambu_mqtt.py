@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import ssl
 import threading
 import time
@@ -551,6 +552,14 @@ class BambuMQTTClient:
     _request_topic_cache: dict[str, bool] = {}
     # Counter for generating unique MQTT client IDs across instances.
     _client_instance_counter: int = 0
+    # This process's own tag for its MQTT client ids. The process id alone is
+    # not unique: in a container it is 1, so two Bambuddy-based farms watching
+    # one printer (a test or old install beside the live one) both called
+    # their first client "bambuddy_<serial>_1_1". A printer drops a session
+    # when another connects with its id, so the two took the printer from each
+    # other every few seconds and it showed offline. The tag makes each
+    # process's ids its own.
+    _client_tag: str = secrets.token_hex(4)
 
     # #2582: how long to wait for the AMS telemetry to echo back an assignment
     # before declaring it un-confirmed. The printer re-broadcasts tray state
@@ -4204,7 +4213,10 @@ class BambuMQTTClient:
         """
         self._loop = loop
         BambuMQTTClient._client_instance_counter += 1
-        client_id = f"bambuddy_{self.serial_number}_{os.getpid()}_{BambuMQTTClient._client_instance_counter}"
+        client_id = (
+            f"bambuddy_{self.serial_number}_{BambuMQTTClient._client_tag}_{os.getpid()}"
+            f"_{BambuMQTTClient._client_instance_counter}"
+        )
         self._client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
             client_id=client_id,

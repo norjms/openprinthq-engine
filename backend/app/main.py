@@ -560,9 +560,27 @@ _expected_print_creators: dict[tuple[int, str], int] = {}
 # transactions and surfaces the constraint violation).
 #
 # Scope is intentionally narrow: only the two DB-mutating blocks (unlink +
-# assign) are inside the lock. The Spoolman sync block further down stays
-# concurrent because it's network-bound and idempotent.
+# assign) are inside this lock. The Spoolman sync has its own lock below.
 _ams_assignment_locks: dict[int, asyncio.Lock] = {}
+
+# Per-printer lock for the Spoolman side of on_ams_change. The sync is not
+# idempotent under concurrency: each run reads Spoolman's spools once, before
+# the other run's new spool exists, so two runs from one MQTT burst each create
+# a spool for the same RFID tag (seen on an H2D and an H2C: every tagged spool
+# created twice in the same second).
+# Each lock remembers the event loop it was made in: a lock left held by a task
+# whose loop has gone (a test that ended mid-sync) must not block the next loop.
+# The loop itself is kept, not its id(), since a new loop can reuse a dead one's id.
+_spoolman_sync_locks: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
+
+
+def _get_spoolman_sync_lock(printer_id: int) -> asyncio.Lock:
+    """Return the per-printer Spoolman sync lock for the running loop, creating it on first use."""
+    loop = asyncio.get_running_loop()
+    held = _spoolman_sync_locks.get(printer_id)
+    if held is None or held[0] is not loop:
+        held = _spoolman_sync_locks[printer_id] = (loop, asyncio.Lock())
+    return held[1]
 
 
 def _get_ams_assignment_lock(printer_id: int) -> asyncio.Lock:
@@ -1985,6 +2003,13 @@ async def on_ams_change(printer_id: int, ams_data: list):
     except Exception as e:
         logger.warning("RFID spool auto-assign failed: %s", e, exc_info=True)
 
+    # One Spoolman sync at a time per printer: see _spoolman_sync_locks.
+    async with _get_spoolman_sync_lock(printer_id):
+        await _sync_ams_to_spoolman(printer_id, ams_data, logger)
+
+
+async def _sync_ams_to_spoolman(printer_id: int, ams_data: list, logger) -> None:
+    """Sync the printer's AMS trays to Spoolman (auto mode): create spools for new RFID tags, update known ones."""
     try:
         async with async_session() as db:
             from backend.app.api.routes.settings import get_setting

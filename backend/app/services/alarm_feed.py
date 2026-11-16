@@ -19,6 +19,12 @@ code that flaps on and off (Bambu chamber temperature warnings do) stays one
 row. Nothing is cleared while the printer is disconnected: no news is not good
 news. Rows are kept for ``RETENTION_DAYS`` after they clear.
 
+Status updates arrive concurrently (a Bambu printer sends several MQTT reports
+a second), so ``observe()`` runs one at a time per printer: two calls that both
+saw an alarm as new would otherwise insert it twice, and only one of the copies
+would ever be cleared. Loading the open rows (at start-up, or after
+``forget()``) clears any such extra copy, keeping the oldest.
+
 Notifications: Bambu HMS errors already notify from main.py, so the feed only
 notifies (``on_printer_error``) for new fatal or serious alarms from the other
 transports, and for PrusaLink ATTENTION.
@@ -26,6 +32,7 @@ transports, and for PrusaLink ATTENTION.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -173,18 +180,48 @@ def _now() -> datetime:
 
 
 async def _load(printer_id: int) -> dict[tuple[str, str], list]:
+    """The printer's open rows by (source, code). Extra open copies of one alarm are cleared, the oldest kept."""
     async with database.async_session() as db:
         rows = (
             await db.execute(
-                select(PrinterAlarm).where(PrinterAlarm.printer_id == printer_id, PrinterAlarm.cleared_at.is_(None))
+                select(PrinterAlarm)
+                .where(PrinterAlarm.printer_id == printer_id, PrinterAlarm.cleared_at.is_(None))
+                .order_by(PrinterAlarm.first_seen, PrinterAlarm.id)
             )
         ).scalars()
         now = _clock()
-        return {(r.source, r.code): [r.id, now, None] for r in rows}
+        out: dict[tuple[str, str], list] = {}
+        extra: list[int] = []
+        for r in rows:
+            if (r.source, r.code) in out:
+                extra.append(r.id)
+            else:
+                out[(r.source, r.code)] = [r.id, now, None]
+        if extra:
+            await db.execute(update(PrinterAlarm).where(PrinterAlarm.id.in_(extra)).values(cleared_at=_now()))
+            await db.commit()
+            logger.info("[ALARM] printer %s: cleared %d duplicate open alarm row(s)", printer_id, len(extra))
+        return out
+
+
+# Per printer, remembering the event loop each lock was made in: a lock left held
+# by a task whose loop has gone (a test that ended mid-observe) must not block the
+# next loop. The loop itself is kept, since a new loop can reuse a dead one's id().
+_locks: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
 
 
 async def observe(printer_id: int, state, client=None) -> list[Alarm]:
     """Diff the printer's active alarms against the open rows. Returns new alarms."""
+    loop = asyncio.get_running_loop()
+    held = _locks.get(printer_id)
+    if held is None or held[0] is not loop:
+        held = _locks[printer_id] = (loop, asyncio.Lock())
+    lock = held[1]
+    async with lock:
+        return await _observe(printer_id, state, client)
+
+
+async def _observe(printer_id: int, state, client=None) -> list[Alarm]:
     if client is None:
         from backend.app.services.printer_manager import printer_manager
 
@@ -309,4 +346,5 @@ def reset() -> None:
     """Tests: clear the in-memory cache."""
     global _last_prune
     _open.clear()
+    _locks.clear()
     _last_prune = 0.0

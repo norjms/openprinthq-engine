@@ -93,7 +93,7 @@ def wired(test_engine, monkeypatch):
     af.reset()
     clock = [1000.0]
     monkeypatch.setattr(af, "_clock", lambda: clock[0])
-    yield SimpleNamespace(maker=maker, notified=notified, clock=clock)
+    yield SimpleNamespace(maker=maker, notified=notified, clock=clock, monkeypatch=monkeypatch)
     af.reset()
 
 
@@ -150,6 +150,53 @@ class TestObserve:
         client = PrusaLinkClient("192.0.2.5")
         await af.observe(5, st(state="PAUSE", raw_data={"printer_state_text": "ATTENTION"}), client)
         assert wired.notified == [(5, "prusalink", ["attention"])]
+
+    async def test_concurrent_reports_record_an_alarm_once(self, wired):
+        # A Bambu printer sends several reports at once; each used to see the alarm as new.
+        import asyncio
+
+        load = af._load
+
+        async def slow_load(printer_id):  # the database answers after the other reports have arrived
+            await asyncio.sleep(0.01)
+            return await load(printer_id)
+
+        wired.monkeypatch.setattr(af, "_load", slow_load)
+        bambu = Bambu()
+        on = st(hms_errors=[hms("0700_8011", 3)])
+        await asyncio.gather(*(af.observe(7, on, bambu) for _ in range(3)))
+        assert len(await _rows(wired.maker)) == 1
+        await af.observe(7, st(), bambu)
+        wired.clock[0] += af.CLEAR_GRACE_S + 1
+        await af.observe(7, st(), bambu)
+        assert all(r.cleared_at is not None for r in await _rows(wired.maker))
+
+    async def test_extra_open_copies_are_cleared_on_load(self, wired):
+        # Rows left by the old race: three open copies of one alarm, one of them cleared since.
+        from datetime import datetime
+
+        t = datetime(2026, 11, 15, 19, 48, 4)
+        async with wired.maker() as db:
+            for i in range(3):
+                db.add(
+                    PrinterAlarm(
+                        printer_id=8,
+                        source="bambu",
+                        code="0700_8011",
+                        severity="warning",
+                        message="x",
+                        first_seen=t.replace(microsecond=i),
+                        last_seen=t,
+                    )
+                )
+            await db.commit()
+        bambu = Bambu()
+        await af.observe(8, st(), bambu)  # the printer no longer reports it
+        rows = await _rows(wired.maker)
+        assert [r.cleared_at is None for r in rows] == [True, False, False]  # the oldest stays open
+        wired.clock[0] += af.CLEAR_GRACE_S + 1
+        await af.observe(8, st(), bambu)
+        assert all(r.cleared_at is not None for r in await _rows(wired.maker))
 
     async def test_acknowledge(self, wired):
         bambu = Bambu()
