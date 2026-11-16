@@ -53,6 +53,11 @@ _HMS_SEVERITY = {1: "fatal", 2: "serious", 3: "warning"}
 HMS_IGNORE = frozenset({"0500_400E"})
 
 CLEAR_GRACE_S = 30.0
+# A code that comes back this soon after clearing reopens its alarm (keeping who
+# saw or dismissed it) instead of raising a new one. Some codes come and go for
+# hours: an H2D reports a dirty nozzle camera lens for about 2.5 minutes, drops
+# it for about one, and reports it again.
+REOPEN_WITHIN_S = 15 * 60.0
 TOUCH_EVERY_S = 60.0
 RETENTION_DAYS = 90
 _PRUNE_EVERY_S = 6 * 3600.0
@@ -260,7 +265,18 @@ async def _observe(printer_id: int, state, client=None) -> list[Alarm]:
         now = _now()
         async with database.async_session() as db:
             rows = []
+            reopened: list[Alarm] = []
             for a in new:
+                row = await _recently_cleared(db, printer_id, a, now)
+                if row is not None:
+                    row.cleared_at = None
+                    row.last_seen = now
+                    row.severity = a.severity
+                    row.message = a.message[:2000]
+                    row.full_code = a.full_code
+                    rows.append((a.key, row))
+                    reopened.append(a)
+                    continue
                 row = PrinterAlarm(
                     printer_id=printer_id,
                     source=a.source,
@@ -291,6 +307,7 @@ async def _observe(printer_id: int, state, client=None) -> list[Alarm]:
             await db.commit()
             for key, row in rows:
                 known[key] = [row.id, mono, None, row.message]
+        new = [a for a in new if a not in reopened]
         for k in touch:
             known[k][1] = mono
         for k in retext:
@@ -304,6 +321,24 @@ async def _observe(printer_id: int, state, client=None) -> list[Alarm]:
         await _notify(printer_id, source, new)
     await _maybe_prune()
     return new
+
+
+async def _recently_cleared(db, printer_id: int, a: Alarm, now: datetime) -> PrinterAlarm | None:
+    """The alarm's own row if the printer cleared it less than REOPEN_WITHIN_S ago."""
+    return (
+        await db.execute(
+            select(PrinterAlarm)
+            .where(
+                PrinterAlarm.printer_id == printer_id,
+                PrinterAlarm.source == a.source,
+                PrinterAlarm.code == a.code[:40],
+                PrinterAlarm.cleared_at.is_not(None),
+                PrinterAlarm.cleared_at >= now - timedelta(seconds=REOPEN_WITHIN_S),
+            )
+            .order_by(PrinterAlarm.cleared_at.desc(), PrinterAlarm.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
 
 
 async def _notify(printer_id: int, source: str, new: list[Alarm]) -> None:
@@ -446,6 +481,18 @@ async def unsuppress(suppression_id: int) -> AlarmSuppression | None:
             return None
         printer_id = row.printer_id
         await db.delete(row)
+        # Alerts are wanted again: the code's recent alarm reopens unseen, not dismissed.
+        await db.execute(
+            update(PrinterAlarm)
+            .where(
+                PrinterAlarm.printer_id == printer_id,
+                PrinterAlarm.source == row.source,
+                PrinterAlarm.code == row.code,
+                PrinterAlarm.cleared_at.is_not(None),
+                PrinterAlarm.cleared_at >= _now() - timedelta(seconds=REOPEN_WITHIN_S),
+            )
+            .values(dismissed_at=None, dismissed_by=None, acknowledged_at=None, acknowledged_by=None)
+        )
         await db.commit()
     _suppressed.pop(printer_id, None)
     return row

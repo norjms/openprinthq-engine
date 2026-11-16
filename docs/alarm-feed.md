@@ -37,13 +37,18 @@ nothing here.
   keeps its row.
 - Acknowledging marks an alarm seen; it stays active until the printer stops
   reporting it.
+- A code that comes back within 15 minutes of clearing reopens its alarm,
+  which keeps who acknowledged or dismissed it. Some codes come and go for
+  hours (an H2D reports a dirty nozzle camera lens for about 2.5 minutes,
+  drops it for about one, and reports it again); after a longer gap it is a
+  new alarm.
 - Dismissing takes it out of the active list (and the summary) now, and marks
-  it acknowledged. The row stays open while the printer reports the code; if
-  the printer clears it and reports it again, that is a new alarm.
+  it acknowledged. The row stays open while the printer reports the code, and
+  stays dismissed through short gaps.
 - Suppressing a code on a printer (`alarm_suppressions`) stops the feed
   recording it there and stops Bambu HMS notifications for it, and dismisses
-  its open alarm. Removing the suppression brings it back the next time the
-  printer reports it.
+  its open alarm. Removing the suppression brings it back, unseen, the next
+  time the printer reports it.
 - Bambu alarms keep the full HMS code (`full_code`). A row whose text changes
   (a catalog update) is rewritten while the printer still reports it.
 - Cleared rows are deleted after 90 days.
