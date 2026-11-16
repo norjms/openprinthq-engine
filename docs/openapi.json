@@ -14666,6 +14666,57 @@
     "title": "MakerWorldStatus",
     "type": "object"
    },
+   "MappingBody": {
+    "properties": {
+     "by": {
+      "anyOf": [
+       {
+        "maxLength": 100,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "By"
+     },
+     "library_file_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Library File Id"
+     },
+     "printer_id": {
+      "title": "Printer Id",
+      "type": "integer"
+     },
+     "remember": {
+      "default": true,
+      "title": "Remember",
+      "type": "boolean"
+     },
+     "slots": {
+      "items": {
+       "$ref": "#/components/schemas/SlotChoice"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "title": "Slots",
+      "type": "array"
+     }
+    },
+    "required": [
+     "printer_id",
+     "slots"
+    ],
+    "title": "MappingBody",
+    "type": "object"
+   },
    "MigrationRequest": {
     "properties": {
      "dry_run": {
@@ -18596,6 +18647,23 @@
       "title": "Manual Start",
       "type": "boolean"
      },
+     "match_level": {
+      "anyOf": [
+       {
+        "enum": [
+         "exact",
+         "close",
+         "family",
+         "any"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Match Level"
+     },
      "max_retries": {
       "default": 0,
       "maximum": 10.0,
@@ -18968,6 +19036,11 @@
       ],
       "title": "Filament Color"
      },
+     "filament_confirmed": {
+      "default": false,
+      "title": "Filament Confirmed",
+      "type": "boolean"
+     },
      "filament_overrides": {
       "anyOf": [
        {
@@ -18998,6 +19071,18 @@
        }
       ],
       "title": "Filament Type"
+     },
+     "filament_unmatched": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Filament Unmatched"
      },
      "filament_used_grams": {
       "anyOf": [
@@ -19081,6 +19166,17 @@
      "manual_start": {
       "title": "Manual Start",
       "type": "boolean"
+     },
+     "match_level": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Match Level"
      },
      "max_retries": {
       "default": 0,
@@ -19487,6 +19583,23 @@
        }
       ],
       "title": "Manual Start"
+     },
+     "match_level": {
+      "anyOf": [
+       {
+        "enum": [
+         "exact",
+         "close",
+         "family",
+         "any"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Match Level"
      },
      "max_retries": {
       "anyOf": [
@@ -23122,6 +23235,38 @@
     "title": "SetTareRequest",
     "type": "object"
    },
+   "SettingsBody": {
+    "properties": {
+     "level": {
+      "anyOf": [
+       {
+        "pattern": "^(exact|close|family|any)$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Level"
+     },
+     "material_groups": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Material Groups"
+     }
+    },
+    "title": "SettingsBody",
+    "type": "object"
+   },
    "SetupRequest": {
     "properties": {
      "admin_password": {
@@ -24026,6 +24171,28 @@
      }
     },
     "title": "SlicerSettingsResponse",
+    "type": "object"
+   },
+   "SlotChoice": {
+    "properties": {
+     "global_tray_id": {
+      "maximum": 255.0,
+      "minimum": -1.0,
+      "title": "Global Tray Id",
+      "type": "integer"
+     },
+     "slot_id": {
+      "maximum": 64.0,
+      "minimum": 1.0,
+      "title": "Slot Id",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "slot_id",
+     "global_tray_id"
+    ],
+    "title": "SlotChoice",
     "type": "object"
    },
    "SmartPlugControl": {
@@ -40688,6 +40855,310 @@
     "summary": "Update Filament",
     "tags": [
      "filament-catalog"
+    ]
+   }
+  },
+  "/api/v1/filament-matching/aliases": {
+   "get": {
+    "description": "Saved mappings: requested filament and the loaded filament accepted for it, newest first.",
+    "operationId": "filament_matching_list_aliases",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "List Aliases",
+    "tags": [
+     "filament-matching"
+    ]
+   }
+  },
+  "/api/v1/filament-matching/aliases/{alias_id}": {
+   "delete": {
+    "operationId": "filament_matching_delete_alias",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "alias_id",
+      "required": true,
+      "schema": {
+       "title": "Alias Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Delete Alias",
+    "tags": [
+     "filament-matching"
+    ]
+   }
+  },
+  "/api/v1/filament-matching/queue/{item_id}": {
+   "get": {
+    "description": "What the job needs and, per printer it could go to, what is loaded and the best mapping at its level.\n\nWith all_printers, every active printer is offered (a mapping onto another model needs a reslice).",
+    "operationId": "filament_matching_options",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "item_id",
+      "required": true,
+      "schema": {
+       "title": "Item Id",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "all_printers",
+      "required": false,
+      "schema": {
+       "default": false,
+       "title": "All Printers",
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Options",
+    "tags": [
+     "filament-matching"
+    ]
+   }
+  },
+  "/api/v1/filament-matching/queue/{item_id}/mapping": {
+   "post": {
+    "description": "Print this job on a printer with the filament mapping someone chose (and, with remember, use it for the\nsame filaments from now on). A new library_file_id is a resliced file for that printer.",
+    "operationId": "filament_matching_set_mapping",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "item_id",
+      "required": true,
+      "schema": {
+       "title": "Item Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/MappingBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Set Mapping",
+    "tags": [
+     "filament-matching"
+    ]
+   }
+  },
+  "/api/v1/filament-matching/settings": {
+   "get": {
+    "description": "The farm's default level and its material groups (the defaults merged with yours).",
+    "operationId": "filament_matching_get_settings",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Get Settings",
+    "tags": [
+     "filament-matching"
+    ]
+   },
+   "put": {
+    "operationId": "filament_matching_put_settings",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SettingsBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Put Settings",
+    "tags": [
+     "filament-matching"
+    ]
+   }
+  },
+  "/api/v1/filament-matching/unmatched": {
+   "get": {
+    "description": "Pending jobs that can't start because of filament, oldest first, with why on each printer.",
+    "operationId": "filament_matching_unmatched",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Unmatched",
+    "tags": [
+     "filament-matching"
     ]
    }
   },

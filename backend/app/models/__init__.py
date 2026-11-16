@@ -8,6 +8,7 @@ from backend.app.models.color_catalog import ColorCatalogEntry
 from backend.app.models.ejection_profile import EjectionProfile
 from backend.app.models.failure_event import PrintFailureEvent
 from backend.app.models.filament import Filament
+from backend.app.models.filament_alias import FilamentAlias
 from backend.app.models.filament_reconciliation import FilamentReconciliation
 from backend.app.models.github_backup import GitHubBackupConfig, GitHubBackupLog
 from backend.app.models.group import Group, user_groups
@@ -111,5 +112,6 @@ __all__ = [
     "EjectionProfile",
     "PrintFailureEvent",
     "AlarmSuppression",
+    "FilamentAlias",
     "PrinterAlarm",
 ]

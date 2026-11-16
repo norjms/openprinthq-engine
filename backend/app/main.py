@@ -36,6 +36,7 @@ from backend.app.api.routes import (
     external_links,
     failure_events,
     farm_stats,
+    filament_matching,
     filaments,
     firmware,
     github_backup,
@@ -7401,6 +7402,7 @@ app.include_router(inventory_reconciliation.router, prefix=app_settings.api_pref
 app.include_router(ejection_profiles.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
 app.include_router(failure_events.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
 app.include_router(alarms.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(filament_matching.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
 app.include_router(farm_stats.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
 app.include_router(library_uploads.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
 app.include_router(push.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)

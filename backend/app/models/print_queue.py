@@ -138,6 +138,16 @@ class PrintQueueItem(Base):
     preheat_chamber_target_override: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Status: pending, printing, completed, failed, skipped, cancelled
+    # Filament matching (services/filament_match.py, docs/filament-matching.md).
+    # match_level: exact | close | family | any; NULL = the farm default.
+    match_level: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Someone mapped this item's filaments to a printer's loaded slots: the
+    # scheduler prints it with that mapping and doesn't check colours again.
+    filament_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Why the next job can't start on its printer(s) because of filament: JSON
+    # {"since", "level", "printers": [{printer_id, name, slots: [...]}]}; NULL = matched.
+    filament_unmatched: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     status: Mapped[str] = mapped_column(String(20), default="pending")
 
     # Dispatch claim (#2615). Set atomically by the scheduler the moment it
