@@ -204,14 +204,19 @@ async def _load(printer_id: int) -> dict[tuple[str, str], list]:
         return out
 
 
-# Per printer and per running event loop: a lock left held by a task whose loop
-# has gone (a test that ended mid-observe) must not block the next loop for good.
-_locks: dict[tuple[int, int], asyncio.Lock] = {}
+# Per printer, remembering the event loop each lock was made in: a lock left held
+# by a task whose loop has gone (a test that ended mid-observe) must not block the
+# next loop. The loop itself is kept, since a new loop can reuse a dead one's id().
+_locks: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
 
 
 async def observe(printer_id: int, state, client=None) -> list[Alarm]:
     """Diff the printer's active alarms against the open rows. Returns new alarms."""
-    lock = _locks.setdefault((id(asyncio.get_running_loop()), printer_id), asyncio.Lock())
+    loop = asyncio.get_running_loop()
+    held = _locks.get(printer_id)
+    if held is None or held[0] is not loop:
+        held = _locks[printer_id] = (loop, asyncio.Lock())
+    lock = held[1]
     async with lock:
         return await _observe(printer_id, state, client)
 

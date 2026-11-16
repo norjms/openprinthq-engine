@@ -568,19 +568,19 @@ _ams_assignment_locks: dict[int, asyncio.Lock] = {}
 # the other run's new spool exists, so two runs from one MQTT burst each create
 # a spool for the same RFID tag (seen on an H2D and an H2C: every tagged spool
 # created twice in the same second).
-# Keyed by the running event loop too: a lock left held by a task whose loop has
-# gone (a test that ended mid-sync) must not block the next loop for good.
-_spoolman_sync_locks: dict[tuple[int, int], asyncio.Lock] = {}
+# Each lock remembers the event loop it was made in: a lock left held by a task
+# whose loop has gone (a test that ended mid-sync) must not block the next loop.
+# The loop itself is kept, not its id(), since a new loop can reuse a dead one's id.
+_spoolman_sync_locks: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
 
 
 def _get_spoolman_sync_lock(printer_id: int) -> asyncio.Lock:
     """Return the per-printer Spoolman sync lock for the running loop, creating it on first use."""
-    key = (id(asyncio.get_running_loop()), printer_id)
-    lock = _spoolman_sync_locks.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _spoolman_sync_locks[key] = lock
-    return lock
+    loop = asyncio.get_running_loop()
+    held = _spoolman_sync_locks.get(printer_id)
+    if held is None or held[0] is not loop:
+        held = _spoolman_sync_locks[printer_id] = (loop, asyncio.Lock())
+    return held[1]
 
 
 def _get_ams_assignment_lock(printer_id: int) -> asyncio.Lock:
