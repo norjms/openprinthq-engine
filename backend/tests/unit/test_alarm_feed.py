@@ -226,7 +226,17 @@ class TestObserve:
         await af.observe(20, st(), bambu)
         wired.clock[0] += af.CLEAR_GRACE_S + 1
         await af.observe(20, st(), bambu)
-        assert [a.code for a in await af.observe(20, on, bambu)] == ["0700_8010"]  # it came back: new
+        assert (await _rows(wired.maker))[0].cleared_at is not None
+        # Back soon after clearing (a code that comes and goes): the same alarm, still dismissed.
+        assert await af.observe(20, on, bambu) == []
+        [row] = await _rows(wired.maker)
+        assert row.cleared_at is None and row.dismissed_by == "op"
+        # Back long after clearing: a new alarm.
+        wired.monkeypatch.setattr(af, "REOPEN_WITHIN_S", 0.0)
+        await af.observe(20, st(), bambu)
+        wired.clock[0] += af.CLEAR_GRACE_S + 1
+        await af.observe(20, st(), bambu)
+        assert [a.code for a in await af.observe(20, on, bambu)] == ["0700_8010"]
         rows = await _rows(wired.maker)
         assert len(rows) == 2 and rows[1].dismissed_at is None
 
@@ -250,7 +260,25 @@ class TestObserve:
         assert rows["0700_8010"].cleared_at is not None and rows["0300_8003"].cleared_at is None
         assert (await af.unsuppress(sup.id)).id == sup.id
         assert await af.unsuppress(sup.id) is None
-        assert [a.code for a in await af.observe(21, on, bambu)] == ["0700_8010"]
+        # Reported again: its alarm reopens, unseen and not dismissed.
+        await af.observe(21, on, bambu)
+        rows = {r.code: r for r in await _rows(wired.maker)}
+        r = rows["0700_8010"]
+        assert r.cleared_at is None and r.dismissed_at is None and r.acknowledged_at is None
+
+    async def test_a_code_that_comes_and_goes_keeps_one_acknowledged_alarm(self, wired):
+        bambu = Bambu()
+        on = st(hms_errors=[hms("0700_8010", 2)])
+        assert len(await af.observe(24, on, bambu)) == 1
+        [row] = await _rows(wired.maker)
+        await af.acknowledge([row.id], None, "op")
+        for _ in range(3):  # reported for a while, gone for a minute, back again
+            await af.observe(24, st(), bambu)
+            wired.clock[0] += 60
+            await af.observe(24, st(), bambu)
+            assert await af.observe(24, on, bambu) == []
+        [row] = await _rows(wired.maker)
+        assert row.cleared_at is None and row.acknowledged_by == "op"
 
     async def test_text_is_rewritten_when_the_catalog_learns_it(self, wired):
         from datetime import datetime
