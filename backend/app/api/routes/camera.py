@@ -889,6 +889,33 @@ async def stop_camera_stream(
     return {"stopped": stopped}
 
 
+GO2RTC_FRAME_TIMEOUT = 8.0
+
+
+async def _go2rtc_frame(printer: Printer) -> bytes | None:
+    """A Bambu Lab printer's frame from the farm's go2rtc, which keeps one connection to the camera for the live
+    view, the cam wall and every snapshot. A capture of its own per snapshot is one more connection, and these
+    printers allow only a few: with live viewers open, captures time out and snapshots go blank. None when go2rtc
+    is not configured or has no frame, so the caller captures directly as before."""
+    from backend.app.core.config import settings
+
+    base = (settings.go2rtc_url or "").rstrip("/")
+    if not base or (printer.connection_type or "bambu") != "bambu":
+        return None
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=GO2RTC_FRAME_TIMEOUT) as client:
+            r = await client.get(f"{base}/api/frame.jpeg", params={"src": f"p{printer.id}"})
+    except httpx.HTTPError as e:
+        logger.info("go2rtc frame for printer %s: %s", printer.id, type(e).__name__)
+        return None
+    if r.status_code != 200 or not r.content.startswith(b"\xff\xd8"):
+        logger.info("go2rtc frame for printer %s: %s", printer.id, r.status_code)
+        return None
+    return r.content
+
+
 @router.get("/{printer_id}/camera/snapshot")
 async def camera_snapshot(
     printer_id: int,
@@ -945,6 +972,18 @@ async def camera_snapshot(
     if buffered:
         return Response(
             content=buffered,
+            media_type="image/jpeg",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Content-Disposition": f'inline; filename="snapshot_{printer_id}.jpg"',
+            },
+        )
+
+    # The farm's shared camera connection, when there is one (settings.go2rtc_url).
+    shared = await _go2rtc_frame(printer)
+    if shared:
+        return Response(
+            content=shared,
             media_type="image/jpeg",
             headers={
                 "Cache-Control": "no-cache, no-store, must-revalidate",

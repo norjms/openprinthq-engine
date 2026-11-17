@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     # The slice route picks which one based on the user's preferred_slicer
     # setting.
     slicer_api_url: str = "http://localhost:3003"
+    # The farm's go2rtc (GO2RTC_URL), which holds one connection to each printer camera for every viewer. When set,
+    # a Bambu Lab printer's snapshot is its frame there (stream p<printer id>, as the control plane names it), not
+    # a camera connection of its own: these printers allow only a few camera connections at once.
+    go2rtc_url: str = ""
     bambu_studio_api_url: str = "http://localhost:3001"
 
     class Config:
