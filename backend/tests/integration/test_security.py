@@ -2657,7 +2657,8 @@ class TestTOTPDecryptionBroken:
         # disable_totp's TOTP-decrypt path doesn't throw, AND seed real hashes.
         result = await db_session.execute(_select(UserTOTP).where(UserTOTP.user_id == user_id))
         totp = result.scalar_one()
-        totp.secret = "JBSWY3DPEHPK3PXP"  # via setter -> mfa_encrypt
+        # 32 base32 chars (160 bits): pyotp 2.10+ rejects secrets under 112 bits.
+        totp.secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"  # via setter -> mfa_encrypt
         plain_codes, hashed_codes = _generate_backup_codes()
         totp.backup_code_hashes = hashed_codes
         await db_session.commit()
@@ -2705,7 +2706,7 @@ class TestTOTPDecryptionBroken:
 
         result = await db_session.execute(_select(UserTOTP).where(UserTOTP.user_id == user_id))
         totp = result.scalar_one()
-        totp.secret = "JBSWY3DPEHPK3PXP"
+        totp.secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"  # 160 bits, see above
         plain_codes, hashed_codes = _generate_backup_codes()
         totp.backup_code_hashes = hashed_codes
         await db_session.commit()
