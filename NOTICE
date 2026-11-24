@@ -20,9 +20,10 @@ The OpenPrintHQ print engine is a derivative work of "Bambuddy":
     Copyright (C) maziggy and the Bambuddy contributors
     Licensed under the GNU Affero General Public License v3.0.
 
-The upstream project's own README, copyright notices, and license are retained
-in this repository. OpenPrintHQ continues to license the combined work under
-AGPL-3.0-or-later, as required by the upstream license.
+The upstream project's copyright notices and license are retained in this
+repository, and its README is kept at docs/UPSTREAM-README.md. OpenPrintHQ
+continues to license the combined work under AGPL-3.0-or-later, as required by
+the upstream license.
 
 Modifications made by OpenPrintHQ relative to upstream Bambuddy include, among
 others:
@@ -31,8 +32,9 @@ others:
     extended Klipper/Moonraker, Prusa (PrusaLink), OctoPrint, Duet/RepRap,
     FlashForge and MKS connection types.
   - Integration of OrcaSlicer as the built-in slicer via a sidecar service.
-  - A separate multi-tenant control-plane and web frontend (instance-per-user),
-    of which this engine is the per-tenant backend.
+  - Use as the print engine of the OpenPrintHQ farm (openprinthq-farm), which
+    runs it behind its own control plane and web frontend. Each farm is a
+    single installation for one team.
   - Product rebranding of user-facing strings (API metadata, notification and
     email sender name, MFA issuer) from "Bambuddy" to "OpenPrintHQ".
 
