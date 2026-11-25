@@ -161,7 +161,21 @@ async def drop_test_schema(engine):
     schema = test_schema(engine)
     if not schema:
         return
-    from sqlalchemy import text
+    import asyncio
 
-    async with engine.begin() as conn:
-        await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError
+
+    # A test can leave a session still reading in its schema (a background task the
+    # app started). DROP then waits on that reader while the reader waits on DROP,
+    # and PostgreSQL resolves the deadlock by cancelling the DROP. The reader ends a
+    # moment later, so try again rather than fail the test's teardown.
+    for attempt in range(5):
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+            return
+        except DBAPIError as exc:
+            if "deadlock detected" not in str(exc) or attempt == 4:
+                raise
+            await asyncio.sleep(0.2 * (attempt + 1))
