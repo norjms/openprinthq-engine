@@ -40,13 +40,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import backend.app.models  # noqa: F401 - populate Base.metadata
 import backend.app.services.archive as archive_module
 import backend.app.services.print_scheduler as scheduler_module
-from backend.app.core.database import Base
+from backend.app.core.database import Base, _set_sqlite_pragmas
 from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem
@@ -57,6 +57,10 @@ from backend.tests._testdb import make_test_engine
 
 UPLOAD_SECONDS = 0.15
 
+# Hard cap on assembling one batch, so a dispatch that has gone serial fails on
+# its peak assertion instead of hanging. See ``_UploadRecorder``.
+_BATCH_DEADLINE_SECONDS = 5.0
+
 
 def _farm_engine(tmp_path):
     """The database for one concurrency test.
@@ -65,9 +69,16 @@ def _farm_engine(tmp_path):
     the others are mid-transaction. On in-memory SQLite every session shares the
     one connection the pool holds, so one worker's commit or rollback lands in
     another's transaction and the test fails at random ("Could not refresh
-    instance", items left pending). A file database with a connection per
-    session gives each worker its own transaction, as production has. On
-    PostgreSQL (TEST_DATABASE_URL) make_test_engine already does that.
+    instance", items left pending, or "cannot commit transaction - SQL
+    statements in progress"). A file database with a connection per session
+    gives each worker its own transaction, as production has. On PostgreSQL
+    (TEST_DATABASE_URL) make_test_engine already does that.
+
+    The SQLite file takes the app's own connect listener rather than a copy of
+    it, so it is opened exactly as the running system opens one: WAL instead of
+    a whole-file DELETE journal, ``synchronous = NORMAL`` and a 15 s busy
+    timeout. Default SQLite settings would make a dispatch's preamble cost more
+    than the upload it precedes, so fewer uploads would overlap.
     """
     from backend.tests._testdb import POSTGRES
 
@@ -75,12 +86,14 @@ def _farm_engine(tmp_path):
         return make_test_engine(echo=False)
     from sqlalchemy.pool import NullPool
 
-    return create_async_engine(
+    engine = create_async_engine(
         f"sqlite+aiosqlite:///{tmp_path / 'farm.db'}",
         echo=False,
         poolclass=NullPool,
         connect_args={"timeout": 30},
     )
+    event.listen(engine.sync_engine, "connect", _set_sqlite_pragmas)
+    return engine
 
 
 @pytest.fixture
@@ -151,23 +164,96 @@ async def farm(tmp_path):
 class _UploadRecorder:
     """Stands in for ``upload_file_async``; records overlap.
 
-    Each call sleeps, so genuinely concurrent uploads have overlapping
-    lifetimes. ``peak`` is the high-water mark of simultaneous in-flight
-    uploads — the number the pool cap turns on.
+    Each call stays open for a while, so genuinely concurrent uploads have
+    overlapping lifetimes. ``peak`` is the high-water mark of simultaneous
+    in-flight uploads — the number the pool cap turns on.
+
+    How long a call stays open is the whole difficulty. ``peak == 6`` is really
+    the claim that the sixth dispatch reaches its upload before the first one
+    finishes, and the dispatches do not arrive together: each runs a preamble of
+    database work first. Measured here that spread is ~14 ms; on a CI runner it
+    passed 150 ms, and a fixed 0.15 s sleep then recorded a peak of 4 out of 6
+    for a scheduler that was dispatching all six correctly. Padding the sleep
+    only moves the threshold and slows every test that uses it.
+
+    With ``assemble=True`` the call instead holds until every upload the pass
+    launched has arrived — ``scheduler._inflight`` is populated synchronously at
+    launch (see ``_launch_uploads``), so its length is the batch size and
+    ``in_flight`` catching up to it means the batch is assembled. That is the
+    property the peak assertions are about, stated directly and with no time in
+    it, so machine speed cannot change the answer. It also ends sooner than the
+    sleep it replaces. A batch that never assembles is the failure being looked
+    for, and ``_BATCH_DEADLINE_SECONDS`` bounds it: a serialized dispatch fails
+    on the peak assertion rather than hanging until the pytest timeout.
+
+    Without ``assemble`` — for the tests whose assertion is an upper bound, where
+    nothing has to assemble — the call just sleeps.
+
+    With ``hold=True`` the call stays open until the test calls ``release()``.
+    That is for the tests that run a second pass "while the upload is still in
+    flight": a sleep only makes that true if the pass ends before the sleep
+    does, and on a loaded runner one pass took over a second, so the upload had
+    finished, the pool was free again and the pass launched the next one.
     """
 
-    def __init__(self, *, fail_for_ip: str | None = None):
+    def __init__(self, *, fail_for_ip: str | None = None, assemble: bool = False, hold: bool = False):
         self.in_flight = 0
         self.peak = 0
         self.order: list[str] = []
         self.fail_for_ip = fail_for_ip
+        self.assemble = assemble
+        self.scheduler = None  # bound by _scheduler_ctx when assemble is on
+        self._deadline = 0.0
+        self._assembled = False
+        self._released = asyncio.Event()
+        if not hold:
+            self._released.set()
+
+    def release(self):
+        """Let held uploads finish, and later ones go straight through."""
+        self._released.set()
+
+    async def arrived(self, count: int):
+        """Wait until ``count`` uploads are open, bounded like a batch.
+
+        check_queue returns before its dispatches reach the upload, so releasing
+        straight after it lets each one through as it arrives and none overlap.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _BATCH_DEADLINE_SECONDS
+        while self.in_flight < count and loop.time() < deadline:
+            await asyncio.sleep(0.005)
+
+    async def _await_batch(self):
+        """Hold until every upload this pass launched has reached this point.
+
+        ``_assembled`` latches, and has to: the moment the batch is complete its
+        members start leaving and ``_inflight`` starts emptying, so a member
+        still comparing the two counts would find them equal for the wrong
+        reason. Latching releases the batch as one. It is cleared by the next
+        batch's first arrival, since ``in_flight`` returns to 0 between ticks.
+        """
+        loop = asyncio.get_running_loop()
+        if self.in_flight == 1:
+            self._deadline = loop.time() + _BATCH_DEADLINE_SECONDS
+            self._assembled = False
+        while not self._assembled:
+            if self.in_flight >= len(self.scheduler._inflight) or loop.time() >= self._deadline:
+                self._assembled = True
+                return
+            await asyncio.sleep(0.005)
 
     async def __call__(self, ip_address, access_code, local_path, remote_path, **kwargs):
         self.in_flight += 1
         self.peak = max(self.peak, self.in_flight)
         self.order.append(ip_address)
         try:
-            await asyncio.sleep(UPLOAD_SECONDS)
+            if self.assemble:
+                await self._await_batch()
+            elif not self._released.is_set():
+                await self._released.wait()
+            else:
+                await asyncio.sleep(UPLOAD_SECONDS)
             if self.fail_for_ip is not None and ip_address == self.fail_for_ip:
                 raise OSError(f"simulated FTP failure for {ip_address}")
             return True
@@ -187,6 +273,7 @@ async def _scheduler_ctx(ctx, upload, job_started=None):
     while the upload/session patches are still active.
     """
     scheduler = PrintScheduler()
+    upload.scheduler = scheduler
     job_started = job_started or AsyncMock()
 
     def _real_spawn(coro, *, name=None):
@@ -285,7 +372,7 @@ async def test_uploads_to_different_printers_overlap(farm):
     Pre-fix this recorded peak == 1 no matter how many printers were pending.
     """
     ctx = await farm(6, max_concurrent=6)
-    upload = _UploadRecorder()
+    upload = _UploadRecorder(assemble=True)
 
     await _run_check_queue(ctx, upload)
 
@@ -305,7 +392,7 @@ async def test_pool_cap_holds_across_refills(farm):
     item must still go out.
     """
     ctx = await farm(8, max_concurrent=3)
-    upload = _UploadRecorder()
+    upload = _UploadRecorder(assemble=True)
 
     ticks = await _run_to_completion(ctx, upload)
 
@@ -324,7 +411,7 @@ async def test_freed_slot_is_refilled_on_the_next_tick(farm):
     finishes, the next tick fills the freed slot with printer B.
     """
     ctx = await farm(2, max_concurrent=1)
-    upload = _UploadRecorder()
+    upload = _UploadRecorder(hold=True)
 
     async with _scheduler_ctx(ctx, upload) as scheduler:
         # Tick 1: one slot, one launch. Don't drain — A is now "in flight".
@@ -336,6 +423,7 @@ async def test_freed_slot_is_refilled_on_the_next_tick(farm):
         assert len(scheduler._inflight) == 1, "a full pool must not launch a second upload"
 
         # A completes, freeing the slot.
+        upload.release()
         await _drain(scheduler)
         assert not scheduler._inflight
 
@@ -357,7 +445,7 @@ async def test_inflight_item_and_printer_are_excluded_from_reselection(farm):
     exclusion, not the DB status.
     """
     ctx = await farm(1, max_concurrent=4)
-    upload = _UploadRecorder()
+    upload = _UploadRecorder(hold=True)
 
     async with _scheduler_ctx(ctx, upload) as scheduler:
         await scheduler.check_queue()
@@ -369,6 +457,7 @@ async def test_inflight_item_and_printer_are_excluded_from_reselection(farm):
         await scheduler.check_queue()
         assert set(scheduler._inflight) == inflight_before, "an in-flight item was re-selected"
 
+        upload.release()
         await _drain(scheduler)
 
     assert await _statuses(ctx) == ["printing"]
@@ -386,7 +475,7 @@ async def test_inflight_printer_is_kept_out_of_auto_drying(farm):
     """
     ctx = await farm(1, max_concurrent=4)
     printer_id = ctx.printer_ids[0]
-    upload = _UploadRecorder()
+    upload = _UploadRecorder(hold=True)
 
     async with _scheduler_ctx(ctx, upload) as scheduler:
         await scheduler.check_queue()  # launch the only item; now in flight
@@ -400,6 +489,7 @@ async def test_inflight_printer_is_kept_out_of_auto_drying(farm):
         busy_arg = scheduler._check_auto_drying.await_args.args[2]
         assert printer_id in busy_arg, "the in-flight printer must be excluded from auto-drying"
 
+        upload.release()
         await _drain(scheduler)
 
 
@@ -422,7 +512,7 @@ async def test_default_concurrency_applies_when_setting_absent(farm):
     Default cap is 4.
     """
     ctx = await farm(5, max_concurrent=None)
-    upload = _UploadRecorder()
+    upload = _UploadRecorder(assemble=True)
 
     await _run_to_completion(ctx, upload)
 
@@ -479,7 +569,10 @@ async def test_check_queue_returns_without_awaiting_the_uploads(farm):
     and returns True so the run loop keeps ticking fast while they drain.
     """
     ctx = await farm(3, max_concurrent=3)
-    upload = _UploadRecorder()
+    # Held, not assembled: this test reads the rows while the uploads are open,
+    # and an assembled batch releases as soon as it is complete, which would let
+    # the dispatches flip those rows to 'printing' mid-assertion.
+    upload = _UploadRecorder(hold=True)
 
     async with _scheduler_ctx(ctx, upload) as scheduler:
         result = await scheduler.check_queue()
@@ -489,6 +582,8 @@ async def test_check_queue_returns_without_awaiting_the_uploads(farm):
         assert len(scheduler._inflight) == 3
         assert await _statuses(ctx) == ["pending"] * 3
 
+        await upload.arrived(3)
+        upload.release()
         await _drain(scheduler)
 
     assert await _statuses(ctx) == ["printing"] * 3
@@ -561,7 +656,7 @@ class TestSharedLibraryRow:
         session_maker = async_sessionmaker(engine, expire_on_commit=False)
         try:
             ctx = await self._library_farm(session_maker, tmp_path, 4, cleanup=False)
-            upload = _UploadRecorder()
+            upload = _UploadRecorder(assemble=True)
 
             await _run_check_queue(ctx, upload)
 
