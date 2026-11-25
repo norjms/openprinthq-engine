@@ -11,6 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import (
+    PrinterScope,
+    column_in_scope,
+    get_printer_scope,
+    is_printer_visible,
+    printer_resource_guard,
+    visible_printer_ids,
+)
 from backend.app.models.notification import NotificationLog, NotificationProvider
 from backend.app.models.user import User
 from backend.app.schemas.notification import (
@@ -26,7 +34,18 @@ from backend.app.services.notification_service import notification_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/notifications", tags=["notifications"])
+# Per-printer scoping (#57): a provider tied to a printer outside the caller's
+# scope answers 404 on /notifications/{provider_id}/...; the provider list and
+# the log hide rows about such printers. Providers for every printer stay.
+router = APIRouter(
+    prefix="/notifications",
+    tags=["notifications"],
+    dependencies=[
+        Depends(
+            printer_resource_guard(NotificationProvider, "provider_id", not_found="Notification provider not found")
+        )
+    ],
+)
 
 
 def _provider_to_dict(provider: NotificationProvider) -> dict:
@@ -98,9 +117,14 @@ def _provider_to_dict(provider: NotificationProvider) -> dict:
 async def list_notification_providers(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.NOTIFICATIONS_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """List all notification providers."""
-    result = await db.execute(select(NotificationProvider).order_by(NotificationProvider.created_at.desc()))
+    query = select(NotificationProvider).order_by(NotificationProvider.created_at.desc())
+    in_scope = column_in_scope(NotificationProvider.printer_id, await visible_printer_ids(db, scope), include_null=True)
+    if in_scope is not None:
+        query = query.where(in_scope)
+    result = await db.execute(query)
     providers = result.scalars().all()
 
     return [_provider_to_dict(provider) for provider in providers]
@@ -111,8 +135,11 @@ async def create_notification_provider(
     provider_data: NotificationProviderCreate,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.NOTIFICATIONS_CREATE),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Create a new notification provider."""
+    if provider_data.printer_id is not None and not await is_printer_visible(db, scope, provider_data.printer_id):
+        raise HTTPException(status_code=400, detail="Printer not found")
     provider = NotificationProvider(
         name=provider_data.name,
         provider_type=provider_data.provider_type.value,
@@ -254,9 +281,13 @@ async def get_notification_logs(
     days: int | None = Query(default=7, ge=1, le=90, description="Filter logs from the last N days"),
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.NOTIFICATIONS_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Get notification logs with optional filters."""
     query = select(NotificationLog).order_by(desc(NotificationLog.created_at))
+    in_scope = column_in_scope(NotificationLog.printer_id, await visible_printer_ids(db, scope), include_null=True)
+    if in_scope is not None:
+        query = query.where(in_scope)
 
     # Apply filters
     if provider_id is not None:
@@ -397,8 +428,12 @@ async def update_notification_provider(
     update_data: NotificationProviderUpdate,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.NOTIFICATIONS_UPDATE),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Update a notification provider."""
+    new_printer_id = getattr(update_data, "printer_id", None)
+    if new_printer_id is not None and not await is_printer_visible(db, scope, new_printer_id):
+        raise HTTPException(status_code=400, detail="Printer not found")
     result = await db.execute(select(NotificationProvider).where(NotificationProvider.id == provider_id))
     provider = result.scalar_one_or_none()
 

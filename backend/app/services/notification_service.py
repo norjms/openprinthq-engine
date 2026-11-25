@@ -17,8 +17,10 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.core.branding import APP_NAME
 from backend.app.models.notification import NotificationDigestQueue, NotificationLog, NotificationProvider
 from backend.app.models.notification_template import NotificationTemplate
+from backend.app.services import webpush
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +187,7 @@ class NotificationService:
         """Build notification title and body from template."""
         # Add common variables
         variables["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-        variables["app_name"] = "Bambuddy"
+        variables["app_name"] = APP_NAME
 
         template = await self._get_template(db, event_type)
         if not template:
@@ -205,7 +207,7 @@ class NotificationService:
         if db:
             title, message = await self._build_message_from_template(db, "test", {})
         else:
-            title = "Bambuddy Test"
+            title = f"{APP_NAME} Test"
             message = "This is a test notification. If you see this, notifications are working!"
 
         try:
@@ -225,6 +227,8 @@ class NotificationService:
                 return await self._send_webhook(config, title, message)
             elif provider_type == "homeassistant":
                 return await self._send_homeassistant(config, title, message, db=db)
+            elif provider_type == "webpush":
+                return await webpush.send_all(title, message, db=db)
             else:
                 return False, f"Unknown provider type: {provider_type}"
         except Exception as e:
@@ -480,7 +484,7 @@ class NotificationService:
                 msg = MIMEMultipart("related")
                 msg["From"] = from_email
                 msg["To"] = to_email
-                msg["Subject"] = f"[Bambuddy] {subject}"
+                msg["Subject"] = f"[{APP_NAME}] {subject}"
 
                 alt = MIMEMultipart("alternative")
                 alt.attach(MIMEText(body, "plain"))
@@ -509,7 +513,7 @@ class NotificationService:
                 msg = MIMEMultipart()
                 msg["From"] = from_email
                 msg["To"] = to_email
-                msg["Subject"] = f"[Bambuddy] {subject}"
+                msg["Subject"] = f"[{APP_NAME}] {subject}"
                 msg.attach(MIMEText(body, "plain"))
 
             # smtplib is synchronous and blocking: a wedged / greylisting /
@@ -633,7 +637,7 @@ class NotificationService:
                 custom_field_title: title,
                 custom_field_message: message,
                 "timestamp": datetime.now().isoformat(),
-                "source": "Bambuddy",
+                "source": config.get("source_name", "").strip() or "OpenPrintHQ",
             }
 
         # For generic format, include structured event data for automation tools
@@ -659,9 +663,28 @@ class NotificationService:
             else:
                 headers["Authorization"] = f"Bearer {auth_header}"
 
+        # Signed delivery (OpenPrintHQ): with a signing_secret, the body is sent as exact bytes and
+        # X-OPHQ-Signature carries "sha256=" + HMAC-SHA256(secret, body), so a receiver (Artisan Hub, n8n)
+        # can tell the event came from this engine. X-OPHQ-Event names the event for routing.
+        signing_secret = str(config.get("signing_secret", "") or "").strip()
+        body = None
+        if signing_secret:
+            import hashlib
+            import hmac
+
+            body = json.dumps(data, separators=(",", ":"), default=str).encode()
+            headers["X-OPHQ-Signature"] = (
+                "sha256=" + hmac.new(signing_secret.encode(), body, hashlib.sha256).hexdigest()
+            )
+        if event_type:
+            headers["X-OPHQ-Event"] = event_type
+
         client = await self._get_client()
         try:
-            response = await client.post(webhook_url, json=data, headers=headers)
+            if body is not None:
+                response = await client.post(webhook_url, content=body, headers=headers)
+            else:
+                response = await client.post(webhook_url, json=data, headers=headers)
 
             if response.status_code in (200, 201, 202, 204):
                 return True, "Webhook delivered successfully"
@@ -760,8 +783,13 @@ class NotificationService:
         image_data: bytes | None = None,
         event_type: str | None = None,
         variables: dict | None = None,
+        printer_id: int | None = None,
     ) -> tuple[bool, str]:
-        """Send notification to a specific provider."""
+        """Send notification to a specific provider.
+
+        ``printer_id`` names the printer the event is about; browser push uses
+        it to skip subscribers whose printer scope hides that printer (#57).
+        """
         # Check quiet hours
         if self._is_in_quiet_hours(provider):
             logger.info("Skipping notification to %s - quiet hours active", provider.name)
@@ -794,6 +822,8 @@ class NotificationService:
                 )
             elif provider.provider_type == "homeassistant":
                 return await self._send_homeassistant(config, title, message, db=db)
+            elif provider.provider_type == "webpush":
+                return await webpush.send_all(title, message, db=db, printer_id=printer_id)
             else:
                 return False, f"Unknown provider type: {provider.provider_type}"
         except Exception as e:
@@ -887,7 +917,14 @@ class NotificationService:
             try:
                 # Always send notification immediately
                 success, error = await self._send_to_provider(
-                    provider, title, message, db, image_data=image_data, event_type=event_type, variables=variables
+                    provider,
+                    title,
+                    message,
+                    db,
+                    image_data=image_data,
+                    event_type=event_type,
+                    variables=variables,
+                    printer_id=printer_id,
                 )
 
                 # Also queue for digest if enabled (digest is a summary, not a queue)

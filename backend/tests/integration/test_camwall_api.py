@@ -135,6 +135,7 @@ class TestCamWallFeedPayload:
             "id",
             "name",
             "camera_rotation",
+            "webrtc",
             "connected",
             "state",
             "progress",

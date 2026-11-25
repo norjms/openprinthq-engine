@@ -29,10 +29,12 @@ from backend.app.core.auth import (
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import async_session, get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import PrinterScope, ensure_printer_visible, get_printer_scope
 from backend.app.core.tasks import spawn_background_task
 from backend.app.models.archive import PrintArchive
-from backend.app.models.library import LibraryFile, LibraryFileTag, LibraryFolder
+from backend.app.models.library import LibraryFile, LibraryFileTag, LibraryFolder, LibraryMeshReport
 from backend.app.models.print_queue import PrintQueueItem
+from backend.app.models.printer import Printer
 from backend.app.models.project import Project
 from backend.app.models.user import User
 from backend.app.schemas.library import (
@@ -63,6 +65,7 @@ from backend.app.schemas.library import (
     ZipExtractResult,
 )
 from backend.app.schemas.slicer import SliceRequest, SliceResponse
+from backend.app.services import mesh_integrity
 from backend.app.services.archive import ThreeMFParser
 from backend.app.services.plate_thumbnail import inject_plate_thumbnails_if_missing
 from backend.app.services.stl_thumbnail import MIN_USABLE_STL_BYTES, generate_stl_thumbnail
@@ -189,23 +192,25 @@ def calculate_file_hash(file_path: Path) -> str:
 
 
 def validate_print_file_upload(filename: str, content: bytes) -> None:
-    """Reject obviously-unprintable uploads early so the printer doesn't see them (#1401).
+    """Reject obviously-corrupt uploads early so no printer ever sees them (#1401).
 
-    Bambu printers in network mode only parse ``.gcode.3mf`` zip containers
-    — raw ``.gcode`` and corrupt/non-zip ``.3mf`` uploads cascade into a
-    confusing "Printing stopped because the printer was unable to parse the
-    3mf file" rejection 30 seconds after the user clicks Print. The
-    the queue dispatch path appends ``.3mf`` to a raw-gcode filename when
-    constructing the FTP destination, which is how the printer ends up with a
-    file named ``.gcode.3mf`` whose body is raw gcode — exactly the shape that
-    triggers the firmware parse failure. Catching both classes here gives an
-    actionable error at the
-    upload itself.
+    Bambu printers in network mode only parse ``.gcode.3mf`` zip containers —
+    a corrupt/non-zip ``.3mf`` cascades into a confusing "Printing stopped
+    because the printer was unable to parse the 3mf file" rejection 30
+    seconds after the user clicks Print. Catching that here gives an
+    actionable error at the upload itself.
+
+    Raw ``.gcode`` uploads are NOT rejected here — they're a required input
+    for the Klipper/OctoPrint/Duet/FlashForge/MKS/Obico transports, which is
+    exactly the shape #1401 didn't anticipate. Bambu's own version of this
+    guard (rejecting a non-``.3mf`` file before FTP dispatch, since
+    ``derive_remote_filename()`` would otherwise mislabel it) lives at the
+    point that actually knows the target is Bambu: ``print_scheduler.py``'s
+    ``_start_print``.
 
     Compares the filename suffix rather than ``os.path.splitext`` because
     compound extensions like ``.gcode.3mf`` show up as just ``.3mf`` after
-    ``splitext`` — same content validation needs to fire for both
-    single-``.3mf`` and ``.gcode.3mf`` uploads.
+    ``splitext``.
 
     Raises ``HTTPException(400, ...)`` with a human-readable message on
     rejection; returns ``None`` for valid (or irrelevant — e.g. STL,
@@ -213,18 +218,6 @@ def validate_print_file_upload(filename: str, content: bytes) -> None:
     """
     lower_filename = filename.lower()
     is_3mf_upload = lower_filename.endswith(".3mf")
-    is_raw_gcode_upload = lower_filename.endswith(".gcode") and not lower_filename.endswith(".gcode.3mf")
-
-    if is_raw_gcode_upload:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Raw .gcode files can't be printed on Bambu printers in network mode — "
-                "they need a .gcode.3mf zip container (gcode plus metadata). Re-export from "
-                "your slicer and make sure the file ends in '.gcode.3mf', not just '.gcode'. "
-                "If your OS hides extensions, double-check the file with the extension visible."
-            ),
-        )
 
     if is_3mf_upload and not content.startswith(b"PK\x03\x04"):
         raise HTTPException(
@@ -1783,10 +1776,58 @@ async def scan_external_folder(
         name=f"stl-backfill-folder-{folder_id}",
     )
 
+    # Mesh integrity is a second, separate deferred pass rather than part of the
+    # walk above, and the setting is read HERE rather than inside the task so a
+    # deployment that has not enabled it spawns nothing at all. That keeps a
+    # scan byte-for-byte what it was for every tenant who has not asked for the
+    # check, which matters because a scan runs on every upload on shared
+    # infrastructure.
+    if await mesh_integrity.integrity_enabled(db):
+        spawn_background_task(
+            mesh_integrity.run_pass(list(set(folder_cache.values()))),
+            name=f"mesh-integrity-folder-{folder_id}",
+        )
+
     return {"status": "success", "added": added, "removed": removed}
 
 
 # ============ File Endpoints ============
+
+
+@router.get("/files/by-hash/{sha256}")
+async def file_by_hash(
+    sha256: str,
+    db: AsyncSession = Depends(get_db),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_READ_ALL,
+            Permission.LIBRARY_READ_OWN,
+        )
+    ),
+):
+    """The library file with this SHA-256, if one is already stored (not in the trash). Lets a client skip
+    uploading a file the library already has: hash locally, ask here, and queue the existing file on a hit.
+    404 when there is none."""
+    want = sha256.strip().lower()
+    if len(want) != 64 or any(c not in "0123456789abcdef" for c in want):
+        raise HTTPException(400, "sha256 must be 64 hex characters")
+    current_user, can_read_all = auth_result
+    q = select(LibraryFile).where(LibraryFile.file_hash == want, LibraryFile.deleted_at.is_(None))
+    if current_user is not None and not can_read_all:
+        q = q.where(LibraryFile.created_by_id == current_user.id)
+    f = (await db.execute(q.order_by(LibraryFile.id).limit(1))).scalar_one_or_none()
+    if f is None:
+        raise HTTPException(404, "No library file with that hash")
+    return {
+        "id": f.id,
+        "filename": f.filename,
+        "file_type": f.file_type,
+        "file_size": f.file_size,
+        "file_hash": f.file_hash,
+        "folder_id": f.folder_id,
+        "created_at": f.created_at,
+        "metadata": f.file_metadata or {},
+    }
 
 
 @router.get("/files", response_model=list[FileListResponse])
@@ -1945,6 +1986,11 @@ async def upload_file(
     file: UploadFile = File(...),
     folder_id: int | None = None,
     generate_stl_thumbnails: bool = Query(default=True),
+    reuse_duplicate: bool = Query(
+        default=False,
+        description="When the library already has a file with the same content, answer that file "
+        "(reused: true) and keep no second copy",
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
 ):
@@ -2000,6 +2046,29 @@ async def upload_file(
             select(LibraryFile.id).where(LibraryFile.file_hash == file_hash, LibraryFile.deleted_at.is_(None)).limit(1)
         )
         duplicate_of = dup_result.scalar()
+
+        if reuse_duplicate and duplicate_of is not None:
+            existing = await db.get(LibraryFile, duplicate_of)
+            if existing is not None and (
+                current_user is None
+                or existing.created_by_id == current_user.id
+                or current_user.has_permission(Permission.LIBRARY_READ_ALL.value)
+            ):
+                # Same content already stored: drop the copy just written and answer the stored file.
+                try:
+                    file_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Could not remove duplicate upload %s", file_path)
+                return FileUploadResponse(
+                    id=existing.id,
+                    filename=existing.filename,
+                    file_type=existing.file_type,
+                    file_size=existing.file_size,
+                    thumbnail_path=existing.thumbnail_path,
+                    duplicate_of=existing.id,
+                    metadata=existing.file_metadata,
+                    reused=True,
+                )
 
         # Extract metadata and thumbnail
         metadata = {}
@@ -2528,7 +2597,8 @@ def is_sliced_file(filename: str) -> bool:
 async def add_files_to_queue(
     request: AddToQueueRequest,
     db: AsyncSession = Depends(get_db),
-    _: User | None = Depends(require_permission_if_auth_enabled(Permission.QUEUE_CREATE)),
+    current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.QUEUE_CREATE)),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Add library files to the print queue.
 
@@ -2537,6 +2607,16 @@ async def add_files_to_queue(
     """
     added: list[AddToQueueResult] = []
     errors: list[AddToQueueError] = []
+
+    # A named target has to exist and be active before anything is queued
+    # against it, or the job sits in the queue pointing at nothing and the
+    # scheduler will never pick it up either.
+    if request.printer_id is not None:
+        printer = await db.get(Printer, request.printer_id)
+        if printer is None or not printer.is_active:
+            raise HTTPException(status_code=404, detail="Printer not found")
+        # Per-printer scoping (#57): a hidden printer looks like a missing one.
+        await ensure_printer_visible(db, scope, request.printer_id)
 
     # Get all requested files
     result = await db.execute(LibraryFile.active().where(LibraryFile.id.in_(request.file_ids)))
@@ -2577,10 +2657,13 @@ async def add_files_to_queue(
             # Create queue item referencing library file (archive created at print start)
             max_position += 1
             queue_item = PrintQueueItem(
-                printer_id=None,  # Unassigned
+                printer_id=request.printer_id,  # None = unassigned, scheduler picks
                 library_file_id=file_id,
                 position=max_position,
                 status="pending",
+                # Record the owner so a scoped caller still sees its unassigned
+                # rows and the scheduler keeps them on its printers (#57).
+                created_by_id=current_user.id if current_user is not None else (scope.user_id if scope else None),
             )
             db.add(queue_item)
 
@@ -4902,3 +4985,160 @@ async def get_library_stats(
         "disk_total_bytes": disk_total_bytes,
         "disk_used_bytes": disk_used_bytes,
     }
+
+
+# ============ Mesh Integrity ============
+#
+# A non-manifold mesh or one with holes is the most common cause of a print that
+# fails in a way that looks like a printer fault, so the library reports it next
+# to the file. Results are cached by content hash in ``library_mesh_reports``;
+# see :mod:`backend.app.services.mesh_integrity` for what counts as a problem
+# and why the list is deliberately short.
+
+
+def _report_payload(report: LibraryMeshReport | None) -> dict:
+    """Shape one cached report for the API.
+
+    ``checked`` is the field the UI should branch on. A file that could not be
+    parsed, was skipped as too large, or is not a mesh format at all is NOT a
+    file with a problem, and collapsing those into one boolean here means no
+    caller can accidentally badge a STEP file as broken.
+    """
+    if report is None:
+        return {"status": "unknown", "checked": False, "findings": [], "stats": {}}
+    return {
+        "status": report.status,
+        "checked": report.status in (mesh_integrity.STATUS_OK, mesh_integrity.STATUS_PROBLEMS),
+        "findings": report.findings or [],
+        "stats": report.stats or {},
+        "reason": report.reason,
+        "duration_ms": report.duration_ms,
+        "analyzer_version": report.analyzer_version,
+    }
+
+
+@router.get("/mesh-integrity")
+async def list_mesh_integrity(
+    folder_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    _: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_READ_ALL,
+            Permission.LIBRARY_READ_OWN,
+        )
+    ),
+):
+    """Cached integrity results for a folder, keyed by file id.
+
+    One query for the listing rather than a request per card, so a folder of
+    several hundred models still renders its badges in a single round trip.
+    """
+    stmt = LibraryFile.active()
+    if folder_id is not None:
+        stmt = stmt.where(LibraryFile.folder_id == folder_id)
+    files = (await db.execute(stmt)).scalars().all()
+    files = [f for f in files if mesh_integrity.is_supported(f.filename)]
+
+    hashes = {f.file_hash for f in files if f.file_hash}
+    reports: dict[str, LibraryMeshReport] = {}
+    if hashes:
+        rows = (
+            (await db.execute(select(LibraryMeshReport).where(LibraryMeshReport.file_hash.in_(hashes)))).scalars().all()
+        )
+        reports = {r.file_hash: r for r in rows}
+
+    enabled = await mesh_integrity.integrity_enabled(db)
+    # ``path`` rides along because the caller that actually renders these is the
+    # control-plane, joining onto a different index over the same bucket. It has
+    # no way to resolve one of our file ids, and path is the only key the two
+    # indexes share.
+    return {
+        "enabled": enabled,
+        "results": {
+            str(f.id): {
+                "filename": f.filename,
+                "path": f.file_path,
+                **_report_payload(reports.get(f.file_hash) if f.file_hash else None),
+            }
+            for f in files
+        },
+    }
+
+
+@router.get("/files/{file_id}/mesh-integrity")
+async def get_file_mesh_integrity(
+    file_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_READ_ALL,
+            Permission.LIBRARY_READ_OWN,
+        )
+    ),
+):
+    """The cached integrity result for one file, if there is one."""
+    lib_file = (await db.execute(LibraryFile.active().where(LibraryFile.id == file_id))).scalar_one_or_none()
+    if not lib_file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if not mesh_integrity.is_supported(lib_file.filename):
+        return {
+            "file_id": file_id,
+            "status": mesh_integrity.STATUS_UNSUPPORTED,
+            "checked": False,
+            "findings": [],
+            "stats": {},
+            "reason": "not a mesh format",
+        }
+
+    report = None
+    if lib_file.file_hash:
+        report = (
+            await db.execute(select(LibraryMeshReport).where(LibraryMeshReport.file_hash == lib_file.file_hash))
+        ).scalar_one_or_none()
+    return {"file_id": file_id, **_report_payload(report)}
+
+
+@router.post("/files/{file_id}/mesh-integrity")
+async def analyze_file_mesh_integrity(
+    file_id: int,
+    force: bool = False,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
+):
+    """Analyse one file now, whether or not the background pass is enabled.
+
+    The explicit ask always runs: a user who clicked "check this model" has
+    accepted the cost for that one file.
+    """
+    lib_file = (await db.execute(LibraryFile.active().where(LibraryFile.id == file_id))).scalar_one_or_none()
+    if not lib_file:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not mesh_integrity.is_supported(lib_file.filename):
+        raise HTTPException(status_code=400, detail="Not a mesh format")
+
+    report = await mesh_integrity.analyze_library_file(db, lib_file, force=force)
+    if report is None:
+        raise HTTPException(status_code=404, detail="File is not present on disk")
+    await db.commit()
+    return {"file_id": file_id, **_report_payload(report)}
+
+
+@router.post("/mesh-integrity/scan")
+async def start_mesh_integrity_pass(
+    folder_id: int | None = None,
+    limit: int = mesh_integrity.DEFAULT_PASS_LIMIT,
+    force: bool = False,
+    _: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
+):
+    """Kick off a background pass. Returns immediately.
+
+    ``force`` both bypasses the enabled setting and recomputes cached rows, so
+    it is the switch to use after the analyzer itself changes.
+    """
+    folder_ids = [folder_id] if folder_id is not None else None
+    spawn_background_task(
+        mesh_integrity.run_pass(folder_ids, limit=limit, force=force),
+        name=f"mesh-integrity-manual-{folder_id or 'all'}",
+    )
+    return {"status": "started", "folder_id": folder_id, "limit": limit, "force": force}

@@ -41,6 +41,7 @@ import {
   Power,
   Zap,
   Wrench,
+  Ban,
   ChevronDown,
   Filter,
   Pencil,
@@ -66,6 +67,8 @@ import {
   XCircle,
   User,
   Home,
+  Grid2x2,
+  OctagonAlert,
   Printer as PrinterIcon,
   Info,
   Cable,
@@ -97,6 +100,7 @@ import { Button } from '../components/Button';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { BulkPrinterToolbar, type PrinterState } from '../components/BulkPrinterToolbar';
 import { FileManagerModal } from '../components/FileManagerModal';
+import { EjectionProfilesModal } from '../components/EjectionProfilesModal';
 import { EmbeddedCameraViewer } from '../components/EmbeddedCameraViewer';
 import { CameraWall } from '../components/CameraWall';
 import { MQTTDebugModal } from '../components/MQTTDebugModal';
@@ -120,9 +124,15 @@ import { PrinterInfoModal } from '../components/PrinterInfoModal';
 import { getAmsLabel, getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, isBambuLabSpool, resolveSlotNozzleDiameter } from '../utils/amsHelpers';
 import { getPrinterImage, getWifiStrength, filterCompatibleQueueItems } from '../utils/printer';
 import { FilamentSlotCircle } from '../components/FilamentSlotCircle';
+import { UntestedHardwareBadge } from '../components/UntestedHardwareBadge';
+import { isMaterialUnit, isUntestedConnection, materialUnitLabel } from '../utils/materialUnits';
 import { Collapsible } from '../components/Collapsible';
 import { ConnectionDiagnosticModal, DiagnosticChecklist } from '../components/ConnectionDiagnostic';
 import { getColorName, parseFilamentColor, isLightColor } from '../utils/colors';
+
+// Build plate names as the slicer writes them into a 3MF (curr_bed_type), for the
+// printer's "installed plate" setting used by farm dispatch.
+const INSTALLED_PLATES = ['Cool Plate', 'Engineering Plate', 'High Temp Plate', 'Textured PEI Plate', 'Supertack Plate'];
 
 export interface SpoolmanSlotAssignmentRow {
   printer_id: number;
@@ -1816,6 +1826,27 @@ function PrinterCard({
   const navigate = useNavigate();
   const { showToast } = useToast();
   const { hasPermission } = useAuth();
+  // Klipper / Moonraker printers expose only the transport-agnostic controls
+  // (status, pause/resume/stop, light, home). AMS / drying / k-profiles /
+  // print-speed / airduct / calibration are Bambu-only and hidden below.
+  const isKlipper = printer.connection_type === 'klipper';
+  // MQTT debug and the speed levels are Bambu-only; every other transport
+  // (Klipper, OctoPrint, PrusaLink, Duet, ...) hides them.
+  const isBambu = (printer.connection_type || 'bambu') === 'bambu';
+  const canHome = printer.controls?.home !== false;
+  // CFS / QIDI Box / ACE / CANVAS units arrive in the AMS list with their own
+  // module_type; label them by kind instead of "AMS-A".
+  const amsUnitLabel = (ams: { id: number; tray: unknown[]; module_type?: string }) =>
+    isMaterialUnit(ams.module_type) ? materialUnitLabel(t, ams.module_type, ams.id) : getAmsLabel(ams.id, ams.tray.length);
+  // Voron/Klipper profile for this printer (cached, shared across cards) — drives
+  // the levelling action's label (QGL vs Z-Tilt) and whether it's shown at all.
+  const { data: klipperProfiles } = useQuery({
+    queryKey: ['klipperProfiles'],
+    queryFn: () => api.getKlipperProfiles(),
+    enabled: isKlipper,
+    staleTime: Infinity,
+  });
+  const klipperProfile = isKlipper ? klipperProfiles?.find((p) => p.key === printer.model) : undefined;
   const [showMenu, setShowMenu] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteArchives, setDeleteArchives] = useState(true);
@@ -2205,6 +2236,23 @@ function PrinterCard({
     }
   }, [activePrintName, needsPlateClear, status?.cover_url]);
   const plateStatus = (() => {
+    if (status?.failure_hold) {
+      return {
+        label: t('printers.plateStatus.failureHold'),
+        className: 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400 cursor-pointer',
+        title: t('printers.plateStatus.failureHoldHint'),
+        onClick: async () => {
+          await api.ackPrinterFailures(printer.id);
+          queryClient.invalidateQueries({ queryKey: ['printerStatus', printer.id] });
+        },
+      };
+    }
+    if (status?.ejecting) {
+      return {
+        label: t('printers.plateStatus.ejecting'),
+        className: 'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400',
+      };
+    }
     if (!requirePlateClear || !status?.connected) return null;
     if (isPrintingOrPaused) {
       return {
@@ -2224,9 +2272,20 @@ function PrinterCard({
     };
   })();
   const plateStatusPill = plateStatus ? (
-    <span className={`inline-flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${plateStatus.className}`}>
-      {plateStatus.label}
-    </span>
+    'onClick' in plateStatus && plateStatus.onClick ? (
+      <button
+        type="button"
+        title={plateStatus.title}
+        onClick={plateStatus.onClick}
+        className={`inline-flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${plateStatus.className}`}
+      >
+        {plateStatus.label}
+      </button>
+    ) : (
+      <span className={`inline-flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${plateStatus.className}`}>
+        {plateStatus.label}
+      </span>
+    )
   ) : null;
 
   // Determine if this card should be hidden (use cached connected state to prevent flicker)
@@ -2491,6 +2550,25 @@ function PrinterCard({
       }
       showToast(error.message || t('printers.toast.failedToControlChamberLight'), 'error');
     },
+  });
+
+  // Klipper / Moonraker one-click actions (Voron etc.). Home reuses the
+  // existing /home-axes endpoint (G28 via gcode); QGL and E-stop use the
+  // dedicated Klipper endpoints.
+  const klipperHomeMutation = useMutation({
+    mutationFn: () => api.homeAxes(printer.id, 'all'),
+    onSuccess: () => showToast(t('printers.klipperActions.homing')),
+    onError: (e: Error) => showToast(e.message, 'error'),
+  });
+  const klipperLevelMutation = useMutation({
+    mutationFn: () => api.klipperLevel(printer.id),
+    onSuccess: () => showToast(t('printers.klipperActions.levelling')),
+    onError: (e: Error) => showToast(e.message, 'error'),
+  });
+  const klipperEStopMutation = useMutation({
+    mutationFn: () => api.klipperEmergencyStop(printer.id),
+    onSuccess: () => showToast(t('printers.klipperActions.eStopSent')),
+    onError: (e: Error) => showToast(e.message, 'error'),
   });
 
   // Print speed mutation with optimistic update
@@ -2994,6 +3072,9 @@ function PrinterCard({
     includeRfid?: boolean;
   }) => {
     const printerBusy = status?.state === 'RUNNING';
+    // RFID re-read and load/unload are Bambu MQTT commands; other printers'
+    // units (CFS, QIDI Box, ACE, CANVAS) are display and matching only.
+    if (!isBambu) return null;
 
     return (
       <>
@@ -3138,6 +3219,68 @@ function PrinterCard({
             <RotateCw className={`w-4 h-4 ${forceRefreshMutation.isPending ? 'animate-spin' : ''}`} />
             {t('printers.forceRefresh')}
           </button>
+          {isKlipper && hasPermission('printers:control') && (
+            <>
+              <div className="my-1 border-t border-bambu-dark-tertiary" />
+              <button
+                className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2 disabled:opacity-50"
+                disabled={!status?.connected || klipperHomeMutation.isPending}
+                onClick={() => {
+                  klipperHomeMutation.mutate();
+                  setShowMenu(false);
+                }}
+              >
+                <Home className="w-4 h-4" />
+                {t('printers.klipperActions.homeAll')}
+              </button>
+              {/* Levelling label + visibility come from the profile: QGL on the
+                  2.4, Z-Tilt on the Trident, hidden on single-Z (V0/Switchwire).
+                  Falls back to the generic i18n label until the profile loads. */}
+              {(klipperProfile ? klipperProfile.has_leveling : true) && (
+                <button
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2 disabled:opacity-50"
+                  disabled={!status?.connected || klipperLevelMutation.isPending}
+                  onClick={() => {
+                    klipperLevelMutation.mutate();
+                    setShowMenu(false);
+                  }}
+                >
+                  <Grid2x2 className="w-4 h-4" />
+                  {klipperProfile?.leveling_label || t('printers.klipperActions.quadGantryLevel')}
+                </button>
+              )}
+              <button
+                className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-500/10 flex items-center gap-2 disabled:opacity-50"
+                disabled={!status?.connected || klipperEStopMutation.isPending}
+                onClick={() => {
+                  klipperEStopMutation.mutate();
+                  setShowMenu(false);
+                }}
+              >
+                <OctagonAlert className="w-4 h-4" />
+                {t('printers.klipperActions.emergencyStop')}
+              </button>
+              <div className="my-1 border-t border-bambu-dark-tertiary" />
+            </>
+          )}
+          {!isBambu && !isKlipper && canHome && hasPermission('printers:control') && (
+            <>
+              <div className="my-1 border-t border-bambu-dark-tertiary" />
+              <button
+                className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2 disabled:opacity-50"
+                disabled={!status?.connected || klipperHomeMutation.isPending}
+                onClick={() => {
+                  klipperHomeMutation.mutate();
+                  setShowMenu(false);
+                }}
+              >
+                <Home className="w-4 h-4" />
+                {t('printers.klipperActions.homeAll')}
+              </button>
+              <div className="my-1 border-t border-bambu-dark-tertiary" />
+            </>
+          )}
+          {isBambu && (
           <button
             className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2"
             onClick={() => {
@@ -3148,6 +3291,7 @@ function PrinterCard({
             <Terminal className="w-4 h-4" />
             {t('printers.mqttDebug')}
           </button>
+          )}
           <button
             className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2"
             onClick={() => {
@@ -3249,6 +3393,7 @@ function PrinterCard({
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2">
                     <h3 className={`font-semibold text-white ${getTitleSize()}`}>{printer.name}</h3>
+                    {isUntestedConnection(printer.connection_type) && <UntestedHardwareBadge compact={viewMode === 'compact'} />}
                     {/* Connection indicator dot for compact mode */}
                     {viewMode === 'compact' && (() => {
                       const hmsErrors = status?.connected && status.hms_errors ? filterKnownHMSErrors(status.hms_errors) : [];
@@ -3541,6 +3686,20 @@ function PrinterCard({
                 </div>
               </CardContent>
             </Card>
+          </div>
+        )}
+
+        {/* Out of service: monitoring continues, so the normal status below still renders */}
+        {printer.is_active !== false && printer.out_of_service && (
+          <div
+            className="mt-2 flex items-center gap-2 px-2 py-1.5 rounded-full bg-amber-50 dark:bg-amber-500/15 border border-amber-300 dark:border-amber-500/30"
+            title={printer.out_of_service_reason || undefined}
+          >
+            <Ban className="w-3 h-3 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span className="text-[11px] text-amber-700 dark:text-amber-400 font-medium truncate">
+              {t('printers.modal.outOfServicePill')}
+              {printer.out_of_service_reason ? ` - ${printer.out_of_service_reason}` : ''}
+            </span>
           </div>
         )}
 
@@ -4372,8 +4531,8 @@ function PrinterCard({
                         </button>
                       </div>
 
-                      {/* Print Speed */}
-                      {(() => (
+                      {/* Print Speed (Bambu only — Klipper has no fixed speed levels) */}
+                      {isBambu && (() => (
                         <div className="relative">
                           <button
                             data-testid="speed-control"
@@ -4533,15 +4692,16 @@ function PrinterCard({
                                 <AmsNameHoverCard
                                   ams={ams}
                                   printerId={printer.id}
-                                  label={getAmsLabel(ams.id, ams.tray.length)}
+                                  label={amsUnitLabel(ams)}
                                   amsLabels={amsLabels}
                                   canEdit={hasPermission('printers:update')}
                                   onSaved={refetchAmsLabels}
                                 >
                                   <span className="block truncate text-[10px] text-white font-medium cursor-default select-none">
-                                    {amsLabels?.[ams.id] || getAmsLabel(ams.id, ams.tray.length)}
+                                    {amsLabels?.[ams.id] || amsUnitLabel(ams)}
                                   </span>
                                 </AmsNameHoverCard>
+                                {isMaterialUnit(ams.module_type) && <UntestedHardwareBadge compact />}
                                 {isDualNozzle && (isLeftNozzle || isRightNozzle) && (
                                   <NozzleBadge side={isLeftNozzle ? 'L' : 'R'} />
                                 )}
@@ -4555,7 +4715,7 @@ function PrinterCard({
                                       fairThreshold={amsThresholds?.humidityFair}
                                       onClick={() => setAmsHistoryModal({
                                         amsId: ams.id,
-                                        amsLabel: getAmsLabel(ams.id, ams.tray.length),
+                                        amsLabel: amsUnitLabel(ams),
                                         mode: 'humidity',
                                       })}
                                       compact
@@ -4569,7 +4729,7 @@ function PrinterCard({
                                         fairThreshold={amsThresholds?.tempFair}
                                         onClick={() => setAmsHistoryModal({
                                           amsId: ams.id,
-                                          amsLabel: getAmsLabel(ams.id, ams.tray.length),
+                                          amsLabel: amsUnitLabel(ams),
                                           mode: 'temperature',
                                         })}
                                         compact
@@ -4858,7 +5018,7 @@ function PrinterCard({
                                                   material: tray?.tray_type ?? undefined,
                                                   profile: filamentData.profile,
                                                   color: filamentData.colorHex || '',
-                                                  location: `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
+                                                  location: `${amsUnitLabel(ams)} Slot ${slotIdx + 1}`,
                                                 },
                                               }),
                                               onUnassignSpool: (spoolmanSpool && !isBambuLabSpool(tray)) ? () => onUnassignSpoolmanSpool?.(spoolmanSpool.id) : undefined,
@@ -4883,7 +5043,7 @@ function PrinterCard({
                                                 material: tray?.tray_type ?? undefined,
                                                 profile: filamentData.profile,
                                                 color: filamentData.colorHex || '',
-                                                location: `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
+                                                location: `${amsUnitLabel(ams)} Slot ${slotIdx + 1}`,
                                               },
                                             }),
                                             onUnassignSpool: (assignment && !isBambuLabSpool(tray)) ? () => onUnassignSpool?.(printer.id, ams.id, slotIdx) : undefined,
@@ -4891,7 +5051,7 @@ function PrinterCard({
                                           };
                                         })()}
                                         configureSlot={{
-                                          enabled: hasPermission('printers:control'),
+                                          enabled: isBambu && hasPermission('printers:control'),
                                           onConfigure: () => setConfigureSlotModal({
                                             amsId: ams.id,
                                             trayId: slotIdx,
@@ -4918,7 +5078,7 @@ function PrinterCard({
                                           isRefreshing,
                                         })}
                                         configureSlot={{
-                                          enabled: hasPermission('printers:control'),
+                                          enabled: isBambu && hasPermission('printers:control'),
                                           onConfigure: () => setConfigureSlotModal({
                                             amsId: ams.id,
                                             trayId: slotIdx,
@@ -4935,7 +5095,7 @@ function PrinterCard({
                                             material: undefined,
                                             profile: '',
                                             color: '',
-                                            location: `${getAmsLabel(ams.id, ams.tray.length)} Slot ${slotIdx + 1}`,
+                                            location: `${amsUnitLabel(ams)} Slot ${slotIdx + 1}`,
                                           },
                                         })}
                                       >
@@ -5096,15 +5256,16 @@ function PrinterCard({
                                 <AmsNameHoverCard
                                   ams={ams}
                                   printerId={printer.id}
-                                  label={getAmsLabel(ams.id, ams.tray.length)}
+                                  label={amsUnitLabel(ams)}
                                   amsLabels={amsLabels}
                                   canEdit={hasPermission('printers:update')}
                                   onSaved={refetchAmsLabels}
                                 >
                                   <span className="block truncate text-[10px] text-white font-medium cursor-default select-none">
-                                    {amsLabels?.[ams.id] || getAmsLabel(ams.id, ams.tray.length)}
+                                    {amsLabels?.[ams.id] || amsUnitLabel(ams)}
                                   </span>
                                 </AmsNameHoverCard>
+                                {isMaterialUnit(ams.module_type) && <UntestedHardwareBadge compact />}
                                 {isDualNozzle && (isLeftNozzle || isRightNozzle) && (
                                   <NozzleBadge side={isLeftNozzle ? 'L' : 'R'} />
                                 )}
@@ -5238,7 +5399,7 @@ function PrinterCard({
                                               material: tray?.tray_type ?? undefined,
                                               profile: filamentData.profile,
                                               color: filamentData.colorHex || '',
-                                              location: getAmsLabel(ams.id, ams.tray.length),
+                                              location: amsUnitLabel(ams),
                                             },
                                           }),
                                           onUnassignSpool: (spoolmanSpool && !isBambuLabSpool(tray)) ? () => onUnassignSpoolmanSpool?.(spoolmanSpool.id) : undefined,
@@ -5263,7 +5424,7 @@ function PrinterCard({
                                             material: tray?.tray_type ?? undefined,
                                             profile: filamentData.profile,
                                             color: filamentData.colorHex || '',
-                                            location: getAmsLabel(ams.id, ams.tray.length),
+                                            location: amsUnitLabel(ams),
                                           },
                                         }),
                                         onUnassignSpool: (assignment && !isBambuLabSpool(tray)) ? () => onUnassignSpool?.(printer.id, ams.id, htSlotId) : undefined,
@@ -5271,7 +5432,7 @@ function PrinterCard({
                                       };
                                     })()}
                                     configureSlot={{
-                                      enabled: hasPermission('printers:control'),
+                                      enabled: isBambu && hasPermission('printers:control'),
                                       onConfigure: () => setConfigureSlotModal({
                                         amsId: ams.id,
                                         trayId: htSlotId,
@@ -5298,7 +5459,7 @@ function PrinterCard({
                                       isRefreshing: isHtRefreshing,
                                     })}
                                     configureSlot={{
-                                      enabled: hasPermission('printers:control'),
+                                      enabled: isBambu && hasPermission('printers:control'),
                                       onConfigure: () => setConfigureSlotModal({
                                         amsId: ams.id,
                                         trayId: htSlotId,
@@ -5315,7 +5476,7 @@ function PrinterCard({
                                         material: undefined,
                                         profile: '',
                                         color: '',
-                                        location: getAmsLabel(ams.id, ams.tray.length),
+                                        location: amsUnitLabel(ams),
                                       },
                                     })}
                                   >
@@ -5333,7 +5494,7 @@ function PrinterCard({
                                       fairThreshold={amsThresholds?.tempFair}
                                       onClick={() => setAmsHistoryModal({
                                         amsId: ams.id,
-                                        amsLabel: getAmsLabel(ams.id, ams.tray.length),
+                                        amsLabel: amsUnitLabel(ams),
                                         mode: 'temperature',
                                       })}
                                       compact
@@ -5346,7 +5507,7 @@ function PrinterCard({
                                       fairThreshold={amsThresholds?.humidityFair}
                                       onClick={() => setAmsHistoryModal({
                                         amsId: ams.id,
-                                        amsLabel: getAmsLabel(ams.id, ams.tray.length),
+                                        amsLabel: amsUnitLabel(ams),
                                         mode: 'humidity',
                                       })}
                                       compact
@@ -5543,7 +5704,7 @@ function PrinterCard({
                                         };
                                       })()}
                                       configureSlot={{
-                                        enabled: hasPermission('printers:control'),
+                                        enabled: isBambu && hasPermission('printers:control'),
                                         onConfigure: () => setConfigureSlotModal({
                                           amsId: 255,
                                           trayId: slotTrayId,
@@ -5570,7 +5731,7 @@ function PrinterCard({
                                         includeRfid: false,
                                       })}
                                       configureSlot={{
-                                        enabled: hasPermission('printers:control'),
+                                        enabled: isBambu && hasPermission('printers:control'),
                                         onConfigure: () => setConfigureSlotModal({
                                           amsId: 255,
                                           trayId: slotTrayId,
@@ -6562,12 +6723,28 @@ export function AddPrinterModal({
   const { t } = useTranslation();
   const [form, setForm] = useState<PrinterCreate>({
     name: '',
+    connection_type: 'bambu',
     serial_number: '',
     ip_address: '',
     access_code: '',
     model: '',
     location: '',
     auto_archive: true,
+  });
+  const isKlipper = form.connection_type === 'klipper';
+  const isOctoprint = form.connection_type === 'octoprint' || form.connection_type === 'prusalink';
+  const isDuet = form.connection_type === 'duet';
+  const isFlashforge = form.connection_type === 'flashforge';
+  const isMks = form.connection_type === 'mks';
+  const isObico = form.connection_type === 'obico';
+  const isElegooCc2 = form.connection_type === 'elegoo_cc2';
+  const isBambu = form.connection_type === 'bambu';
+  // Supported Voron/Klipper profiles for the model dropdown (data-driven).
+  const { data: klipperProfiles } = useQuery({
+    queryKey: ['klipperProfiles'],
+    queryFn: () => api.getKlipperProfiles(),
+    enabled: isKlipper,
+    staleTime: Infinity,
   });
 
   // Discovery state
@@ -6620,11 +6797,19 @@ export function AddPrinterModal({
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // External printers (Klipper/OctoPrint/PrusaLink) use HTTP APIs, not the
+    // Bambu MQTT diagnostic. Skip the pre-flight and add directly.
+    if (!isBambu) {
+      const model = isKlipper ? (form.model || 'voron_2.4_350') : isObico ? form.model : undefined;
+      // The Centauri Carbon 2 uses the printer's optional access code as its MQTT password.
+      onAdd({ ...form, model, serial_number: undefined, access_code: isElegooCc2 ? (form.access_code || undefined) : undefined });
+      return;
+    }
     setCheckingSave(true);
     try {
       const result = await api.diagnoseConnection({
         ip_address: form.ip_address.trim(),
-        serial_number: form.serial_number.trim() || undefined,
+        serial_number: (form.serial_number || '').trim() || undefined,
         access_code: form.access_code || undefined,
       });
       if (result.checks.some((c) => c.status === 'fail')) {
@@ -6895,6 +7080,33 @@ export function AddPrinterModal({
           </div>
           <form onSubmit={handleAddSubmit} className="space-y-4">
             <div>
+              <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.connectionType')}</label>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  { ct: 'bambu', label: t('printers.modal.typeBambu'), patch: { connection_type: 'bambu' as const } },
+                  { ct: 'klipper', label: t('printers.modal.typeKlipper'), patch: { connection_type: 'klipper' as const, model: 'voron_2.4_350', moonraker_port: 7125 } },
+                  { ct: 'octoprint', label: t('printers.modal.typeOctoprint'), patch: { connection_type: 'octoprint' as const, model: '', moonraker_port: 80 } },
+                  { ct: 'prusalink', label: t('printers.modal.typePrusalink'), patch: { connection_type: 'prusalink' as const, model: '', moonraker_port: 80 } },
+                  { ct: 'duet', label: t('printers.modal.typeDuet'), patch: { connection_type: 'duet' as const, model: '', moonraker_port: 80 } },
+                  { ct: 'flashforge', label: t('printers.modal.typeFlashforge'), patch: { connection_type: 'flashforge' as const, model: '', moonraker_port: 8899 } },
+                  { ct: 'mks', label: t('printers.modal.typeMks'), patch: { connection_type: 'mks' as const, model: '', moonraker_port: 8080 } },
+                  { ct: 'obico', label: t('printers.modal.typeObico'), patch: { connection_type: 'obico' as const, model: '' } },
+                  { ct: 'elegoo', label: t('printers.modal.typeElegoo'), patch: { connection_type: 'elegoo' as const, model: '', moonraker_port: 3030 } },
+                  { ct: 'elegoo_cc2', label: t('printers.modal.typeElegooCc2'), patch: { connection_type: 'elegoo_cc2' as const, model: '', moonraker_port: 1883 } },
+                  { ct: 'anycubic', label: t('printers.modal.typeAnycubic'), patch: { connection_type: 'anycubic' as const, model: '', moonraker_port: 80 } },
+                ] as const).map(({ ct, label, patch }) => (
+                  <button
+                    key={ct}
+                    type="button"
+                    onClick={() => setForm({ ...form, ...patch })}
+                    className={`px-3 py-2 rounded-lg border text-sm transition-colors ${form.connection_type === ct ? 'border-bambu-green text-white bg-bambu-green/10' : 'border-bambu-dark-tertiary text-bambu-gray hover:text-white'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.name')}</label>
               <input
                 type="text"
@@ -6917,28 +7129,121 @@ export function AddPrinterModal({
                 placeholder="192.168.1.100 or printer.local"
               />
             </div>
+            {isBambu && (
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.serialNumber')}</label>
               <input
                 type="text"
-                required
+                required={isBambu}
                 className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                 value={form.serial_number}
                 onChange={(e) => setForm({ ...form, serial_number: e.target.value })}
                 placeholder="01P00A000000000"
               />
             </div>
+            )}
+            {isBambu && (
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.accessCode')}</label>
               <input
                 type="password"
-                required
+                required={isBambu}
                 className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                 value={form.access_code}
                 onChange={(e) => setForm({ ...form, access_code: e.target.value })}
                 placeholder={t('printers.modal.fromPrinterSettings')}
               />
             </div>
+            )}
+            {(isKlipper || isOctoprint || isDuet || isFlashforge || isMks) && (
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.hostPort')}</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={65535}
+                  className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.moonraker_port ?? (isKlipper ? 7125 : isFlashforge ? 8899 : isMks ? 8080 : 80)}
+                  onChange={(e) => setForm({ ...form, moonraker_port: Number(e.target.value) || (isKlipper ? 7125 : isFlashforge ? 8899 : isMks ? 8080 : 80) })}
+                  placeholder={isKlipper ? '7125' : isFlashforge ? '8899' : isMks ? '8080' : '80'}
+                />
+              </div>
+            )}
+            {(isKlipper || isOctoprint || isDuet) && (
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.apiKeyOptional')}</label>
+                <input
+                  type="password"
+                  className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.moonraker_api_key || ''}
+                  onChange={(e) => setForm({ ...form, moonraker_api_key: e.target.value })}
+                  placeholder={isKlipper ? t('printers.modal.moonrakerApiKeyPlaceholder') : ''}
+                />
+                <p className="text-xs text-bambu-gray mt-1">{isKlipper ? t('printers.modal.moonrakerApiKeyHelp') : t('printers.modal.apiKeyHelp')}</p>
+              </div>
+            )}
+            {isUntestedConnection(form.connection_type) && (
+              <div className="flex items-start gap-2 text-xs text-bambu-gray">
+                <UntestedHardwareBadge />
+                <span>{t('printers.materialUnit.untestedHelp')}</span>
+              </div>
+            )}
+            {form.connection_type === 'anycubic' && (
+              <p className="text-xs text-bambu-gray">{t('printers.modal.anycubicLanHelp')}</p>
+            )}
+            {isElegooCc2 && (
+              <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.elegooAccessCode')}</label>
+                <input
+                  type="password"
+                  className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  value={form.access_code || ''}
+                  onChange={(e) => setForm({ ...form, access_code: e.target.value })}
+                />
+                <p className="text-xs text-bambu-gray mt-1">{t('printers.modal.elegooAccessCodeHelp')}</p>
+              </div>
+            )}
+            {isObico && (
+              <>
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.obicoApiKey')}</label>
+                  <input
+                    type="password"
+                    required
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    value={form.moonraker_api_key || ''}
+                    onChange={(e) => setForm({ ...form, moonraker_api_key: e.target.value })}
+                  />
+                  <p className="text-xs text-bambu-gray mt-1">{t('printers.modal.obicoApiKeyHelp')}</p>
+                </div>
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.obicoPrinterId')}</label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    value={form.model || ''}
+                    onChange={(e) => setForm({ ...form, model: e.target.value })}
+                  />
+                  <p className="text-xs text-bambu-gray mt-1">{t('printers.modal.obicoPrinterIdHelp')}</p>
+                </div>
+              </>
+            )}
+            {isKlipper && (
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.klipperProfile')}</label>
+                  <select
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    value={form.model || 'voron_2.4_350'}
+                    onChange={(e) => setForm({ ...form, model: e.target.value })}
+                  >
+                    {(klipperProfiles ?? [{ key: 'voron_2.4_350', label: 'Voron 2.4 (350mm)' }]).map((p) => (
+                      <option key={p.key} value={p.key}>{p.label}</option>
+                    ))}
+                  </select>
+                </div>
+            )}
+            {isBambu && (
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.modelOptional')}</label>
               <select
@@ -6975,6 +7280,7 @@ export function AddPrinterModal({
                 </optgroup>
               </select>
             </div>
+            )}
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.locationGroup')}</label>
               <input
@@ -6998,15 +7304,17 @@ export function AddPrinterModal({
                 {t('printers.modal.autoArchiveLabel')}
               </label>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowDiagnostic(true)}
-              disabled={!form.ip_address.trim()}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-bambu-gray hover:text-white disabled:opacity-40 disabled:cursor-not-allowed border border-bambu-dark-tertiary rounded-lg transition-colors"
-            >
-              <Stethoscope className="w-4 h-4" />
-              {t('diagnostic.runButton')}
-            </button>
+            {isBambu && (
+              <button
+                type="button"
+                onClick={() => setShowDiagnostic(true)}
+                disabled={!form.ip_address.trim()}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-bambu-gray hover:text-white disabled:opacity-40 disabled:cursor-not-allowed border border-bambu-dark-tertiary rounded-lg transition-colors"
+              >
+                <Stethoscope className="w-4 h-4" />
+                {t('diagnostic.runButton')}
+              </button>
+            )}
             {saveWarning ? (
               <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 p-3 space-y-3">
                 <div className="flex items-start gap-2">
@@ -7046,7 +7354,7 @@ export function AddPrinterModal({
       <ConnectionDiagnosticModal
         connection={{
           ip_address: form.ip_address.trim(),
-          serial_number: form.serial_number.trim() || undefined,
+          serial_number: (form.serial_number || '').trim() || undefined,
           access_code: form.access_code || undefined,
         }}
         printerName={form.name || null}
@@ -7353,9 +7661,16 @@ function EditPrinterModal({
     access_code: '',
     model: printer.model || '',
     location: printer.location || '',
+    installed_plate: printer.installed_plate || '',
     auto_archive: printer.auto_archive,
     is_active: printer.is_active,
+    out_of_service: !!printer.out_of_service,
+    out_of_service_reason: printer.out_of_service_reason || '',
+    auto_eject: !!printer.auto_eject,
+    ejection_profile_id: printer.ejection_profile_id ?? null,
   });
+  const [showEjectionProfiles, setShowEjectionProfiles] = useState(false);
+  const ejectionProfilesQuery = useQuery({ queryKey: ['ejection-profiles'], queryFn: api.getEjectionProfiles });
 
   // Setup-time pre-flight — same warn-on-save as the Add-Printer dialog, so an
   // edit that breaks connectivity (e.g. a mistyped IP) is caught before save.
@@ -7387,8 +7702,13 @@ function EditPrinterModal({
       ip_address: form.ip_address,
       model: form.model || undefined,
       location: form.location || undefined,
+      installed_plate: form.installed_plate || null,
       auto_archive: form.auto_archive,
       is_active: form.is_active,
+      out_of_service: form.out_of_service,
+      out_of_service_reason: form.out_of_service ? form.out_of_service_reason.trim() || null : null,
+      auto_eject: form.auto_eject && form.ejection_profile_id != null,
+      ejection_profile_id: form.ejection_profile_id,
     };
     // Only include access_code if it was changed
     if (form.access_code) {
@@ -7517,6 +7837,67 @@ function EditPrinterModal({
               />
               <p className="text-xs text-bambu-gray mt-1">{t('printers.locationHelp')}</p>
             </div>
+            <div>
+              <label htmlFor="edit_installed_plate" className="block text-sm text-bambu-gray mb-1">
+                {t('printers.modal.installedPlate')}
+              </label>
+              <select
+                id="edit_installed_plate"
+                className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                value={form.installed_plate}
+                onChange={(e) => setForm({ ...form, installed_plate: e.target.value })}
+              >
+                <option value="">{t('printers.modal.plateNotSet')}</option>
+                {INSTALLED_PLATES.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+                {form.installed_plate && !INSTALLED_PLATES.includes(form.installed_plate) && (
+                  <option value={form.installed_plate}>{form.installed_plate}</option>
+                )}
+              </select>
+              <p className="text-xs text-bambu-gray mt-1">{t('printers.modal.installedPlateHelp')}</p>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="edit_ejection_profile" className="block text-sm text-bambu-gray">
+                  {t('printers.modal.ejectionProfile')}
+                </label>
+                <button
+                  type="button"
+                  className="text-xs text-bambu-green hover:underline"
+                  onClick={() => setShowEjectionProfiles(true)}
+                >
+                  {t('printers.modal.manageProfiles')}
+                </button>
+              </div>
+              <select
+                id="edit_ejection_profile"
+                className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                value={form.ejection_profile_id ?? ''}
+                onChange={(e) =>
+                  setForm({ ...form, ejection_profile_id: e.target.value === '' ? null : Number(e.target.value) })
+                }
+              >
+                <option value="">{t('printers.modal.ejectionProfileNone')}</option>
+                {(ejectionProfilesQuery.data || []).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <label className="flex items-center gap-2 mt-2 text-sm text-bambu-gray">
+                <input
+                  type="checkbox"
+                  checked={form.auto_eject}
+                  disabled={form.ejection_profile_id == null}
+                  onChange={(e) => setForm({ ...form, auto_eject: e.target.checked })}
+                  className="rounded border-bambu-dark-tertiary bg-bambu-dark text-bambu-green focus:ring-bambu-green"
+                />
+                {t('printers.modal.autoEject')}
+              </label>
+            </div>
             <div className="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -7549,6 +7930,39 @@ function EditPrinterModal({
               <p className="text-xs text-bambu-gray/70 mt-1 ml-6">
                 {t('printers.maintenance.editFieldHelp')}
               </p>
+            </div>
+            {/* Out of service: stays connected and monitored, the queue just gives it no new jobs */}
+            <div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="edit_out_of_service"
+                  checked={form.out_of_service}
+                  onChange={(e) => setForm({ ...form, out_of_service: e.target.checked })}
+                  className="rounded border-bambu-dark-tertiary bg-bambu-dark text-amber-400 focus:ring-amber-400"
+                />
+                <label htmlFor="edit_out_of_service" className="text-sm text-bambu-gray flex items-center gap-1.5">
+                  <Ban className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                  {t('printers.modal.outOfService')}
+                </label>
+              </div>
+              <p className="text-xs text-bambu-gray/70 mt-1 ml-6">{t('printers.modal.outOfServiceHelp')}</p>
+              {form.out_of_service && (
+                <div className="mt-2 ml-6">
+                  <label htmlFor="edit_out_of_service_reason" className="block text-xs text-bambu-gray mb-1">
+                    {t('printers.modal.outOfServiceReason')}
+                  </label>
+                  <input
+                    type="text"
+                    id="edit_out_of_service_reason"
+                    maxLength={200}
+                    value={form.out_of_service_reason}
+                    onChange={(e) => setForm({ ...form, out_of_service_reason: e.target.value })}
+                    placeholder={t('printers.modal.outOfServiceReasonPlaceholder')}
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-sm text-white focus:border-bambu-green focus:outline-none"
+                  />
+                </div>
+              )}
             </div>
             {saveWarning ? (
               <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 p-3 space-y-3">
@@ -7597,6 +8011,7 @@ function EditPrinterModal({
           </form>
         </CardContent>
       </Card>
+      {showEjectionProfiles && <EjectionProfilesModal onClose={() => setShowEjectionProfiles(false)} />}
     </div>
   );
 }

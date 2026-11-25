@@ -5,9 +5,11 @@ import logging
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 import defusedxml.ElementTree as ET
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -16,11 +18,20 @@ from backend.app.core.auth import RequirePermissionIfAuthEnabled, require_owners
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import (
+    PrinterScope,
+    apply_printer_scope,
+    column_in_scope,
+    get_printer_scope,
+    is_printer_visible,
+    visible_printer_ids,
+)
 from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile
 from backend.app.models.print_batch import PrintBatch
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
+from backend.app.models.printer_group import PrinterGroup
 from backend.app.models.project import Project
 from backend.app.models.user import User
 from backend.app.schemas.print_queue import (
@@ -49,7 +60,88 @@ from backend.app.utils.threemf_tools import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/queue", tags=["queue"])
+
+def queue_scope_clause(scope: PrinterScope | None, visible: set[int] | None):
+    """Which queue rows a scoped caller sees (#57).
+
+    Rows on a printer in scope, plus rows not yet on any printer (model or
+    group targets) that the caller created. Rows on other printers, and other
+    people's unassigned rows, are hidden. None = no restriction.
+    """
+    if scope is None or visible is None:
+        return None
+    on_visible = column_in_scope(PrintQueueItem.printer_id, visible)
+    own_unassigned = and_(PrintQueueItem.printer_id.is_(None), PrintQueueItem.created_by_id == scope.user_id)
+    return or_(on_visible, own_unassigned)
+
+
+def queue_item_in_scope(item: PrintQueueItem, scope: PrinterScope | None, visible: set[int] | None) -> bool:
+    if scope is None or visible is None:
+        return True
+    if item.printer_id is not None:
+        return item.printer_id in visible
+    return item.created_by_id is not None and item.created_by_id == scope.user_id
+
+
+async def _queue_item_scope_guard(request: Request) -> None:
+    """Router dependency: /queue/{item_id}/... answers 404 for out-of-scope rows."""
+    item_id = request.path_params.get("item_id")
+    if item_id is None:
+        return
+    scope = await get_printer_scope(request)
+    if scope is None:
+        return
+    try:
+        rid = int(item_id)
+    except (TypeError, ValueError):
+        return
+    from backend.app.core import auth as _auth
+
+    async with _auth.async_session() as db:
+        item = await db.get(PrintQueueItem, rid)
+        if item is None:
+            return
+        if not queue_item_in_scope(item, scope, await visible_printer_ids(db, scope)):
+            raise HTTPException(404, "Queue item not found")
+
+
+async def _ensure_queue_target_in_scope(
+    db: AsyncSession,
+    scope: PrinterScope | None,
+    *,
+    printer_id: int | None = None,
+    target_model: str | None = None,
+    target_location: str | None = None,
+    target_group_id: int | None = None,
+) -> None:
+    """Refuse a queue target outside the caller's printer scope (#57).
+
+    Uses the same 400 messages as a target that does not exist, so a scoped
+    caller cannot tell a hidden printer from a missing one.
+    """
+    if scope is None:
+        return
+    if printer_id is not None and not await is_printer_visible(db, scope, printer_id):
+        raise HTTPException(400, "Printer not found")
+    if target_model:
+        q = apply_printer_scope(
+            select(Printer.id)
+            .where(func.lower(Printer.model) == target_model.lower())
+            .where(Printer.is_active == True),  # noqa: E712
+            scope,
+        )
+        if target_location:
+            q = q.where(Printer.location == target_location)
+        if (await db.execute(q.limit(1))).first() is None:
+            raise HTTPException(400, f"No active printers for model: {target_model}")
+    if target_group_id is not None:
+        group = (await db.execute(select(PrinterGroup).where(PrinterGroup.id == target_group_id))).scalar_one_or_none()
+        visible = await visible_printer_ids(db, scope)
+        if group is None or not any(p.is_active and p.id in visible for p in group.printers):
+            raise HTTPException(400, "Printer group not found")
+
+
+router = APIRouter(prefix="/queue", tags=["queue"], dependencies=[Depends(_queue_item_scope_guard)])
 
 
 def _extract_filament_types_from_3mf(file_path: Path, plate_id: int | None = None) -> list[str]:
@@ -185,9 +277,13 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
         "printer_id": item.printer_id,
         "target_model": item.target_model,
         "target_location": item.target_location,
+        "target_group_id": item.target_group_id,
+        "target_group_name": item.target_group.name if item.target_group else None,
         "required_filament_types": required_filament_types_parsed,
         "filament_overrides": filament_overrides_parsed,
         "waiting_reason": item.waiting_reason,
+        "cancel_reason": getattr(item, "cancel_reason", None),
+        "cancelled_by": getattr(item, "cancelled_by", None),
         "archive_id": item.archive_id,
         "library_file_id": item.library_file_id,
         "position": item.position,
@@ -195,6 +291,13 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
         "require_previous_success": item.require_previous_success,
         "auto_off_after": item.auto_off_after,
         "manual_start": item.manual_start,
+        "max_retries": item.max_retries or 0,
+        "priority": item.priority if item.priority is not None else 50,
+        "match_level": getattr(item, "match_level", None),
+        "filament_confirmed": bool(getattr(item, "filament_confirmed", False)),
+        "filament_unmatched": _json_or_none(getattr(item, "filament_unmatched", None)),
+        "retry_count": item.retry_count or 0,
+        "retry_of_id": item.retry_of_id,
         "filament_short": bool(item.filament_short),
         "skip_filament_check": bool(item.skip_filament_check),
         "ams_mapping": ams_mapping_parsed,
@@ -295,6 +398,15 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
     return response
 
 
+def _json_or_none(text: str | None):
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 @router.get("/", response_model=list[PrintQueueItemResponse])
 async def list_queue(
     printer_id: int | None = Query(None, description="Filter by printer (-1 for unassigned)"),
@@ -309,6 +421,7 @@ async def list_queue(
             Permission.QUEUE_READ_OWN,
         )
     ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """List all queue items, optionally filtered by printer or status."""
     user, can_read_all = auth_result
@@ -325,6 +438,9 @@ async def list_queue(
     )
     if user is not None and not can_read_all:
         query = query.where(PrintQueueItem.created_by_id == user.id)
+    in_scope = queue_scope_clause(scope, await visible_printer_ids(db, scope))
+    if in_scope is not None:
+        query = query.where(in_scope)
 
     if printer_id is not None:
         if printer_id == -1:
@@ -369,6 +485,7 @@ async def add_to_queue(
     data: PrintQueueItemCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Add an item to the print queue."""
     # Normalize target_model (e.g., "Bambu Lab X1E" / "C13" -> "X1E")
@@ -388,11 +505,37 @@ async def add_to_queue(
     if data.printer_id and target_model_norm:
         raise HTTPException(400, "Cannot specify both printer_id and target_model")
 
+    # target_group_id is a third, mutually exclusive targeting mode.
+    if data.target_group_id is not None and (data.printer_id or target_model_norm):
+        raise HTTPException(400, "Cannot specify target_group_id together with printer_id or target_model")
+
+    # Validate the group exists and has at least one active member, mirroring
+    # the target_model check below: a group with nothing schedulable in it
+    # would sit in the queue forever with no useful waiting reason.
+    target_group = None
+    if data.target_group_id is not None:
+        result = await db.execute(select(PrinterGroup).where(PrinterGroup.id == data.target_group_id))
+        target_group = result.scalar_one_or_none()
+        if not target_group:
+            raise HTTPException(400, "Printer group not found")
+        if not [p for p in target_group.printers if p.is_active]:
+            raise HTTPException(400, f"Printer group '{target_group.name}' has no active printers")
+
     # Validate printer exists (if assigned)
     if data.printer_id is not None:
         result = await db.execute(select(Printer).where(Printer.id == data.printer_id))
         if not result.scalar_one_or_none():
             raise HTTPException(400, "Printer not found")
+
+    # Per-printer scoping (#57): a scoped caller may only aim at printers it sees.
+    await _ensure_queue_target_in_scope(
+        db,
+        scope,
+        printer_id=data.printer_id,
+        target_model=target_model_norm,
+        target_location=data.target_location,
+        target_group_id=data.target_group_id,
+    )
 
     # Validate target_model has active printers
     if target_model_norm:
@@ -482,7 +625,7 @@ async def add_to_queue(
     # Extract filament types for model-based assignment (used by scheduler for validation)
     required_filament_types = None
     file_path = None
-    if target_model_norm:
+    if target_model_norm or target_group is not None:
         # Get file path from archive or library file
         if archive:
             file_path = settings.base_dir / archive.file_path
@@ -649,6 +792,7 @@ async def add_to_queue(
             printer_id=data.printer_id,
             target_model=target_model_norm,
             target_location=data.target_location,
+            target_group_id=data.target_group_id,
             required_filament_types=required_filament_types,
             filament_overrides=filament_overrides_json,
             archive_id=data.archive_id,
@@ -657,6 +801,11 @@ async def add_to_queue(
             require_previous_success=data.require_previous_success,
             auto_off_after=data.auto_off_after,
             manual_start=data.manual_start,
+            max_retries=data.max_retries,
+            priority=data.priority,
+            match_level=data.match_level,
+            # A mapping chosen when the job was queued is the user's choice: not checked again.
+            filament_confirmed=bool(data.ams_mapping),
             skip_filament_check=data.skip_filament_check,
             ams_mapping=ams_mapping_json,
             plate_id=data.plate_id,
@@ -689,7 +838,14 @@ async def add_to_queue(
     await db.refresh(item, ["archive", "printer", "library_file", "created_by", "batch"])
 
     source_name = f"archive {data.archive_id}" if data.archive_id else f"library file {data.library_file_id}"
-    target_desc = data.printer_id or (f"model {target_model_norm}" if target_model_norm else "unassigned")
+    if data.printer_id:
+        target_desc = data.printer_id
+    elif target_model_norm:
+        target_desc = f"model {target_model_norm}"
+    elif target_group is not None:
+        target_desc = f"group {target_group.name}"
+    else:
+        target_desc = "unassigned"
     qty_desc = f" (×{quantity})" if quantity > 1 else ""
     logger.info("Added %s to queue for %s%s", source_name, target_desc, qty_desc)
 
@@ -744,6 +900,7 @@ async def bulk_update_queue_items(
             Permission.QUEUE_UPDATE_OWN,
         )
     ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Bulk update multiple queue items with the same values.
 
@@ -765,9 +922,21 @@ async def bulk_update_queue_items(
         result = await db.execute(select(Printer).where(Printer.id == update_data["printer_id"]))
         if not result.scalar_one_or_none():
             raise HTTPException(400, "Printer not found")
+    await _ensure_queue_target_in_scope(
+        db,
+        scope,
+        printer_id=update_data.get("printer_id"),
+        target_model=update_data.get("target_model"),
+        target_location=update_data.get("target_location"),
+        target_group_id=update_data.get("target_group_id"),
+    )
 
-    # Fetch all items
-    result = await db.execute(select(PrintQueueItem).where(PrintQueueItem.id.in_(data.item_ids)))
+    # Fetch all items (rows outside the caller's printer scope are not touched)
+    query = select(PrintQueueItem).where(PrintQueueItem.id.in_(data.item_ids))
+    in_scope = queue_scope_clause(scope, await visible_printer_ids(db, scope))
+    if in_scope is not None:
+        query = query.where(in_scope)
+    result = await db.execute(query)
     items = result.scalars().all()
 
     updated_count = 0
@@ -1021,6 +1190,24 @@ async def _build_batch_response(db: AsyncSession, batch: PrintBatch) -> PrintBat
     )
 
 
+# ---------------------------------------------------------------- farm queue
+
+
+@router.get("/stats")
+async def queue_stats_route(
+    days: int = Query(30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_READ_ALL),
+    scope: PrinterScope | None = Depends(get_printer_scope),
+):
+    """Queue throughput over the last ``days`` days: items by status, success rate
+    (completed / (completed + failed)), average wait before start, average print time,
+    how many items were automatic retries, and the same counts per printer."""
+    from backend.app.services.farm_queue import queue_stats
+
+    return await queue_stats(db, days, row_filter=queue_scope_clause(scope, await visible_printer_ids(db, scope)))
+
+
 @router.get("/{item_id}", response_model=PrintQueueItemResponse)
 async def get_queue_item(
     item_id: int,
@@ -1068,6 +1255,7 @@ async def update_queue_item(
             Permission.QUEUE_UPDATE_OWN,
         )
     ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Update a queue item."""
     user, can_modify_all = auth_result
@@ -1114,6 +1302,14 @@ async def update_queue_item(
         result = await db.execute(select(Printer).where(Printer.id == update_data["printer_id"]))
         if not result.scalar_one_or_none():
             raise HTTPException(400, "Printer not found")
+    await _ensure_queue_target_in_scope(
+        db,
+        scope,
+        printer_id=update_data.get("printer_id"),
+        target_model=update_data.get("target_model"),
+        target_location=update_data.get("target_location"),
+        target_group_id=update_data.get("target_group_id"),
+    )
 
     # Validate target_model has active printers
     if "target_model" in update_data and update_data["target_model"]:
@@ -1139,6 +1335,31 @@ async def update_queue_item(
                 400,
                 f"File was sliced for {sliced_for} and cannot be dispatched to {update_data['target_model']} printers",
             )
+
+    # Swapping the file (#plate-reslice): validate the new library file, check it was
+    # sliced for the printer or model the item now targets, clear the slot mapping that
+    # belonged to the old file, and drop any archive link (an item prints one source).
+    if "library_file_id" in update_data:
+        new_fid = update_data["library_file_id"]
+        if new_fid is None:
+            raise HTTPException(400, "library_file_id cannot be cleared")
+        new_lib = (await db.execute(select(LibraryFile).where(LibraryFile.id == new_fid))).scalar_one_or_none()
+        if not new_lib:
+            raise HTTPException(400, "Library file not found")
+        new_sliced_for = (new_lib.file_metadata or {}).get("sliced_for_model")
+        target_model = new_target_model
+        if new_printer_id:
+            target_model = (
+                await db.execute(select(Printer.model).where(Printer.id == new_printer_id))
+            ).scalar_one_or_none()
+        if target_model and not is_gcode_compatible(new_sliced_for, target_model):
+            raise HTTPException(
+                400, f"File was sliced for {new_sliced_for} and cannot be dispatched to {target_model} printers"
+            )
+        if new_fid != item.library_file_id or item.archive_id:
+            update_data["archive_id"] = None
+            update_data.setdefault("ams_mapping", None)
+            update_data.setdefault("plate_id", None)
 
     # Serialize ams_mapping to JSON for TEXT column storage
     if "ams_mapping" in update_data:
@@ -1174,8 +1395,17 @@ async def update_queue_item(
     if claimed is not None:
         raise HTTPException(409, "Item is being dispatched — cancel it first to make changes")
 
+    # Another printer or file: a filament mapping someone confirmed no longer applies.
+    if ("printer_id" in update_data and update_data["printer_id"] != item.printer_id) or (
+        "library_file_id" in update_data and update_data["library_file_id"] != item.library_file_id
+    ):
+        item.filament_confirmed = False
+        item.filament_unmatched = None
+
     for field, value in update_data.items():
         setattr(item, field, value)
+    if update_data.get("ams_mapping"):
+        item.filament_confirmed = True
 
     await db.commit()
     await db.refresh(item, ["archive", "printer", "library_file", "created_by", "batch"])
@@ -1223,11 +1453,15 @@ async def reorder_queue(
     data: PrintQueueReorder,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.QUEUE_UPDATE_ALL),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Bulk update positions for queue items."""
+    visible = await visible_printer_ids(db, scope)
     for reorder_item in data.items:
         result = await db.execute(select(PrintQueueItem).where(PrintQueueItem.id == reorder_item.id))
         item = result.scalar_one_or_none()
+        if item and not queue_item_in_scope(item, scope, visible):
+            continue  # out of the caller's printer scope (#57): ignored like an unknown id
         if item and item.status == "pending":
             item.position = reorder_item.position
 
@@ -1294,9 +1528,15 @@ async def resume_queue_after_failure(
     return {"acknowledged": len(to_ack), "restored": len(to_restore)}
 
 
+class CancelBody(BaseModel):
+    reason: str | None = Field(None, max_length=500, description="Kept on the item and shown in its history")
+    by: str | None = Field(None, max_length=100, description="Who cancelled it (defaults to the signed-in user)")
+
+
 @router.post("/{item_id}/cancel")
 async def cancel_queue_item(
     item_id: int,
+    body: CancelBody | None = None,
     db: AsyncSession = Depends(get_db),
     auth_result: tuple[User | None, bool] = Depends(
         require_ownership_permission(
@@ -1305,7 +1545,8 @@ async def cancel_queue_item(
         )
     ),
 ):
-    """Cancel a pending queue item."""
+    """Cancel a pending queue item, optionally with a reason (kept on the item as cancel_reason and
+    cancelled_by). A print that has started is stopped with POST /queue/{id}/stop instead."""
     user, can_modify_all = auth_result
 
     result = await db.execute(select(PrintQueueItem).where(PrintQueueItem.id == item_id))
@@ -1323,10 +1564,14 @@ async def cancel_queue_item(
 
     item.status = "cancelled"
     item.completed_at = datetime.now(timezone.utc)
+    reason = (body.reason or "").strip() if body else ""
+    item.cancel_reason = reason or None
+    who = ((body.by or "").strip() if body else "") or (getattr(user, "username", None) if user else None)
+    item.cancelled_by = who or None
     await db.commit()
 
-    logger.info("Cancelled queue item %s", item_id)
-    return {"message": "Queue item cancelled"}
+    logger.info("Cancelled queue item %s%s", item_id, f": {reason}" if reason else "")
+    return {"message": "Queue item cancelled", "cancel_reason": item.cancel_reason, "cancelled_by": item.cancelled_by}
 
 
 @router.post("/{item_id}/stop")
@@ -1526,3 +1771,282 @@ async def start_queue_item(
         skip_filament_check,
     )
     return _enrich_response(item)
+
+
+class QueueItemMark(BaseModel):
+    outcome: Literal["completed", "failed"]
+    note: str | None = Field(default=None, max_length=2000)
+    retry: bool = False  # with "failed": queue a fresh copy at the front
+
+
+@router.post("/{item_id}/mark", response_model=PrintQueueItemResponse)
+async def mark_queue_item(
+    item_id: int,
+    body: QueueItemMark,
+    db: AsyncSession = Depends(get_db),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.QUEUE_UPDATE_ALL,
+            Permission.QUEUE_UPDATE_OWN,
+        )
+    ),
+):
+    """Record how a printing item ended when the engine could not tell (a print
+    finished while the printer was offline, a stuck "printing" row). Only changes the
+    queue record; it does not send anything to the printer. With outcome "failed" and
+    retry, a fresh copy goes to the front of the queue (it still waits for the plate
+    to be cleared)."""
+    from backend.app.services.farm_queue import requeue_failed
+
+    user, can_modify_all = auth_result
+    item = (await db.execute(select(PrintQueueItem).where(PrintQueueItem.id == item_id))).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Queue item not found")
+    if not can_modify_all and user is not None and item.created_by_id != user.id:
+        raise HTTPException(403, "You can only change your own queue items")
+    if item.status != "printing":
+        raise HTTPException(409, f"Only a printing item can be marked; this one is '{item.status}'")
+    item.status = body.outcome
+    item.completed_at = datetime.now(timezone.utc)
+    if body.outcome == "failed":
+        item.error_message = body.note or item.error_message or "Marked failed by hand"
+        if body.retry and (item.max_retries or 0) <= (item.retry_count or 0):
+            item.max_retries = (item.retry_count or 0) + 1
+        await requeue_failed(db, item)
+    await db.commit()
+    logger.info("Queue item %s marked %s by hand", item_id, body.outcome)
+    result = await db.execute(
+        select(PrintQueueItem)
+        .options(
+            selectinload(PrintQueueItem.archive),
+            selectinload(PrintQueueItem.printer),
+            selectinload(PrintQueueItem.library_file),
+            selectinload(PrintQueueItem.created_by),
+            selectinload(PrintQueueItem.batch),
+        )
+        .where(PrintQueueItem.id == item_id)
+    )
+    return _enrich_response(result.scalar_one())
+
+
+class PreflightDryRun(BaseModel):
+    """What a job would need, before it is queued (a slicer's pre-send check)."""
+
+    library_file_id: int | None = Field(None, description="An uploaded file; its metadata fills what is not given")
+    printer_id: int | None = Field(None, description="Check only this printer")
+    target_model: str | None = Field(None, description="Check only printers of this model")
+    target_location: str | None = None
+    filament_types: list[str] = Field(default_factory=list, description="Materials the job uses, e.g. PLA, PETG-CF")
+    nozzle_diameter: float | None = Field(None, gt=0, le=2)
+    bed_type: str | None = Field(None, description="Build plate the file was sliced for")
+    sliced_for_model: str | None = None
+    skip_filament_check: bool = False
+
+
+def _check_printers(printers, job: dict, types: list[str], sliced_for, skip_filament_check: bool) -> list[dict]:
+    """Per printer: can it take this job right now, and why not. The same checks the dispatcher makes;
+    shared by the queued-item preflight and the dry run (POST /queue/preflight). Callers load the manual
+    nozzle overrides first (printer_hardware.load_manual_nozzles)."""
+    from backend.app.services.farm_match import hardware_mismatch, normalize_plate
+    from backend.app.services.print_scheduler import scheduler
+    from backend.app.services.printer_hardware import manual_nozzles
+    from backend.app.services.printer_manager import printer_manager
+
+    out = []
+    for p in printers:
+        reasons: list[str] = []
+        if getattr(p, "out_of_service", False):
+            why = getattr(p, "out_of_service_reason", None)
+            reasons.append(f"out of service: {why}" if why else "out of service")
+        if not printer_manager.is_connected(p.id):
+            reasons.append("offline")
+        else:
+            status = printer_manager.get_status(p.id)
+            reasons += [f"needs {r}" for r in hardware_mismatch(job, status, p.installed_plate, manual_nozzles(p.id))]
+        # Structured plate fields, so a client (Artisan Hub's plate reslicer) can tell a
+        # plate-only hold from the other reasons without parsing the text above.
+        plate_mismatch = bool(
+            job.get("bed_type")
+            and p.installed_plate
+            and normalize_plate(job["bed_type"]) != normalize_plate(p.installed_plate)
+        )
+        if printer_manager.is_connected(p.id):
+            if not scheduler._is_printer_idle(p.id, require_plate_clear=False):
+                reasons.append("busy")
+            elif printer_manager.is_awaiting_plate_clear(p.id):
+                reasons.append("plate not cleared")
+            if types and not skip_filament_check:
+                missing = scheduler._get_missing_filament_types(p.id, types)
+                if missing:
+                    reasons.append(f"missing filament: {', '.join(missing)}")
+        if sliced_for and not is_gcode_compatible(sliced_for, p.model):
+            reasons.append(f"file sliced for {sliced_for}")
+        out.append(
+            {
+                "printer_id": p.id,
+                "name": p.name,
+                "model": p.model,
+                "eligible": not reasons,
+                "reasons": reasons,
+                "has_plate": p.installed_plate,
+                "plate_mismatch": plate_mismatch,
+            }
+        )
+    return out
+
+
+@router.post("/preflight")
+async def preflight_dry_run(
+    body: PreflightDryRun,
+    db: AsyncSession = Depends(get_db),
+    _=RequirePermissionIfAuthEnabled(Permission.QUEUE_READ_OWN),
+    scope: PrinterScope | None = Depends(get_printer_scope),
+):
+    """Pre-send check: which printers could take this job right now, and why each other one can't, before
+    anything is queued. Same checks and answer shape as GET /queue/{id}/preflight. Explicit fields win over
+    the uploaded file's metadata; with no printer or model, every active printer is checked."""
+    from types import SimpleNamespace
+
+    from backend.app.services.farm_match import job_hardware
+
+    library_file = None
+    if body.library_file_id is not None:
+        library_file = await db.get(LibraryFile, body.library_file_id)
+        if library_file is None or getattr(library_file, "deleted_at", None) is not None:
+            raise HTTPException(404, "Library file not found")
+
+    # Every candidate list is limited to the caller's printer scope (#57).
+    if body.printer_id is not None:
+        q = apply_printer_scope(select(Printer).where(Printer.id == body.printer_id), scope)
+        printers = list((await db.execute(q)).scalars())
+        if not printers:
+            raise HTTPException(404, "Printer not found")
+        target = {"printer_id": body.printer_id}
+    elif body.target_model:
+        model = normalize_printer_model(body.target_model) or body.target_model
+        q = select(Printer).where(func.lower(Printer.model) == model.lower()).where(Printer.is_active == True)  # noqa: E712
+        if body.target_location:
+            q = q.where(Printer.location == body.target_location)
+        printers = list((await db.execute(apply_printer_scope(q, scope))).scalars())
+        target = {"model": model, "location": body.target_location}
+    else:
+        q = apply_printer_scope(select(Printer).where(Printer.is_active == True), scope)  # noqa: E712
+        printers = list((await db.execute(q)).scalars())
+        target = {}
+
+    types = sorted({t.strip().upper() for t in body.filament_types if t and t.strip()})
+    if not types and library_file is not None:
+        lib_path = Path(library_file.file_path)
+        path = lib_path if lib_path.is_absolute() else settings.base_dir / library_file.file_path
+        if path.exists() and path.suffix.lower() == ".3mf":
+            types = sorted(set(_extract_filament_types_from_3mf(path, None) or []))
+
+    job = job_hardware(SimpleNamespace(archive=None, library_file=library_file), types)
+    if body.nozzle_diameter is not None:
+        job["nozzle_diameter"] = float(body.nozzle_diameter)
+    if body.bed_type:
+        job["bed_type"] = body.bed_type
+    sliced_for = body.sliced_for_model
+    if sliced_for is None and library_file is not None and library_file.file_metadata:
+        sliced_for = library_file.file_metadata.get("sliced_for_model")
+
+    from backend.app.services.printer_hardware import load_manual_nozzles
+
+    await load_manual_nozzles(db)
+    out = _check_printers(printers, job, types, sliced_for, body.skip_filament_check)
+    return {
+        "library_file_id": body.library_file_id,
+        "job_plate": job.get("bed_type"),
+        "filament_types": types,
+        "target": target,
+        "needs": {**job, "filament_types": types, "sliced_for_model": sliced_for},
+        "eligible": [p["name"] for p in out if p["eligible"]],
+        "printers": out,
+    }
+
+
+@router.get("/{item_id}/preflight")
+async def preflight_queue_item(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.QUEUE_READ_ALL,
+            Permission.QUEUE_READ_OWN,
+        )
+    ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
+):
+    """Which printers could take this item right now, and why each other one can't:
+    offline, busy, plate not cleared, missing filament, hardware (nozzle size,
+    hardened nozzle for abrasive filament, build plate) or a file sliced for an
+    incompatible model. Uses the same checks as the dispatcher."""
+    from backend.app.services.farm_match import job_hardware
+
+    current_user, can_read_all = auth_result
+    item = (
+        await db.execute(
+            select(PrintQueueItem)
+            .options(
+                selectinload(PrintQueueItem.archive),
+                selectinload(PrintQueueItem.library_file),
+                selectinload(PrintQueueItem.target_group),
+            )
+            .where(PrintQueueItem.id == item_id)
+        )
+    ).scalar_one_or_none()
+    if not item or (current_user is not None and not can_read_all and item.created_by_id != current_user.id):
+        raise HTTPException(404, "Queue item not found")
+
+    if item.printer_id:
+        printers = list((await db.execute(select(Printer).where(Printer.id == item.printer_id))).scalars())
+        target = {"printer_id": item.printer_id}
+    elif item.target_group_id:
+        group = (
+            await db.execute(select(PrinterGroup).where(PrinterGroup.id == item.target_group_id))
+        ).scalar_one_or_none()
+        printers = [p for p in (group.printers if group else []) if p.is_active]
+        target = {"group_id": item.target_group_id, "group": group.name if group else None}
+    elif item.target_model:
+        model = normalize_printer_model(item.target_model) or item.target_model
+        q = select(Printer).where(func.lower(Printer.model) == model.lower()).where(Printer.is_active == True)  # noqa: E712
+        if item.target_location:
+            q = q.where(Printer.location == item.target_location)
+        printers = list((await db.execute(q)).scalars())
+        target = {"model": model, "location": item.target_location}
+    else:
+        printers, target = [], {}
+    visible = await visible_printer_ids(db, scope)
+    if visible is not None:
+        printers = [p for p in printers if p.id in visible]
+
+    try:
+        types = json.loads(item.required_filament_types) if item.required_filament_types else []
+    except json.JSONDecodeError:
+        types = []
+    try:
+        overrides = json.loads(item.filament_overrides) if item.filament_overrides else []
+    except json.JSONDecodeError:
+        overrides = []
+    types = sorted(set(types) | {o["type"] for o in overrides if isinstance(o, dict) and o.get("type")})
+    job = job_hardware(item, types)
+    sliced_for = None
+    if item.archive:
+        sliced_for = item.archive.sliced_for_model
+    elif item.library_file and item.library_file.file_metadata:
+        sliced_for = item.library_file.file_metadata.get("sliced_for_model")
+
+    from backend.app.services.printer_hardware import load_manual_nozzles
+
+    await load_manual_nozzles(db)
+    out = _check_printers(printers, job, types, sliced_for, bool(item.skip_filament_check))
+    return {
+        "item_id": item.id,
+        "status": item.status,
+        "job_plate": job.get("bed_type"),
+        "filament_types": types,
+        "target": target,
+        "needs": {**job, "filament_types": types, "sliced_for_model": sliced_for},
+        "waiting_reason": item.waiting_reason,
+        "printers": out,
+    }

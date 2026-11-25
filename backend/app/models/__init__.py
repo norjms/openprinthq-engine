@@ -2,13 +2,18 @@ from backend.app.models.ams_history import AMSSensorHistory
 from backend.app.models.ams_label import AmsLabel
 from backend.app.models.api_key import APIKey
 from backend.app.models.archive import PrintArchive
+from backend.app.models.audit_log import AuditLogEntry
 from backend.app.models.auth_ephemeral import AuthEphemeralToken, AuthRateLimitEvent
 from backend.app.models.color_catalog import ColorCatalogEntry
+from backend.app.models.ejection_profile import EjectionProfile
+from backend.app.models.failure_event import PrintFailureEvent
 from backend.app.models.filament import Filament
+from backend.app.models.filament_alias import FilamentAlias
+from backend.app.models.filament_reconciliation import FilamentReconciliation
 from backend.app.models.github_backup import GitHubBackupConfig, GitHubBackupLog
 from backend.app.models.group import Group, user_groups
 from backend.app.models.kprofile_note import KProfileNote
-from backend.app.models.library import LibraryFile, LibraryFolder
+from backend.app.models.library import LibraryFile, LibraryFolder, LibraryMeshReport
 from backend.app.models.local_preset import LocalPreset
 from backend.app.models.location import Location
 from backend.app.models.long_lived_token import LongLivedToken
@@ -21,8 +26,13 @@ from backend.app.models.pending_upload import PendingUpload
 from backend.app.models.pipeline_run import PipelineJob, PipelineRun
 from backend.app.models.print_batch import PrintBatch
 from backend.app.models.printer import Printer
+from backend.app.models.printer_alarm import AlarmSuppression, PrinterAlarm
+from backend.app.models.printer_group import PrinterGroup, printer_group_members
+from backend.app.models.printer_hardware import PrinterFilamentPath, PrinterNozzle
 from backend.app.models.printer_sensor_history import PrinterSensorHistory
+from backend.app.models.printer_state_interval import PrinterStateInterval
 from backend.app.models.project import Project
+from backend.app.models.push_subscription import PushSubscription
 from backend.app.models.settings import Settings
 from backend.app.models.slicer_pipeline import SlicerPipeline
 from backend.app.models.smart_plug import SmartPlug
@@ -34,6 +44,7 @@ from backend.app.models.spool_catalog import SpoolCatalogEntry
 from backend.app.models.spool_k_profile import SpoolKProfile
 from backend.app.models.spool_usage_history import SpoolUsageHistory
 from backend.app.models.spoolbuddy_device import SpoolBuddyDevice
+from backend.app.models.upload_session import UploadSession
 from backend.app.models.user import User
 from backend.app.models.user_email_pref import UserEmailPreference
 from backend.app.models.user_otp_code import UserOTPCode
@@ -41,6 +52,10 @@ from backend.app.models.user_totp import UserTOTP
 
 __all__ = [
     "Printer",
+    "PrinterGroup",
+    "PrinterNozzle",
+    "PrinterFilamentPath",
+    "printer_group_members",
     "PrintArchive",
     "Filament",
     "Settings",
@@ -61,6 +76,7 @@ __all__ = [
     "PrintBatch",
     "LibraryFolder",
     "LibraryFile",
+    "LibraryMeshReport",
     "Location",
     "User",
     "Group",
@@ -88,4 +104,14 @@ __all__ = [
     "AuthEphemeralToken",
     "AuthRateLimitEvent",
     "LongLivedToken",
+    "UploadSession",
+    "PushSubscription",
+    "PrinterStateInterval",
+    "FilamentReconciliation",
+    "AuditLogEntry",
+    "EjectionProfile",
+    "PrintFailureEvent",
+    "AlarmSuppression",
+    "FilamentAlias",
+    "PrinterAlarm",
 ]

@@ -1365,8 +1365,12 @@ class ArchiveService:
         limit: int = 50,
         offset: int = 0,
         visible_to_user_id: int | None = None,
+        visible_printer_ids: set[int] | None = None,
     ) -> list[PrintArchive]:
         """List archives with optional filtering.
+
+        ``visible_printer_ids`` hides archives from printers outside a scoped
+        caller's printer scope (archives with no printer stay visible).
 
         ``visible_to_user_id`` scopes results to archives that user owns. Used
         when the caller has ARCHIVES_READ_OWN but not ARCHIVES_READ_ALL — pass
@@ -1400,6 +1404,11 @@ class ArchiveService:
 
         if visible_to_user_id is not None:
             query = query.where(PrintArchive.created_by_id == visible_to_user_id)
+
+        if visible_printer_ids is not None:
+            from backend.app.core.printer_scope import column_in_scope
+
+            query = query.where(column_in_scope(PrintArchive.printer_id, visible_printer_ids, include_null=True))
 
         query = query.limit(limit).offset(offset)
         result = await self.db.execute(query)

@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from backend.app.core.database import run_migrations
+from backend.tests._testdb import make_test_engine
 
 
 @pytest.fixture(autouse=True)
@@ -71,7 +72,7 @@ async def engine():
 
     _register_all_models()
 
-    eng = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    eng = make_test_engine(echo=False)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield eng

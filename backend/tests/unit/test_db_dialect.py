@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from backend.tests._testdb import make_test_engine
+
 
 class TestDialectDetection:
     """Test is_sqlite() and is_postgres() detection."""
@@ -187,7 +189,7 @@ class TestSafeExecutePattern:
 
         from backend.app.core.database import _safe_execute
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = make_test_engine()
         async with engine.begin() as conn:
             with pytest.raises(OperationalError):
                 await _safe_execute(conn, "SELECT * FROM nonexistent_table_xyz")
@@ -201,7 +203,7 @@ class TestSafeExecutePattern:
 
         from backend.app.core.database import _safe_execute
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = make_test_engine()
         async with engine.begin() as conn:
             await conn.execute(text("CREATE TABLE t (id INTEGER)"))
             # Second CREATE must not raise
@@ -218,7 +220,7 @@ class TestSafeExecutePattern:
         from sqlalchemy import text
         from sqlalchemy.ext.asyncio import create_async_engine
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = make_test_engine()
         async with engine.begin() as conn:
             await conn.execute(text("CREATE TABLE user_oidc_links (id INTEGER PRIMARY KEY, provider_email TEXT)"))
             await conn.execute(text("INSERT INTO user_oidc_links VALUES (1, 'User@Example.COM')"))
@@ -253,7 +255,7 @@ class TestSafeExecutePattern:
 
         from backend.app.core.database import _safe_execute
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = make_test_engine()
         async with engine.begin() as conn:
             await conn.execute(__import__("sqlalchemy").text("CREATE TABLE t (id INTEGER, new_col INTEGER)"))
             # Column 'old_col' does not exist — simulates re-running a RENAME COLUMN migration
@@ -326,7 +328,7 @@ class TestSafeExecutePattern:
         from sqlalchemy.exc import IntegrityError
         from sqlalchemy.ext.asyncio import create_async_engine
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = make_test_engine()
         async with engine.begin() as conn:
             await conn.execute(
                 text("""
@@ -365,7 +367,7 @@ class TestSafeExecutePattern:
         from sqlalchemy import text
         from sqlalchemy.ext.asyncio import create_async_engine
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = make_test_engine()
         async with engine.begin() as conn:
             await conn.execute(
                 text(
@@ -446,7 +448,7 @@ class TestSafeExecutePattern:
 
         from backend.app.core.database import _safe_execute
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = make_test_engine()
         async with engine.begin() as conn:
             await conn.execute(text("CREATE TABLE oidc_providers (id INTEGER PRIMARY KEY, name TEXT)"))
             await _safe_execute(
@@ -506,7 +508,7 @@ class TestSafeExecutePattern:
 
         from backend.app.core.database import _migrate_normalize_printer_ids
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = make_test_engine()
         async with engine.begin() as conn:
             await conn.execute(text("CREATE TABLE api_keys (id INTEGER PRIMARY KEY, printer_ids TEXT)"))
             await conn.execute(text("INSERT INTO api_keys VALUES (1, '[]')"))
@@ -573,7 +575,7 @@ class TestSpoolmanTableDialect:
             UNIQUE(printer_id, archive_id)
         )
         """
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = make_test_engine()
         async with engine.begin() as conn:
             await _safe_execute(conn, sql)
             result = await conn.execute(
@@ -644,7 +646,7 @@ class TestSpoolmanTableDialect:
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = make_test_engine()
         async with engine.begin() as conn:
             await _safe_execute(conn, sql)
             result = await conn.execute(
@@ -706,7 +708,7 @@ class TestAutoLinkConstraintMigration:
         from sqlalchemy.exc import IntegrityError
         from sqlalchemy.ext.asyncio import create_async_engine
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = make_test_engine()
         async with engine.begin() as conn:
             await conn.execute(
                 text(
@@ -732,7 +734,7 @@ class TestAutoLinkConstraintMigration:
         from sqlalchemy.exc import IntegrityError
         from sqlalchemy.ext.asyncio import create_async_engine
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = make_test_engine()
         async with engine.begin() as conn:
             await conn.execute(
                 text(
@@ -759,7 +761,7 @@ class TestAutoLinkConstraintMigration:
         from backend.app.core.database import _migrate_update_auto_link_constraint
 
         # Create table with old constraint formula
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = make_test_engine()
         async with engine.begin() as conn:
             await conn.execute(
                 text(

@@ -1173,7 +1173,7 @@ class TestEncryptLegacyMigration:
         db_session.add(user)
         await db_session.flush()
 
-        totp = UserTOTP(user_id=user.id, _secret_enc="JBSWY3DPEHPK3PXP", is_enabled=True)
+        totp = UserTOTP(user_id=user.id, _secret_enc="JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP", is_enabled=True)
         db_session.add(totp)
         await db_session.commit()
 
@@ -1181,7 +1181,7 @@ class TestEncryptLegacyMigration:
 
         await db_session.refresh(totp)
         assert totp._secret_enc.startswith("fernet:")
-        assert totp.secret == "JBSWY3DPEHPK3PXP"
+        assert totp.secret == "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -1206,7 +1206,7 @@ class TestEncryptLegacyMigration:
         user = User(username="logger1219", email="l@example.com", password_hash="x")
         db_session.add_all([provider, user])
         await db_session.flush()
-        totp = UserTOTP(user_id=user.id, _secret_enc="JBSWY3DPEHPK3PXP", is_enabled=True)
+        totp = UserTOTP(user_id=user.id, _secret_enc="JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP", is_enabled=True)
         db_session.add(totp)
         await db_session.commit()
 
@@ -1612,6 +1612,12 @@ class TestEncryptionStatusEndpoint:
         from sqlalchemy.exc import SQLAlchemyError
 
         token = await self._create_admin_and_login(async_client)
+        # Login warmed the auth-enabled cache (the printer-scope guard reads it),
+        # which would let the middleware skip its probe. Clear it so this test
+        # still exercises the probe failing closed.
+        from backend.app.core.auth import invalidate_auth_enabled_cache
+
+        invalidate_auth_enabled_cache()
 
         async def _raise(*args, **kwargs):
             raise SQLAlchemyError("simulated DB failure")
@@ -1893,15 +1899,15 @@ class TestEncryptionRoundtrip:
         db_session.add(user)
         await db_session.flush()
 
-        totp = UserTOTP(user_id=user.id, secret="JBSWY3DPEHPK3PXP", is_enabled=True)
+        totp = UserTOTP(user_id=user.id, secret="JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP", is_enabled=True)
         db_session.add(totp)
         await db_session.commit()
 
         result = await db_session.execute(select(UserTOTP).where(UserTOTP.user_id == user.id))
         fetched = result.scalar_one()
         assert fetched._secret_enc.startswith("fernet:")
-        assert fetched._secret_enc != "JBSWY3DPEHPK3PXP"
-        assert fetched.secret == "JBSWY3DPEHPK3PXP"
+        assert fetched._secret_enc != "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+        assert fetched.secret == "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
 
 
 # ============================================================================
@@ -2657,7 +2663,6 @@ class TestTOTPDecryptionBroken:
         # disable_totp's TOTP-decrypt path doesn't throw, AND seed real hashes.
         result = await db_session.execute(_select(UserTOTP).where(UserTOTP.user_id == user_id))
         totp = result.scalar_one()
-        # 32 base32 chars (160 bits): pyotp 2.10+ rejects secrets under 112 bits.
         totp.secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"  # via setter -> mfa_encrypt
         plain_codes, hashed_codes = _generate_backup_codes()
         totp.backup_code_hashes = hashed_codes
@@ -2706,7 +2711,7 @@ class TestTOTPDecryptionBroken:
 
         result = await db_session.execute(_select(UserTOTP).where(UserTOTP.user_id == user_id))
         totp = result.scalar_one()
-        totp.secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"  # 160 bits, see above
+        totp.secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
         plain_codes, hashed_codes = _generate_backup_codes()
         totp.backup_code_hashes = hashed_codes
         await db_session.commit()

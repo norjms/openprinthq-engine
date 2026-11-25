@@ -397,6 +397,22 @@ class TestPrinterManager:
         )
         assert result is True
 
+    def test_start_print_passes_only_supported_options_to_external_clients(self, manager):
+        """A PrinterClient-shaped client must not get the Bambu-only options.
+
+        MoonrakerClient.start_print has no nozzle_offset_cali / nozzle_mapping;
+        passing them raised TypeError and the queued job never started.
+        """
+        from backend.app.services.klipper.moonraker_client import MoonrakerClient
+
+        client = MoonrakerClient(ip_address="192.0.2.5", serial_number="klipper:t")
+        sent = []
+        client._send_rpc = lambda method, params=None: sent.append((method, params)) or True
+        manager._clients[1] = client
+
+        assert manager.start_print(1, "cube.gcode") is True
+        assert sent == [("printer.print.start", {"filename": "cube.gcode"})]
+
     def test_start_print_returns_false_for_unknown(self, manager):
         """Verify start_print returns False for unknown printer."""
         result = manager.start_print(999, "test.gcode")

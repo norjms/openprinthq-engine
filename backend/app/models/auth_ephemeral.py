@@ -71,6 +71,11 @@ class AuthEphemeralToken(Base):
     # pre_auth + oidc_exchange: which user this session belongs to
     username: Mapped[str | None] = mapped_column(String(150), nullable=True)
 
+    # For camera-stream and websocket tokens: the user whose printer scope
+    # applies to whoever presents the token (the API key owner for a key-minted
+    # token). NULL = unscoped (auth disabled, ownerless key, older tokens).
+    scope_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # oidc_state: which provider initiated the flow
     provider_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 

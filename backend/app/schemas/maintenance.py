@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # Maintenance Type schemas
@@ -83,7 +83,7 @@ class MaintenanceHistoryCreate(MaintenanceHistoryBase):
 
 class MaintenanceHistoryResponse(MaintenanceHistoryBase):
     id: int
-    printer_maintenance_id: int
+    printer_maintenance_id: int | None
     performed_at: datetime
     hours_at_maintenance: float
 
@@ -136,3 +136,57 @@ class PerformMaintenanceRequest(BaseModel):
     """Request to mark maintenance as performed."""
 
     notes: str | None = None
+    performed_by: str | None = Field(default=None, max_length=100)  # defaults to the signed-in user
+
+
+# Free-form maintenance log: work that has no schedule.
+MAINTENANCE_LOG_CATEGORIES = (
+    "inspection",
+    "cleaning",
+    "lubrication",
+    "calibration",
+    "consumable",
+    "repair",
+    "upgrade",
+    "other",
+)
+
+
+class MaintenanceLogCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    category: str = "other"
+    notes: str | None = Field(default=None, max_length=4000)
+    performed_by: str | None = Field(default=None, max_length=100)  # defaults to the signed-in user
+    performed_at: datetime | None = None  # defaults to now
+
+    @field_validator("category")
+    @classmethod
+    def _category(cls, v: str) -> str:
+        v = (v or "other").strip().lower()
+        if v not in MAINTENANCE_LOG_CATEGORIES:
+            raise ValueError(f"category must be one of: {', '.join(MAINTENANCE_LOG_CATEGORIES)}")
+        return v
+
+    @field_validator("title")
+    @classmethod
+    def _title(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("title is required")
+        return v
+
+
+class MaintenanceLogEntry(BaseModel):
+    """One row of a printer's maintenance history, scheduled or free-form."""
+
+    id: int
+    printer_id: int
+    scheduled: bool  # True when a schedule was marked done
+    printer_maintenance_id: int | None = None
+    maintenance_type_name: str | None = None
+    title: str
+    category: str
+    notes: str | None = None
+    performed_by: str | None = None
+    performed_at: datetime
+    hours_at_maintenance: float = 0.0

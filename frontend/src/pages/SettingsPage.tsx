@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Plus, Plug, AlertTriangle, RotateCcw, Bell, Download, RefreshCw, ExternalLink, Globe, Droplets, Thermometer, FileText, Edit2, Send, CheckCircle, XCircle, History, Trash2, Zap, TrendingUp, Calendar, DollarSign, Power, PowerOff, Key, Copy, Database, X, Shield, Printer, Cylinder, Wifi, Home, Video, Users, Lock, Unlock, ChevronDown, Save, Mail, Flame, Layers, ListOrdered, Code, Search, Scale, Settings as SettingsIcon, ScanEye, Cog, QrCode, Heart, Briefcase, Workflow, UploadCloud } from 'lucide-react';
+import { Loader2, Plus, Plug, AlertTriangle, RotateCcw, Bell, Download, RefreshCw, ExternalLink, Globe, Droplets, Thermometer, FileText, Edit2, Send, CheckCircle, XCircle, History, Trash2, Zap, TrendingUp, Calendar, DollarSign, Power, PowerOff, Key, Copy, Database, X, Shield, Printer, Cylinder, Wifi, Home, Video, Users, Lock, Unlock, ChevronDown, Save, Mail, Flame, Layers, ListOrdered, Code, Search, Scale, Settings as SettingsIcon, ScanEye, Cog, QrCode, Heart, Briefcase, Workflow, UploadCloud, Bot } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
@@ -18,6 +18,7 @@ import { SlicerPipelinesPanel } from '../components/SlicerPipelinesPanel';
 import { CameraTokensSection } from './CameraTokensPage';
 import { Collapsible } from '../components/Collapsible';
 import { Button } from '../components/Button';
+import { WebRtcCameraSettings } from '../components/WebRtcCameraSettings';
 import { SmartPlugCard } from '../components/SmartPlugCard';
 import { AddSmartPlugModal } from '../components/AddSmartPlugModal';
 import { NotificationProviderCard } from '../components/NotificationProviderCard';
@@ -36,6 +37,7 @@ import { VirtualPrinterList } from '../components/VirtualPrinterList';
 import { SpoolBuddySettings } from '../components/SpoolBuddySettings';
 import { GitHubBackupSettings } from '../components/GitHubBackupSettings';
 import { FailureDetectionSettings } from '../components/FailureDetectionSettings';
+import { ChatAgentSettings } from '../components/ChatAgentSettings';
 import { EmailSettings } from '../components/EmailSettings';
 import { LDAPSettings } from '../components/LDAPSettings';
 import { TwoFactorSettings } from '../components/TwoFactorSettings';
@@ -52,7 +54,7 @@ import { Palette } from 'lucide-react';
 import { registerSettingsSearch, getSettingsSearchEntries } from '../lib/settingsSearch';
 import type { UsersSubTab } from '../lib/settingsSearch';
 
-const validTabs = ['general', 'plugs', 'notifications', 'queue', 'filament', 'network', 'apikeys', 'virtual-printer', 'spoolbuddy', 'failure-detection', 'users', 'backup'] as const;
+const validTabs = ['general', 'plugs', 'notifications', 'queue', 'filament', 'network', 'apikeys', 'virtual-printer', 'spoolbuddy', 'failure-detection', 'chat-agent', 'users', 'backup'] as const;
 type TabType = typeof validTabs[number];
 
 // Cross-tab search registrations for cards rendered inline in this file.
@@ -108,6 +110,7 @@ registerSettingsSearch({ labelKey: 'settings.colorCatalog.title', labelFallback:
 registerSettingsSearch({ labelKey: 'settings.tabs.failureDetection', labelFallback: 'Failure Detection', tab: 'failure-detection', keywords: 'failure detection ai ml obico spaghetti detect monitoring', anchor: 'card-fd-ml' });
 registerSettingsSearch({ labelKey: 'failureDetection.perPrinterTitle', labelFallback: 'Per-Printer Settings', tab: 'failure-detection', keywords: 'failure detection per printer enable per-printer sensitivity', anchor: 'card-fd-perprinter' });
 registerSettingsSearch({ labelKey: 'failureDetection.statusTitle', labelFallback: 'Detection Status', tab: 'failure-detection', keywords: 'failure detection status running connection', anchor: 'card-fd-status' });
+registerSettingsSearch({ labelKey: 'settings.tabs.chatAgent', labelFallback: 'Chat Agent', tab: 'chat-agent', keywords: 'chat agent bot slack discord link account message', anchor: 'card-chat-agent' });
 registerSettingsSearch({ labelKey: 'failureDetection.historyTitle', labelFallback: 'Detection History', tab: 'failure-detection', keywords: 'failure detection history log events', anchor: 'card-fd-history' });
 // Email auth sub-cards (subTab=email)
 registerSettingsSearch({ labelKey: 'settings.email.advancedAuth', labelFallback: 'Advanced Email Authentication', tab: 'users', subTab: 'email', keywords: 'email authentication advanced password reset self-service forgot', anchor: 'card-email-advanced-auth' });
@@ -927,7 +930,7 @@ export function SettingsPage() {
   });
 
   const updatePrinterMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: Partial<{ external_camera_url: string | null; external_camera_type: string | null; external_camera_enabled: boolean; external_camera_snapshot_url: string | null; camera_rotation: number }> }) =>
+    mutationFn: ({ id, data }: { id: number; data: Partial<{ external_camera_url: string | null; external_camera_type: string | null; external_camera_enabled: boolean; external_camera_snapshot_url: string | null; camera_webrtc_url: string | null; go2rtc_url: string; go2rtc_stream: string; camera_rotation: number }> }) =>
       api.updatePrinter(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printers'] });
@@ -1241,6 +1244,26 @@ export function SettingsPage() {
     }, 800);
   };
 
+  const handleWebrtcUrlSave = (printerId: number, url: string | null) => {
+    updatePrinterMutation.mutate({ id: printerId, data: { camera_webrtc_url: url } });
+  };
+
+  // go2rtc base + stream name expand server-side into the MJPEG, snapshot and
+  // WHEP URLs (#56). The URL inputs above keep local drafts, so refresh them
+  // from the saved printer rather than leaving the old values on screen.
+  const handleApplyGo2rtc = async (printerId: number, baseUrl: string, stream: string) => {
+    try {
+      const updated = await updatePrinterMutation.mutateAsync({
+        id: printerId,
+        data: { go2rtc_url: baseUrl, go2rtc_stream: stream },
+      });
+      setLocalCameraUrls(prev => ({ ...prev, [printerId]: updated.external_camera_url ?? '' }));
+      setLocalSnapshotUrls(prev => ({ ...prev, [printerId]: updated.external_camera_snapshot_url ?? '' }));
+    } catch {
+      // onError already showed the toast
+    }
+  };
+
   const handleUpdatePrinterCamera = (printerId: number, updates: { type?: string; enabled?: boolean; rotation?: number }) => {
     const data: Partial<{ external_camera_type: string | null; external_camera_enabled: boolean; camera_rotation: number }> = {};
     if (updates.type !== undefined) data.external_camera_type = updates.type || null;
@@ -1330,7 +1353,7 @@ export function SettingsPage() {
                 >
                   <p className="text-sm text-white">{entry.label}</p>
                   <p className="text-xs text-bambu-gray">
-                    {t(`settings.tabs.${entry.tab === 'virtual-printer' ? 'virtualPrinter' : entry.tab === 'failure-detection' ? 'failureDetection' : entry.tab}`)}
+                    {t(`settings.tabs.${entry.tab === 'virtual-printer' ? 'virtualPrinter' : entry.tab === 'failure-detection' ? 'failureDetection' : entry.tab === 'chat-agent' ? 'chatAgent' : entry.tab}`)}
                     {entry.subTab ? ` › ${t(`settings.tabs.${entry.subTab}`, entry.subTab)}` : ''}
                   </p>
                 </button>
@@ -1481,6 +1504,17 @@ export function SettingsPage() {
           <ScanEye className="w-4 h-4" />
           {t('settings.tabs.failureDetection')}
           <span className={`w-2 h-2 rounded-full ${obicoActive ? 'bg-green-400' : 'bg-gray-500'}`} />
+        </button>
+        <button
+          onClick={() => handleTabChange('chat-agent')}
+          className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px lg:border-b-0 lg:border-l-2 lg:-ml-px lg:mb-0 lg:justify-start flex items-center gap-2 ${
+            activeTab === 'chat-agent'
+              ? 'text-bambu-green border-bambu-green'
+              : 'text-bambu-gray hover:text-gray-900 dark:hover:text-white border-transparent'
+          }`}
+        >
+          <Bot className="w-4 h-4" />
+          {t('settings.tabs.chatAgent')}
         </button>
         <button
           onClick={() => handleTabChange('users')}
@@ -2004,6 +2038,14 @@ export function SettingsPage() {
                             <div className="w-9 h-5 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-bambu-green"></div>
                           </label>
                         </div>
+
+                        <WebRtcCameraSettings
+                          printerId={printer.id}
+                          webrtcUrl={printer.camera_webrtc_url}
+                          disabled={updatePrinterMutation.isPending}
+                          onSaveUrl={handleWebrtcUrlSave}
+                          onApplyGo2rtc={handleApplyGo2rtc}
+                        />
 
                         {printer.external_camera_enabled && (
                           <div className="space-y-2 mt-2">
@@ -6566,6 +6608,12 @@ export function SettingsPage() {
       {activeTab === 'failure-detection' && (
         <div id="card-failure-detection">
           <FailureDetectionSettings />
+        </div>
+      )}
+
+      {activeTab === 'chat-agent' && (
+        <div id="card-chat-agent-tab">
+          <ChatAgentSettings />
         </div>
       )}
 

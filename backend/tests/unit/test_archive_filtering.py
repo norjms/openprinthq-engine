@@ -193,7 +193,7 @@ class TestListTimelapseVideos:
         mock_printer.access_code = "12345678"
         mock_printer.model = "H2D"
 
-        async def mock_list_files(ip, code, path, printer_model=None):
+        async def mock_list_files(ip, code, path, printer_model=None, **kwargs):
             if path == "/record":
                 return [{"name": "clip.mp4", "is_directory": False, "size": 500, "path": "/record/clip.mp4"}]
             return []

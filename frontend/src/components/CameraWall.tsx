@@ -14,6 +14,9 @@ export interface CameraWallPrinter {
   id: number;
   name: string;
   camera_rotation?: number;
+  // WebRTC (#56): the signed-in wall gets the URL on Printer, the kiosk feed a flag.
+  camera_webrtc_url?: string | null;
+  webrtc?: boolean;
 }
 
 // What a tile draws from a printer's status. PrinterStatus satisfies it; so
@@ -286,6 +289,7 @@ export function CameraWall({
                 printerId={p.id}
                 printerName={p.name}
                 cameraRotation={p.camera_rotation}
+                webrtc={Boolean(p.webrtc ?? p.camera_webrtc_url)}
                 mode={mode}
                 snapshotIntervalMs={snapshotIntervalSec * 1000}
                 connected={statusByPrinter.get(p.id)?.connected ?? false}

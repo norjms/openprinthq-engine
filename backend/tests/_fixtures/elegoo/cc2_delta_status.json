@@ -1,0 +1,10 @@
+{
+  "id": 42,
+  "method": 6000,
+  "result": {
+    "error_code": 0,
+    "machine_status": {"progress": 46},
+    "print_status": {"current_layer": 230, "print_duration": 3650},
+    "extruder": {"temperature": 219.5}
+  }
+}

@@ -17,7 +17,7 @@ export function AddSmartPlugModal({ plug, onClose }: AddSmartPlugModalProps) {
   const isEditing = !!plug;
 
   // Plug type selection
-  const [plugType, setPlugType] = useState<'tasmota' | 'homeassistant' | 'mqtt' | 'rest'>(plug?.plug_type || 'tasmota');
+  const [plugType, setPlugType] = useState<'tasmota' | 'homeassistant' | 'mqtt' | 'rest' | 'kasa'>(plug?.plug_type || 'tasmota');
 
   const [name, setName] = useState(plug?.name || '');
   // Tasmota fields
@@ -255,7 +255,10 @@ export function AddSmartPlugModal({ plug, onClose }: AddSmartPlugModalProps) {
 
   // Test connection mutation
   const testMutation = useMutation({
-    mutationFn: () => api.testSmartPlugConnection(ipAddress, username || null, password || null),
+    mutationFn: () =>
+      plugType === 'kasa'
+        ? api.testKasaConnection(ipAddress, username || null, password || null)
+        : api.testSmartPlugConnection(ipAddress, username || null, password || null),
     onSuccess: (result) => {
       setTestResult(result);
       setError(null);
@@ -301,9 +304,9 @@ export function AddSmartPlugModal({ plug, onClose }: AddSmartPlugModalProps) {
   // For Tasmota plugs, only one per printer (physical device)
   // For HA scripts, allow multiple per printer
   const availablePrinters = printers?.filter(p => {
-    if (plugType === 'tasmota') {
+    if (plugType === 'tasmota' || plugType === 'kasa') {
       const hasTasmotaPlug = existingPlugs?.some(
-        ep => ep.printer_id === p.id && ep.id !== plug?.id && ep.plug_type === 'tasmota'
+        ep => ep.printer_id === p.id && ep.id !== plug?.id && (ep.plug_type === 'tasmota' || ep.plug_type === 'kasa')
       );
       return !hasTasmotaPlug;
     }
@@ -320,8 +323,8 @@ export function AddSmartPlugModal({ plug, onClose }: AddSmartPlugModalProps) {
       return;
     }
 
-    if (plugType === 'tasmota' && !ipAddress.trim()) {
-      setError('IP address is required for Tasmota plugs');
+    if ((plugType === 'tasmota' || plugType === 'kasa') && !ipAddress.trim()) {
+      setError('IP address is required for Tasmota and Kasa plugs');
       return;
     }
 
@@ -352,7 +355,7 @@ export function AddSmartPlugModal({ plug, onClose }: AddSmartPlugModalProps) {
     const data = {
       name: name.trim(),
       plug_type: plugType,
-      ip_address: plugType === 'tasmota' ? ipAddress.trim() : null,
+      ip_address: plugType === 'tasmota' || plugType === 'kasa' ? ipAddress.trim() : null,
       ha_entity_id: plugType === 'homeassistant' ? haEntityId : null,
       // HA energy sensor entities (optional)
       ha_power_entity: plugType === 'homeassistant' ? (haPowerEntity || null) : null,
@@ -388,8 +391,8 @@ export function AddSmartPlugModal({ plug, onClose }: AddSmartPlugModalProps) {
       rest_energy_multiplier: plugType === 'rest' ? (parseFloat(restEnergyMultiplier) || 1) : 1,
       rest_energy_total_path: plugType === 'rest' ? (restEnergyTotalPath.trim() || null) : null,
       rest_energy_total_multiplier: plugType === 'rest' ? (parseFloat(restEnergyTotalMultiplier) || 1) : 1,
-      username: plugType === 'tasmota' ? (username.trim() || null) : null,
-      password: plugType === 'tasmota' ? (password.trim() || null) : null,
+      username: plugType === 'tasmota' || plugType === 'kasa' ? (username.trim() || null) : null,
+      password: plugType === 'tasmota' || plugType === 'kasa' ? (password.trim() || null) : null,
       printer_id: printerId,
       controls_printer_power: controlsPrinterPower,
       // Power alerts
@@ -510,6 +513,22 @@ export function AddSmartPlugModal({ plug, onClose }: AddSmartPlugModalProps) {
               >
                 <Globe className="w-4 h-4" />
                 REST
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPlugType('kasa');
+                  setTestResult(null);
+                  setError(null);
+                }}
+                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg font-medium transition-colors ${
+                  plugType === 'kasa'
+                    ? 'bg-bambu-green text-white'
+                    : 'bg-bambu-dark text-bambu-gray hover:text-white border border-bambu-dark-tertiary'
+                }`}
+              >
+                <Plug className="w-4 h-4" />
+                Kasa
               </button>
             </div>
           )}
@@ -1388,8 +1407,8 @@ export function AddSmartPlugModal({ plug, onClose }: AddSmartPlugModalProps) {
             </div>
           )}
 
-          {/* IP Address - only show for Tasmota */}
-          {plugType === 'tasmota' && (
+          {/* IP Address - Tasmota and Kasa */}
+          {(plugType === 'tasmota' || plugType === 'kasa') && (
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('smartPlugs.ipAddress')}</label>
               <div className="flex gap-2">
@@ -1420,8 +1439,8 @@ export function AddSmartPlugModal({ plug, onClose }: AddSmartPlugModalProps) {
             </div>
           )}
 
-          {/* Test Result - only show for Tasmota */}
-          {plugType === 'tasmota' && testResult && (
+          {/* Test Result - Tasmota and Kasa */}
+          {(plugType === 'tasmota' || plugType === 'kasa') && testResult && (
             <div className={`p-3 rounded-lg flex items-center gap-2 ${
               testResult.success
                 ? 'bg-bambu-green/20 border border-bambu-green/50 text-bambu-green'
@@ -1459,8 +1478,8 @@ export function AddSmartPlugModal({ plug, onClose }: AddSmartPlugModalProps) {
             />
           </div>
 
-          {/* Authentication (optional) - only show for Tasmota */}
-          {plugType === 'tasmota' && (
+          {/* Authentication (optional) - Tasmota and Kasa */}
+          {(plugType === 'tasmota' || plugType === 'kasa') && (
             <>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -1469,7 +1488,7 @@ export function AddSmartPlugModal({ plug, onClose }: AddSmartPlugModalProps) {
                     type="text"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
-                    placeholder="admin"
+                    placeholder={plugType === 'kasa' ? 'you@example.com' : 'admin'}
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                   />
                 </div>
@@ -1485,7 +1504,7 @@ export function AddSmartPlugModal({ plug, onClose }: AddSmartPlugModalProps) {
                 </div>
               </div>
               <p className="text-xs text-bambu-gray -mt-2">
-                {t('smartPlugs.authHint')}
+                {plugType === 'kasa' ? t('smartPlugs.kasaAuthHint') : t('smartPlugs.authHint')}
               </p>
             </>
           )}

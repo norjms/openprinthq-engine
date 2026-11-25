@@ -83,37 +83,42 @@ def _create_engine():
     if is_sqlite():
         event.listen(eng.sync_engine, "connect", _set_sqlite_pragmas)
     else:
-        # Strip timezone info from aware datetimes before they reach asyncpg.
-        # asyncpg rejects timezone-aware values for TIMESTAMP WITHOUT TIME ZONE columns.
-        # The codebase uses datetime.now(timezone.utc) in many places — this makes
-        # Postgres behave like SQLite which ignores timezone info entirely.
-        @event.listens_for(eng.sync_engine, "before_cursor_execute", retval=True)
-        def _strip_tz_from_params(conn, cursor, statement, parameters, context, executemany):
-            import datetime
-
-            if parameters is None:
-                return statement, parameters
-
-            # Recursive strip that walks any nesting of dict/list/tuple. Needed
-            # because SQLAlchemy passes parameters in several shapes depending
-            # on the path: a dict for named binds, a tuple for positional, a
-            # list of dicts/tuples for executemany, and for insertmanyvalues
-            # sometimes a list of tuples inside an outer list. The simplest
-            # correct answer is "strip datetimes at any depth".
-            def _strip(val):
-                if isinstance(val, datetime.datetime) and val.tzinfo is not None:
-                    return val.replace(tzinfo=None)
-                if isinstance(val, dict):
-                    return {k: _strip(v) for k, v in val.items()}
-                if isinstance(val, list):
-                    return [_strip(v) for v in val]
-                if isinstance(val, tuple):
-                    return tuple(_strip(v) for v in val)
-                return val
-
-            return statement, _strip(parameters)
+        install_postgres_listeners(eng)
 
     return eng
+
+
+def _strip_tz(val):
+    """Aware datetimes lose their tzinfo at any depth of a parameter structure (see strip_tz_from_params)."""
+    import datetime
+
+    if isinstance(val, datetime.datetime) and val.tzinfo is not None:
+        return val.replace(tzinfo=None)
+    if isinstance(val, dict):
+        return {k: _strip_tz(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_strip_tz(v) for v in val]
+    if isinstance(val, tuple):
+        return tuple(_strip_tz(v) for v in val)
+    return val
+
+
+def strip_tz_from_params(conn, cursor, statement, parameters, context, executemany):
+    """Strip timezone info from aware datetimes before they reach asyncpg.
+
+    asyncpg rejects timezone-aware values for TIMESTAMP WITHOUT TIME ZONE columns. The codebase uses
+    datetime.now(timezone.utc) in many places; this makes Postgres behave like SQLite, which ignores timezone
+    info entirely. Parameters arrive in several shapes (a dict for named binds, a tuple for positional, lists
+    of either for executemany and insertmanyvalues), so datetimes are stripped at any depth.
+    """
+    if parameters is None:
+        return statement, parameters
+    return statement, _strip_tz(parameters)
+
+
+def install_postgres_listeners(eng) -> None:
+    """What every PostgreSQL engine needs (the app's and the tests')."""
+    event.listen(eng.sync_engine, "before_cursor_execute", strip_tz_from_params, retval=True)
 
 
 engine = _create_engine()
@@ -248,6 +253,7 @@ async def init_db():
         archive,
         auth_ephemeral,
         bug_report,
+        chat_agent,
         color_catalog,
         external_link,
         filament,
@@ -270,6 +276,8 @@ async def init_db():
         print_log,
         print_queue,
         printer,
+        printer_group,
+        printer_hardware,
         printer_sensor_history,
         project,
         project_bom,
@@ -934,6 +942,11 @@ async def run_migrations(conn):
         conn,
         "ALTER TABLE pipeline_runs ADD COLUMN parent_run_id INTEGER REFERENCES pipeline_runs(id) ON DELETE SET NULL",
     )
+    # Multi-port connector routing: per-role endpoint overrides (vendor-agnostic).
+    await _safe_execute(
+        conn,
+        "ALTER TABLE printers ADD COLUMN endpoint_overrides JSON",
+    )
 
     # Migration: Add source_archive_id column to pipeline_runs (#1425 PR B follow-up).
     # Allows a pipeline run to source from an archive's source 3MF in addition
@@ -974,6 +987,14 @@ async def run_migrations(conn):
 
     # Migration: Add location column to printers for grouping
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN location VARCHAR(100)")
+
+    # Migration: Klipper/Moonraker printer support. connection_type
+    # distinguishes Bambu (MQTT) from Klipper (Moonraker) rows; the moonraker_*
+    # columns hold connection details for the latter. Existing rows default to
+    # "bambu" so behaviour is unchanged.
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN connection_type VARCHAR(20) DEFAULT 'bambu'")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN moonraker_port INTEGER DEFAULT 7125")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN moonraker_api_key VARCHAR(255)")
 
     # Migration: Add interval_type column to maintenance_types
     await _safe_execute(conn, "ALTER TABLE maintenance_types ADD COLUMN interval_type VARCHAR(20) DEFAULT 'hours'")
@@ -1624,6 +1645,8 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN external_camera_type VARCHAR(20)")
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN external_camera_enabled BOOLEAN DEFAULT 0")
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN external_camera_snapshot_url VARCHAR(500)")
+    # Migration: WebRTC (WHEP) playback URL for printer cameras (#56)
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN camera_webrtc_url VARCHAR(500)")
 
     # Migration: Add external_url column to print_archives for user-defined links (Printables, etc.)
     await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN external_url VARCHAR(500)")
@@ -3682,6 +3705,21 @@ async def run_migrations(conn):
     else:
         await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN gate_acknowledged BOOLEAN DEFAULT false")
 
+    # Migration: Add target_group_id column to print_queue (printer groups).
+    # Existing rows get NULL, which is the "not group-targeted" state, so this
+    # is inert for every queue item created before groups existed. The FK is
+    # added inline on Postgres; SQLite cannot add a constraint to an existing
+    # table, and _safe_execute swallows that, leaving a plain nullable column
+    # (which is what create_all produces on a fresh SQLite DB anyway).
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN target_group_id INTEGER")
+    else:
+        await _safe_execute(
+            conn,
+            "ALTER TABLE print_queue ADD COLUMN target_group_id INTEGER "
+            "REFERENCES printer_groups(id) ON DELETE SET NULL",
+        )
+
     # Migration: Add is_autologin column to oidc_providers (#1589). Postgres
     # rejects ``DEFAULT 0`` for BOOLEAN columns.
     if is_sqlite():
@@ -3771,6 +3809,205 @@ async def run_migrations(conn):
     # Migration: Disambiguate the four ``user_print_*`` notification template
     # names by appending " Email" (#1792). See ``_migrate_rename_user_print_template_names``.
     await _migrate_rename_user_print_template_names(conn)
+
+    # Migration: printer device identity + per-printer UI/hardware settings.
+    #  - mac_address: the printer host's primary NIC MAC, recorded while online.
+    #    Klipper/Moonraker printers get a random synthetic serial at creation, so
+    #    the MAC is the only stable hardware key for re-identifying a printer whose
+    #    DHCP lease changed (offline-relocate / relink flow).
+    #  - chamber_heater / show_filament_panel: per-printer settings that used to
+    #    live client-side; the database is now the source of truth so they follow
+    #    the printer across devices and survive promotion. BOOLEAN defaults are
+    #    dialect-split (Postgres rejects ``DEFAULT 0/1`` for BOOLEAN).
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN mac_address VARCHAR(17)")
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN chamber_heater BOOLEAN DEFAULT 0")
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN show_filament_panel BOOLEAN DEFAULT 1")
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN show_bed_ejection BOOLEAN DEFAULT 0")
+    else:
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN chamber_heater BOOLEAN DEFAULT false")
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN show_filament_panel BOOLEAN DEFAULT true")
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN show_bed_ejection BOOLEAN DEFAULT false")
+
+    # Migration: farm-aware dispatch. printers.installed_plate is the build plate the
+    # operator says is fitted (NULL = unknown, never blocks). print_queue gains
+    # automatic retry: max_retries (0 = off), retry_count, and retry_of_id pointing at
+    # the first attempt. INTEGER DEFAULT 0 is spelled the same on both dialects and
+    # backfills existing rows.
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN installed_plate VARCHAR(60)")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN max_retries INTEGER DEFAULT 0")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN retry_count INTEGER DEFAULT 0")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN retry_of_id INTEGER")
+
+    # Migration: server-side bed ejection. The ejection_profiles table itself is
+    # made by create_all; existing printers get the three new columns (auto-eject
+    # off, no profile, count 0). BOOLEAN default dialect-split as above.
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN auto_eject BOOLEAN DEFAULT 0")
+    else:
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN auto_eject BOOLEAN DEFAULT false")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN ejection_profile_id INTEGER")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN consecutive_ejects INTEGER DEFAULT 0")
+
+    # Migration: nozzles, filament paths and printer-bound locations. The
+    # printer_nozzles and printer_filament_paths tables come from create_all;
+    # existing installs get the new columns here. The spoolman_slot_assignments
+    # SQLite rebuild (_migrate_widen_spoolman_slot_ams_id_range) runs earlier in
+    # this function, so the extruder_index column added below is never lost by it.
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN track_switch_mode VARCHAR(20) DEFAULT 'auto'")
+    await _safe_execute(conn, "ALTER TABLE spool_assignment ADD COLUMN extruder_index INTEGER")
+    await _safe_execute(conn, "ALTER TABLE spoolman_slot_assignments ADD COLUMN extruder_index INTEGER")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN kind VARCHAR(20) DEFAULT 'storage'")
+    await _safe_execute(
+        conn, "ALTER TABLE locations ADD COLUMN parent_id INTEGER REFERENCES locations(id) ON DELETE SET NULL"
+    )
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN printer_id INTEGER")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN ams_id INTEGER")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN tray_id INTEGER")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN code VARCHAR(16)")
+    await _safe_execute(conn, "ALTER TABLE locations ADD COLUMN note VARCHAR(500)")
+    await _safe_execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ix_locations_code ON locations (code)")
+    await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_locations_parent_id ON locations (parent_id)")
+    await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_locations_printer_id ON locations (printer_id)")
+    # Backfill scan codes for locations created before codes existed. Random
+    # values cannot be produced portably in SQL, so do it row by row here.
+    from backend.app.utils.location_codes import generate_location_code
+
+    async with conn.begin_nested():
+        missing = (await conn.execute(text("SELECT id FROM locations WHERE code IS NULL"))).fetchall()
+        for (loc_id,) in missing:
+            await conn.execute(
+                text("UPDATE locations SET code = :code WHERE id = :id"),
+                {"code": generate_location_code(), "id": loc_id},
+            )
+
+    # Migration: the seeded test-notification title said "Bambuddy Test". Rows
+    # still on that default take "{app_name} Test"; edited titles are kept.
+    await _migrate_test_template_title(conn)
+
+    # Migration: Watchtower parity. Printers can be taken out of service (no new
+    # jobs, still connected); queue items get a 0-100 priority (existing rows take
+    # 50, normal, which keeps the old order); maintenance_history also holds free-form entries with no schedule.
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN out_of_service BOOLEAN DEFAULT 0")
+    else:
+        await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN out_of_service BOOLEAN DEFAULT false")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN out_of_service_reason VARCHAR(200)")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN out_of_service_since TIMESTAMP")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN priority INTEGER DEFAULT 50")
+    await _migrate_maintenance_history_log(conn)
+
+    # Migration: a queued job cancelled before it started keeps why and by whom.
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN cancel_reason TEXT")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN cancelled_by VARCHAR(100)")
+
+    # Migration: alarms keep Bambu's full HMS code, and can be dismissed.
+    await _safe_execute(conn, "ALTER TABLE printer_alarms ADD COLUMN full_code VARCHAR(20)")
+    await _safe_execute(conn, "ALTER TABLE printer_alarms ADD COLUMN dismissed_at TIMESTAMP")
+    await _safe_execute(conn, "ALTER TABLE printer_alarms ADD COLUMN dismissed_by VARCHAR(100)")
+
+    # Migration: filament matching on queue items (match level, a confirmed mapping, why it can't start).
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN match_level VARCHAR(10)")
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN filament_confirmed BOOLEAN DEFAULT 0")
+    else:
+        await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN filament_confirmed BOOLEAN DEFAULT false")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN filament_unmatched TEXT")
+
+    # Migration: per-printer permission scoping (#57). Both columns are added
+    # NULL, which means "not scoped": every existing group keeps full access to
+    # the farm. Camera and websocket tokens record whose scope they carry.
+    if_not_exists = "" if is_sqlite() else "IF NOT EXISTS "
+    await _safe_execute(conn, f"ALTER TABLE groups ADD COLUMN {if_not_exists}scope_printer_ids JSON")
+    await _safe_execute(conn, f"ALTER TABLE groups ADD COLUMN {if_not_exists}scope_locations JSON")
+    await _safe_execute(conn, f"ALTER TABLE auth_ephemeral_tokens ADD COLUMN {if_not_exists}scope_user_id INTEGER")
+
+
+async def _migrate_maintenance_history_log(conn) -> None:
+    """Let maintenance_history hold free-form entries (no schedule).
+
+    Adds printer_id, title, category and performed_by; makes printer_maintenance_id
+    nullable; backfills printer_id from the schedule for existing rows.
+    PostgreSQL drops NOT NULL in place. SQLite cannot, so the table is rebuilt once,
+    only when the old NOT NULL definition is still there, and the copy is checked by
+    row count before the old table goes.
+    """
+    from sqlalchemy import text
+
+    for ddl in (
+        "ALTER TABLE maintenance_history ADD COLUMN printer_id INTEGER REFERENCES printers(id) ON DELETE CASCADE",
+        "ALTER TABLE maintenance_history ADD COLUMN title VARCHAR(200)",
+        "ALTER TABLE maintenance_history ADD COLUMN category VARCHAR(30)",
+        "ALTER TABLE maintenance_history ADD COLUMN performed_by VARCHAR(100)",
+    ):
+        await _safe_execute(conn, ddl)
+
+    if not is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE maintenance_history ALTER COLUMN printer_maintenance_id DROP NOT NULL")
+    else:
+        row = (
+            await conn.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='maintenance_history'"))
+        ).fetchone()
+        sql = (row[0] if row else "") or ""
+        if "printer_maintenance_id INTEGER NOT NULL" in sql:
+            try:
+                async with conn.begin_nested():
+                    await conn.execute(text("DROP TABLE IF EXISTS maintenance_history_v2"))
+                    await conn.execute(
+                        text(
+                            "CREATE TABLE maintenance_history_v2 ("
+                            "id INTEGER NOT NULL PRIMARY KEY, "
+                            "printer_maintenance_id INTEGER REFERENCES printer_maintenance(id) ON DELETE CASCADE, "
+                            "printer_id INTEGER REFERENCES printers(id) ON DELETE CASCADE, "
+                            "performed_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, "
+                            "hours_at_maintenance FLOAT NOT NULL, "
+                            "notes TEXT, "
+                            "title VARCHAR(200), "
+                            "category VARCHAR(30), "
+                            "performed_by VARCHAR(100)"
+                            ")"
+                        )
+                    )
+                    cols = "id, printer_maintenance_id, printer_id, performed_at, hours_at_maintenance, notes, title, category, performed_by"
+                    await conn.execute(
+                        text(f"INSERT INTO maintenance_history_v2 ({cols}) SELECT {cols} FROM maintenance_history")
+                    )
+                    original = (await conn.execute(text("SELECT count(*) FROM maintenance_history"))).scalar_one()
+                    copied = (await conn.execute(text("SELECT count(*) FROM maintenance_history_v2"))).scalar_one()
+                    if copied != original:
+                        raise RuntimeError(
+                            f"maintenance_history migration: row count mismatch after copy ({original} vs {copied})"
+                        )
+                    await conn.execute(text("DROP TABLE maintenance_history"))
+                    await conn.execute(text("ALTER TABLE maintenance_history_v2 RENAME TO maintenance_history"))
+            except Exception as exc:
+                logger.error("maintenance_history rebuild (SQLite) FAILED: %s", exc, exc_info=True)
+                raise
+
+    await _safe_execute(
+        conn, "CREATE INDEX IF NOT EXISTS ix_maintenance_history_printer_id ON maintenance_history (printer_id)"
+    )
+    async with conn.begin_nested():
+        await conn.execute(
+            text(
+                "UPDATE maintenance_history SET printer_id = ("
+                "SELECT pm.printer_id FROM printer_maintenance pm "
+                "WHERE pm.id = maintenance_history.printer_maintenance_id) "
+                "WHERE printer_id IS NULL AND printer_maintenance_id IS NOT NULL"
+            )
+        )
+
+
+async def _migrate_test_template_title(conn) -> None:
+    from sqlalchemy import text
+
+    async with conn.begin_nested():
+        await conn.execute(
+            text(
+                "UPDATE notification_templates SET title_template = :new WHERE event_type = 'test' AND title_template = :old"
+            ),
+            {"new": "{app_name} Test", "old": "Bambuddy Test"},
+        )
 
 
 _USER_PRINT_TEMPLATE_RENAMES: tuple[tuple[str, str, str], ...] = (
