@@ -1,0 +1,24 @@
+{
+  "id": 1,
+  "method": 2005,
+  "result": {
+    "error_code": 0,
+    "canvas_info": {
+      "active_canvas_id": 0,
+      "active_tray_id": 3,
+      "auto_refill": false,
+      "canvas_list": [
+        {
+          "canvas_id": 0,
+          "connected": 1,
+          "tray_list": [
+            {"tray_id": 0, "brand": "ELEGOO", "filament_type": "PLA", "filament_name": "PLA", "filament_color": "#2850DF", "min_nozzle_temp": 190, "max_nozzle_temp": 230, "status": 1},
+            {"tray_id": 1, "brand": "ELEGOO", "filament_type": "PLA", "filament_name": "PLA Basic", "filament_color": "#FFFFFF", "min_nozzle_temp": 190, "max_nozzle_temp": 230, "status": 1},
+            {"tray_id": 2, "brand": "ELEGOO", "filament_type": "PLA", "filament_name": "PLA Silk", "filament_color": "#F32FF8", "min_nozzle_temp": 190, "max_nozzle_temp": 230, "status": 1},
+            {"tray_id": 3, "brand": "ELEGOO", "filament_type": "PLA", "filament_name": "PLA", "filament_color": "#000000", "min_nozzle_temp": 190, "max_nozzle_temp": 230, "status": 2}
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -257,6 +257,47 @@ export function ScheduleOptionsPanel({
         </label>
       </div>
 
+      {/* Retry a failed print (farm queue) */}
+      <div className="flex items-center gap-2">
+        <label htmlFor="maxRetries" className="text-sm text-bambu-gray">
+          {t('printModal.maxRetries')}
+        </label>
+        <select
+          id="maxRetries"
+          value={options.maxRetries}
+          onChange={(e) => onChange({ ...options, maxRetries: Number(e.target.value) })}
+          className="px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-sm text-white focus:border-bambu-green focus:outline-none"
+        >
+          <option value={0}>{t('printModal.maxRetriesNone')}</option>
+          {[1, 2, 3, 5].map((n) => (
+            <option key={n} value={n}>
+              {t('printModal.maxRetriesCount', { count: n })}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Priority: higher goes first among jobs for the same printer or target */}
+      <div className="flex items-center gap-2">
+        <label htmlFor="queuePriority" className="text-sm text-bambu-gray">
+          {t('printModal.priority')}
+        </label>
+        <select
+          id="queuePriority"
+          value={options.priority}
+          onChange={(e) => onChange({ ...options, priority: Number(e.target.value) })}
+          className="px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-sm text-white focus:border-bambu-green focus:outline-none"
+        >
+          <option value={25}>{t('printModal.priorityLow')}</option>
+          <option value={50}>{t('printModal.priorityNormal')}</option>
+          <option value={75}>{t('printModal.priorityHigh')}</option>
+          <option value={100}>{t('printModal.priorityUrgent')}</option>
+          {![25, 50, 75, 100].includes(options.priority) && (
+            <option value={options.priority}>{options.priority}</option>
+          )}
+        </select>
+      </div>
+
       {/* Auto power off */}
       <div className="flex items-center gap-2">
         <input

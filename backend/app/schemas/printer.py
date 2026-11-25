@@ -1,16 +1,22 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class PrinterBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    serial_number: str = Field(..., min_length=1, max_length=50)
+    # "bambu" (MQTT) or "klipper" (Moonraker). Defaults to bambu so existing
+    # clients and payloads are unaffected.
+    connection_type: str = "bambu"
+    # Optional at the schema level: Bambu printers require a serial, but Klipper
+    # printers get a synthetic serial assigned server-side. Per-type
+    # requirements are enforced in PrinterCreate.
+    serial_number: str | None = Field(default=None, max_length=50)
 
     @field_validator("serial_number")
     @classmethod
-    def _normalize_serial_number(cls, v: str) -> str:
-        """Uppercase and trim the serial number.
+    def _normalize_serial_number(cls, v: str | None) -> str | None:
+        """Uppercase and trim Bambu serial numbers.
 
         Bambu serial numbers are uppercase alphanumeric, and the MQTT report
         topic ``device/<serial>/report`` is case-sensitive. A serial entered
@@ -18,32 +24,104 @@ class PrinterBase(BaseModel):
         without error but never receives a message — the printer publishes to
         the correctly-cased topic, so every status field stays unknown (#1465).
         Normalising on input makes the subscribed topic always match.
+
+        ``None`` (Klipper, serial assigned later) and synthetic Klipper serials
+        (which contain a ``:``) pass through untouched.
         """
-        normalized = v.strip().upper()
-        if not normalized:
-            raise ValueError("serial_number must not be blank")
-        return normalized
+        if v is None:
+            return None
+        if ":" in v:  # synthetic Klipper serial, e.g. "klipper:<uuid>"
+            return v.strip()
+        return v.strip().upper() or None
 
     ip_address: str = Field(
         ...,
         max_length=253,
         pattern=r"^(\d{1,3}(\.\d{1,3}){3}|[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*)$",
     )
-    model: str | None = None
+    model: str | None = None  # Bambu model string, or KlipperProfile key for Klipper rows
     location: str | None = None  # Group/location name
+    installed_plate: str | None = None  # Build plate fitted now; NULL = unknown
     auto_archive: bool = True
+    # Klipper/Moonraker connection detail (ignored for Bambu rows). The API key
+    # is NOT here — it's a secret and must never be serialised in
+    # PrinterResponse. It lives on PrinterCreate / PrinterUpdate only.
+    moonraker_port: int = Field(default=7125, ge=1, le=65535)
     external_camera_url: str | None = None
     external_camera_type: str | None = None  # "mjpeg", "rtsp", "snapshot", "usb"
     external_camera_enabled: bool = False
     external_camera_snapshot_url: str | None = None  # Optional single-frame override; #1177
+    camera_webrtc_url: str | None = None  # WHEP endpoint for browser playback; #56
     camera_rotation: int = 0  # 0, 90, 180, 270 degrees
+
+
+def _validate_webrtc_url(value: str | None) -> str | None:
+    """WHEP URLs follow the shared camera URL rules (http/https, no metadata or loopback hosts)."""
+    if value is None or not value.strip():
+        return None
+    from backend.app.services.webrtc_camera import sanitize_whep_url
+
+    safe = sanitize_whep_url(value)
+    if not safe:
+        raise ValueError("camera_webrtc_url must be an http(s) URL on an allowed host")
+    return safe
+
+
+def _validate_go2rtc_pair(base: str | None, stream: str | None) -> None:
+    if not base and not stream:
+        return
+    if not base or not stream:
+        raise ValueError("go2rtc_url and go2rtc_stream must be given together")
+    from backend.app.services.webrtc_camera import derive_go2rtc_urls
+
+    derive_go2rtc_urls(base, stream)  # raises ValueError with the reason
 
 
 class PrinterCreate(PrinterBase):
     # access_code lives on the input shapes only — never on the default
     # PrinterResponse. Direct exposure on PRINTERS_READ would let a Viewer
-    # connect to the printer's MQTT and bypass Bambuddy's RBAC.
-    access_code: str = Field(..., min_length=1, max_length=20)
+    # connect to the printer's MQTT and bypass Bambuddy's RBAC. Optional because
+    # Klipper printers run open on the LAN (no access code).
+    access_code: str | None = Field(default=None, max_length=20)
+    # Secret — only accepted on input, never returned. Optional (open-LAN
+    # Moonraker needs no key).
+    moonraker_api_key: str | None = Field(default=None, max_length=255)
+    # When True, skip the MQTT connection pre-flight and persist the printer
+    # anyway. Used for connector-routed (remote-LAN) Bambu printers: at create
+    # time the printer is only reachable through the relay the control-plane
+    # stands up AFTER creation, so a pre-flight against the raw LAN IP can never
+    # succeed from a cloud-hosted engine. The connection is validated once the
+    # route is active. Direct/local adds keep the pre-flight (typo protection).
+    defer_connection_test: bool = Field(default=False)
+    # Write-only go2rtc convenience (#56), see PrinterUpdate.
+    go2rtc_url: str | None = Field(default=None, max_length=400)
+    go2rtc_stream: str | None = Field(default=None, max_length=100)
+
+    @field_validator("camera_webrtc_url")
+    @classmethod
+    def _check_webrtc_url(cls, v: str | None) -> str | None:
+        return _validate_webrtc_url(v)
+
+    @model_validator(mode="after")
+    def _check_go2rtc(self) -> "PrinterCreate":
+        _validate_go2rtc_pair(self.go2rtc_url, self.go2rtc_stream)
+        return self
+
+    @model_validator(mode="after")
+    def _check_per_type_requirements(self) -> "PrinterCreate":
+        """Bambu printers need serial + access code; external printers don't."""
+        from backend.app.services.printer_capabilities import KNOWN_CONNECTION_TYPES
+
+        if self.connection_type == "bambu":
+            if not self.serial_number:
+                raise ValueError("serial_number is required for Bambu printers")
+            if not self.access_code:
+                raise ValueError("access_code is required for Bambu printers")
+        elif self.connection_type in KNOWN_CONNECTION_TYPES:
+            pass  # external: serial synthesised later; access_code/api_key optional
+        else:
+            raise ValueError(f"unknown connection_type: {self.connection_type!r}")
+        return self
 
 
 class PlateDetectionROI(BaseModel):
@@ -65,32 +143,92 @@ class PrinterUpdate(BaseModel):
     access_code: str | None = None
     model: str | None = None
     location: str | None = None
+    installed_plate: str | None = Field(default=None, max_length=60)
     is_active: bool | None = None
+    # Out of service (see models/printer.py). Setting it stamps out_of_service_since;
+    # clearing it clears the reason and the timestamp.
+    out_of_service: bool | None = None
+    out_of_service_reason: str | None = Field(default=None, max_length=200)
     auto_archive: bool | None = None
     print_hours_offset: float | None = None
+    moonraker_port: int | None = Field(default=None, ge=1, le=65535)
+    endpoint_overrides: dict | None = None
+    moonraker_api_key: str | None = None
     external_camera_url: str | None = None
     external_camera_type: str | None = None
     external_camera_enabled: bool | None = None
     external_camera_snapshot_url: str | None = None  # #1177
+    camera_webrtc_url: str | None = None  # #56
+    # Write-only go2rtc convenience (#56): base URL + stream name, expanded into
+    # the MJPEG, snapshot and WHEP URLs above. Never stored or returned.
+    go2rtc_url: str | None = Field(default=None, max_length=400)
+    go2rtc_stream: str | None = Field(default=None, max_length=100)
     camera_rotation: int | None = None  # 0, 90, 180, 270 degrees
     plate_detection_enabled: bool | None = None
     plate_detection_roi: PlateDetectionROI | None = None
+    mac_address: str | None = None
+    chamber_heater: bool | None = None
+    show_filament_panel: bool | None = None
+    show_bed_ejection: bool | None = None
+    auto_eject: bool | None = None
+    ejection_profile_id: int | None = None
+
+    @field_validator("camera_webrtc_url")
+    @classmethod
+    def _check_webrtc_url(cls, v: str | None) -> str | None:
+        return _validate_webrtc_url(v)
+
+    @model_validator(mode="after")
+    def _check_go2rtc(self) -> "PrinterUpdate":
+        _validate_go2rtc_pair(self.go2rtc_url, self.go2rtc_stream)
+        return self
+
+
+def _controls_of(printer) -> dict[str, bool]:
+    from backend.app.services.printer_capabilities import capabilities_for
+
+    try:
+        return capabilities_for(printer).controls()
+    except Exception:  # noqa: BLE001 - never fail a printer listing over this
+        return {}
 
 
 class PrinterResponse(PrinterBase):
     id: int
     is_active: bool
+    has_moonraker_api_key: bool = False  # whether a key is stored (never the key itself)
     nozzle_count: int = 1  # 1 or 2, auto-detected from MQTT
     print_hours_offset: float = 0.0
     external_camera_url: str | None = None
     external_camera_type: str | None = None
     external_camera_enabled: bool = False
     external_camera_snapshot_url: str | None = None  # #1177
+    camera_webrtc_url: str | None = None  # #56
     camera_rotation: int = 0  # 0, 90, 180, 270 degrees
     plate_detection_enabled: bool = False
     plate_detection_roi: PlateDetectionROI | None = None
+    mac_address: str | None = None
+    chamber_heater: bool = False
+    show_filament_panel: bool = True
+    show_bed_ejection: bool = False
+    auto_eject: bool = False
+    ejection_profile_id: int | None = None
+    consecutive_ejects: int = 0
+    out_of_service: bool = False
+    out_of_service_reason: str | None = None
+    out_of_service_since: datetime | None = None
+    # What this printer's connection can do: pause_resume_stop, print, home,
+    # temperature, gcode. Filled from the connection type whichever way the
+    # response is built (model_validate or from_orm_with_roi).
+    controls: dict[str, bool] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def _fill_controls(self) -> "PrinterResponse":
+        if not self.controls:
+            self.controls = _controls_of(self)
+        return self
 
     class Config:
         from_attributes = True
@@ -101,20 +239,35 @@ class PrinterResponse(PrinterBase):
         data = {
             "id": printer.id,
             "name": printer.name,
+            "connection_type": getattr(printer, "connection_type", None) or "bambu",
             "serial_number": printer.serial_number,
             "ip_address": printer.ip_address,
             "model": printer.model,
             "location": printer.location,
             "auto_archive": printer.auto_archive,
+            "moonraker_port": getattr(printer, "moonraker_port", None) or 7125,
+            "has_moonraker_api_key": bool(getattr(printer, "moonraker_api_key", None)),
             "external_camera_url": printer.external_camera_url,
             "external_camera_type": printer.external_camera_type,
             "external_camera_enabled": printer.external_camera_enabled,
             "external_camera_snapshot_url": printer.external_camera_snapshot_url,
+            "camera_webrtc_url": getattr(printer, "camera_webrtc_url", None),
             "camera_rotation": printer.camera_rotation,
             "is_active": printer.is_active,
             "nozzle_count": printer.nozzle_count,
             "print_hours_offset": printer.print_hours_offset,
             "plate_detection_enabled": printer.plate_detection_enabled,
+            "mac_address": getattr(printer, "mac_address", None),
+            "chamber_heater": bool(getattr(printer, "chamber_heater", False)),
+            "show_filament_panel": bool(getattr(printer, "show_filament_panel", True)),
+            "show_bed_ejection": bool(getattr(printer, "show_bed_ejection", False)),
+            "auto_eject": bool(getattr(printer, "auto_eject", False)),
+            "ejection_profile_id": getattr(printer, "ejection_profile_id", None),
+            "consecutive_ejects": getattr(printer, "consecutive_ejects", 0) or 0,
+            "out_of_service": bool(getattr(printer, "out_of_service", False)),
+            "out_of_service_reason": getattr(printer, "out_of_service_reason", None),
+            "out_of_service_since": getattr(printer, "out_of_service_since", None),
+            "controls": _controls_of(printer),
             "created_at": printer.created_at,
             "updated_at": printer.updated_at,
         }
@@ -134,6 +287,18 @@ class PrinterResponse(PrinterBase):
                 h=printer.plate_detection_roi_h or 0.55,
             )
         return cls(**data)
+
+
+class OutOfServiceRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=200)
+
+
+class OutOfServiceEntry(BaseModel):
+    printer_id: int
+    name: str
+    model: str | None = None
+    reason: str | None = None
+    since: datetime | None = None
 
 
 class PrinterResponseWithSecret(PrinterResponse):
@@ -371,6 +536,8 @@ class PrinterStatus(BaseModel):
     # Queue: printer is awaiting the user to acknowledge the build plate is cleared
     # after a finished/failed print. Persisted across restarts (#961).
     awaiting_plate_clear: bool = False
+    ejecting: bool = False  # a bed eject is running (services/bed_ejection.py)
+    failure_hold: bool = False  # held after a detected failure (services/failure_detection.py)
     # AMS drying support
     supports_drying: bool = False
     # AMS "Print While Drying" — drying mid-print. Verified per Bambu wiki release notes;

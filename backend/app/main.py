@@ -12,33 +12,43 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import delete, or_, select, text
 
 from backend.app.api.routes import (
+    alarms,
     ams_history,
     api_keys,
     archive_purge,
     archives,
+    audit_log,
     auth,
     bug_report,
     camera,
+    camera_webrtc,
     camwall,
+    chat_agent,
     cloud,
     discovery,
+    ejection_profiles,
     external_links,
+    failure_events,
+    farm_stats,
+    filament_matching,
     filaments,
     firmware,
     github_backup,
     groups,
     inventory,
+    inventory_reconciliation,
     kprofiles,
     labels,
     library,
     library_tags,
     library_trash,
+    library_uploads,
     local_backup,
     local_presets,
     maintenance,
@@ -53,9 +63,12 @@ from backend.app.api.routes import (
     pipeline_runs,
     print_log,
     print_queue,
+    printer_groups,
+    printer_hardware,
     printer_sensor_history,
     printers,
     projects,
+    push,
     settings as settings_routes,
     slice_jobs,
     slicer_pipelines,
@@ -65,6 +78,7 @@ from backend.app.api.routes import (
     spoolbuddy,
     spoolman,
     spoolman_inventory,
+    spoolman_migration,
     support,
     system,
     updates,
@@ -78,16 +92,19 @@ from backend.app.api.routes.maintenance import _get_printer_maintenance_internal
 from backend.app.api.routes.support import init_debug_logging
 from backend.app.core.config import APP_VERSION, settings as app_settings
 from backend.app.core.database import async_session, engine, init_db
+from backend.app.core.printer_scope import printer_scope_guard
 from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
 from backend.app.models.smart_plug import SmartPlug
 from backend.app.services.archive import ArchiveService, peek_plate_index_in_3mf, swap_plate_suffix
 from backend.app.services.archive_purge import archive_purge_service
+from backend.app.services.audit import AuditMiddleware
 from backend.app.services.bambu_ftp import (
     FileNotOnPrinterError,
     cache_3mf_download,
     clear_3mf_cache,
     download_file_async,
+    ftp_port_for,
     get_cached_3mf,
     get_ftp_retry_settings,
     with_ftp_retry,
@@ -486,6 +503,16 @@ _HMS_FAILURE_REASONS: dict[str, str] = {
 }
 
 
+def _hms_severity_notifies(severity: int) -> bool:
+    """Whether a Bambu HMS error of this severity sends a notification.
+
+    Fatal, serious and common (1 to 3) do; info (4) does not. The old test,
+    ``severity >= 2``, was written when the parser read the severity from the
+    part id: it let info through and held fatal back.
+    """
+    return 1 <= severity <= 3
+
+
 def _hms_short_code(attr: int, code: int | str) -> str:
     """Build the canonical "MMMM_CCCC" HMS short code from raw attr/code values."""
     if isinstance(code, str):
@@ -534,9 +561,27 @@ _expected_print_creators: dict[tuple[int, str], int] = {}
 # transactions and surfaces the constraint violation).
 #
 # Scope is intentionally narrow: only the two DB-mutating blocks (unlink +
-# assign) are inside the lock. The Spoolman sync block further down stays
-# concurrent because it's network-bound and idempotent.
+# assign) are inside this lock. The Spoolman sync has its own lock below.
 _ams_assignment_locks: dict[int, asyncio.Lock] = {}
+
+# Per-printer lock for the Spoolman side of on_ams_change. The sync is not
+# idempotent under concurrency: each run reads Spoolman's spools once, before
+# the other run's new spool exists, so two runs from one MQTT burst each create
+# a spool for the same RFID tag (seen on an H2D and an H2C: every tagged spool
+# created twice in the same second).
+# Each lock remembers the event loop it was made in: a lock left held by a task
+# whose loop has gone (a test that ended mid-sync) must not block the next loop.
+# The loop itself is kept, not its id(), since a new loop can reuse a dead one's id.
+_spoolman_sync_locks: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
+
+
+def _get_spoolman_sync_lock(printer_id: int) -> asyncio.Lock:
+    """Return the per-printer Spoolman sync lock for the running loop, creating it on first use."""
+    loop = asyncio.get_running_loop()
+    held = _spoolman_sync_locks.get(printer_id)
+    if held is None or held[0] is not loop:
+        held = _spoolman_sync_locks[printer_id] = (loop, asyncio.Lock())
+    return held[1]
 
 
 def _get_ams_assignment_lock(printer_id: int) -> asyncio.Lock:
@@ -1121,6 +1166,30 @@ async def _maybe_notify_printer_offline(printer_id: int) -> None:
 
 async def on_printer_status_change(printer_id: int, state: PrinterState):
     """Handle printer status changes - broadcast via WebSocket."""
+    # Farm analytics: an interval is written only when the printer's bucket
+    # (printing / paused / waiting_plate / idle / offline) changes.
+    try:
+        from backend.app.services import farm_analytics
+
+        await farm_analytics.observe(printer_id, state, printer_manager.is_awaiting_plate_clear(printer_id))
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger(__name__).debug("farm analytics: %s", e)
+    # Unified alarm feed: diff what the printer reports against the open alarms.
+    try:
+        from backend.app.services import alarm_feed
+
+        await alarm_feed.observe(printer_id, state)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger(__name__).debug("alarm feed: %s", e)
+    # Persist decoded nozzle hardware (source='mqtt') when it changes. The
+    # service keeps an in-memory snapshot, so this is a dict compare on the
+    # hot path and only touches the database on an actual change.
+    try:
+        from backend.app.services.printer_hardware import observe_live_nozzles
+
+        await observe_live_nozzles(printer_id, state)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger(__name__).debug("nozzle observe: %s", e)
     # Connected-edge reconciliation (#1542 follow-up). When the printer
     # transitions disconnected → connected — which covers both Bambuddy
     # startup (no prior connection) and a mid-session MQTT reconnect — fire
@@ -1328,8 +1397,27 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
 
         if new_error_codes:
             # Get the actual new errors for the notification
-            # Filter to severity >= 2 (skip informational/status messages like H2D sends)
-            new_errors = [e for e in current_hms_errors if f"{e.attr:08x}" in new_error_codes and e.severity >= 2]
+            # Skip informational/status messages (level 4, which H2D sends)
+            new_errors = [
+                e
+                for e in current_hms_errors
+                if f"{e.attr:08x}" in new_error_codes and _hms_severity_notifies(e.severity)
+            ]
+
+            # The printer's AI monitor (spaghetti, nozzle clumping) goes on the
+            # failure timeline too (services/failure_detection.py).
+            try:
+                from backend.app.services.failure_detection import on_bambu_hms
+
+                await on_bambu_hms(
+                    printer_id,
+                    [
+                        f"{(e.attr >> 16) & 0xFFFF:04X}_{(int(e.code.replace('0x', ''), 16) if e.code else 0) & 0xFFFF:04X}"
+                        for e in new_errors
+                    ],
+                )
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger(__name__).warning("[FAILURE] could not record HMS detection: %s", e)
 
             try:
                 from backend.app.models.printer import Printer
@@ -1359,6 +1447,14 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
                     printer_id, printer, logging.getLogger(__name__)
                 )
 
+                # Codes someone suppressed for this printer in the alarm feed are not sent.
+                try:
+                    from backend.app.services import alarm_feed
+
+                    muted = await alarm_feed.suppressed(printer_id)
+                except Exception:  # noqa: BLE001
+                    muted = frozenset()
+
                 # Notification sends need a session (provider/template lookups).
                 async with async_session() as db:
                     sent_count = 0
@@ -1373,7 +1469,11 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
                         # Only notify for errors with known descriptions — printers
                         # send many undocumented/phantom codes that aren't real errors.
                         description = get_error_description(short_code)
-                        if not description or short_code in _HMS_NOTIFICATION_SUPPRESS:
+                        if (
+                            not description
+                            or short_code in _HMS_NOTIFICATION_SUPPRESS
+                            or ("bambu", short_code) in muted
+                        ):
                             continue
 
                         error_type = f"{module_name} Error"
@@ -1916,6 +2016,13 @@ async def on_ams_change(printer_id: int, ams_data: list):
     except Exception as e:
         logger.warning("RFID spool auto-assign failed: %s", e, exc_info=True)
 
+    # One Spoolman sync at a time per printer: see _spoolman_sync_locks.
+    async with _get_spoolman_sync_lock(printer_id):
+        await _sync_ams_to_spoolman(printer_id, ams_data, logger)
+
+
+async def _sync_ams_to_spoolman(printer_id: int, ams_data: list, logger) -> None:
+    """Sync the printer's AMS trays to Spoolman (auto mode): create spools for new RFID tags, update known ones."""
     try:
         async with async_session() as db:
             from backend.app.api.routes.settings import get_setting
@@ -3068,6 +3175,7 @@ async def on_print_start(printer_id: int, data: dict):
                             timeout=ftp_timeout,
                             socket_timeout=ftp_timeout,
                             printer_model=printer.model,
+                            ftp_port=ftp_port_for(printer),
                             max_retries=ftp_retry_count,
                             retry_delay=ftp_retry_delay,
                             operation_name=f"Download 3MF from {remote_path}",
@@ -3082,6 +3190,7 @@ async def on_print_start(printer_id: int, data: dict):
                             timeout=ftp_timeout,
                             socket_timeout=ftp_timeout,
                             printer_model=printer.model,
+                            ftp_port=ftp_port_for(printer),
                         )
                     if downloaded:
                         downloaded_filename = try_filename
@@ -3111,7 +3220,11 @@ async def on_print_start(printer_id: int, data: dict):
                     break
                 try:
                     dir_files = await list_files_async(
-                        printer.ip_address, printer.access_code, search_dir, printer_model=printer.model
+                        printer.ip_address,
+                        printer.access_code,
+                        search_dir,
+                        printer_model=printer.model,
+                        ftp_port=ftp_port_for(printer),
                     )
                     threemf_files = [f.get("name") for f in dir_files if f.get("name", "").endswith(".3mf")]
                     if threemf_files:
@@ -3140,6 +3253,7 @@ async def on_print_start(printer_id: int, data: dict):
                                     timeout=ftp_timeout,
                                     socket_timeout=ftp_timeout,
                                     printer_model=printer.model,
+                                    ftp_port=ftp_port_for(printer),
                                     max_retries=ftp_retry_count,
                                     retry_delay=ftp_retry_delay,
                                     operation_name=f"Download 3MF from {remote_full_path}",
@@ -3153,6 +3267,7 @@ async def on_print_start(printer_id: int, data: dict):
                                     timeout=ftp_timeout,
                                     socket_timeout=ftp_timeout,
                                     printer_model=printer.model,
+                                    ftp_port=ftp_port_for(printer),
                                 )
                             if downloaded:
                                 downloaded_filename = fname
@@ -3204,6 +3319,7 @@ async def on_print_start(printer_id: int, data: dict):
                                         timeout=ftp_timeout,
                                         socket_timeout=ftp_timeout,
                                         printer_model=printer.model,
+                                        ftp_port=ftp_port_for(printer),
                                         max_retries=ftp_retry_count,
                                         retry_delay=ftp_retry_delay,
                                         operation_name=f"Re-download 3MF from {remote_path}",
@@ -3218,6 +3334,7 @@ async def on_print_start(printer_id: int, data: dict):
                                         timeout=ftp_timeout,
                                         socket_timeout=ftp_timeout,
                                         printer_model=printer.model,
+                                        ftp_port=ftp_port_for(printer),
                                     )
                                 if downloaded and peek_plate_index_in_3mf(retry_temp_path) == expected_plate:
                                     logger.info(
@@ -3510,7 +3627,11 @@ async def _list_timelapse_videos(printer) -> tuple[list[dict], str | None]:
     for timelapse_path in ["/timelapse", "/timelapse/video", "/record", "/recording"]:
         try:
             found_files = await list_files_async(
-                printer.ip_address, printer.access_code, timelapse_path, printer_model=printer.model
+                printer.ip_address,
+                printer.access_code,
+                timelapse_path,
+                printer_model=printer.model,
+                ftp_port=ftp_port_for(printer),
             )
             if found_files:
                 video_files = [
@@ -3687,7 +3808,11 @@ async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[
                 )
 
                 timelapse_data = await download_file_bytes_async(
-                    printer.ip_address, printer.access_code, remote_path, printer_model=printer.model
+                    printer.ip_address,
+                    printer.access_code,
+                    remote_path,
+                    printer_model=printer.model,
+                    ftp_port=ftp_port_for(printer),
                 )
                 if timelapse_data:
                     # Write phase: attach in a fresh short-lived session.
@@ -3735,7 +3860,11 @@ async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[
                     logger.info("[TIMELAPSE] Name-match fallback: '%s' matches '%s'", base_name, fname)
 
                     timelapse_data = await download_file_bytes_async(
-                        printer.ip_address, printer.access_code, remote_path, printer_model=printer.model
+                        printer.ip_address,
+                        printer.access_code,
+                        remote_path,
+                        printer_model=printer.model,
+                        ftp_port=ftp_port_for(printer),
                     )
                     if timelapse_data:
                         # Write phase: attach in a fresh short-lived session.
@@ -4221,6 +4350,117 @@ async def on_print_complete(printer_id: int, data: dict):
     _final_status = data.get("status", "completed")
     if _final_status in ("completed", "failed", "aborted", "cancelled"):
         printer_manager.set_awaiting_plate_clear(printer_id, True)
+        # Server-side bed ejection: on printers with auto-eject and a profile, a
+        # completed print is pushed off the bed and the gate cleared only when every
+        # step worked (services/bed_ejection.py). Never raises into this callback.
+        try:
+            from backend.app.services.bed_ejection import maybe_start_after_print
+
+            await maybe_start_after_print(printer_id, _final_status)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[EJECT] printer %s: could not start auto-eject: %s", printer_id, e)
+    if _final_status == "failed" and data.get("klipper_message"):
+        try:
+            from backend.app.services.failure_detection import record_event
+
+            await record_event(printer_id, "klipper", str(data["klipper_message"]))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[FAILURE] printer %s: could not record the Klipper error: %s", printer_id, e)
+
+    # Klipper / Moonraker printers are live-only (no 3MF archive pipeline).
+    # Record a lightweight Print Log entry and stop here — everything below is
+    # Bambu 3MF/archive handling that doesn't apply. See KLIPPER_SUPPORT_PLAN.md.
+    _is_klipper_print = False
+    try:
+        from datetime import timedelta
+
+        from backend.app.models.printer import Printer
+        from backend.app.services.printer_capabilities import is_external as is_klipper
+
+        async with async_session() as _klip_session:
+            _klip_printer = await _klip_session.get(Printer, printer_id)
+            if _klip_printer is not None and is_klipper(_klip_printer):
+                _is_klipper_print = True
+                from backend.app.services.print_log import write_log_entry
+
+                _status_map = {
+                    "completed": "completed",
+                    "failed": "failed",
+                    "cancelled": "cancelled",
+                    "aborted": "cancelled",
+                }
+                _log_status = _status_map.get(data.get("status", "completed"), "completed")
+                _completed_at = datetime.now(timezone.utc)
+                _started_at = None
+                _dur = data.get("print_duration")
+                if isinstance(_dur, (int, float)) and _dur > 0:
+                    _started_at = _completed_at - timedelta(seconds=float(_dur))
+                _user = _print_user_info or {}
+                # Charge the job to the printer's assigned spool (either inventory
+                # mode). The Bambu tracker below never runs for these printers.
+                if data.get("filament_used_grams") is None and data.get("filament_used_mm"):
+                    from backend.app.services.external_usage import record_external_print_usage
+
+                    async with async_session() as _usage_session:
+                        _usage = await record_external_print_usage(
+                            _usage_session,
+                            printer_id=printer_id,
+                            filament_used_mm=data.get("filament_used_mm"),
+                            print_name=(data.get("filename") or data.get("subtask_name")),
+                            status=_log_status,
+                        )
+                    if _usage:
+                        data = {**data, "filament_used_grams": _usage["grams"]}
+                        try:
+                            await ws_manager.broadcast(
+                                {"type": "spool_usage_logged", "printer_id": printer_id, "usage": [_usage]}
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                    else:
+                        # No spool bound: still record an estimate on the print log.
+                        from backend.app.services.external_usage import density_for, length_to_grams
+
+                        data = {
+                            **data,
+                            "filament_used_grams": round(
+                                length_to_grams(
+                                    float(data["filament_used_mm"]), density_for(data.get("filament_type"))
+                                ),
+                                2,
+                            ),
+                        }
+                from backend.app.services.print_log import compute_entry_cost as _entry_costs
+
+                _k_cost, _k_ekwh, _k_ecost = await _entry_costs(
+                    _klip_session,
+                    data.get("filament_used_grams"),
+                    data.get("filament_type"),
+                    (_completed_at - _started_at).total_seconds() if (_started_at and _completed_at) else None,
+                )
+                await write_log_entry(
+                    _klip_session,
+                    status=_log_status,
+                    print_name=(data.get("filename") or data.get("subtask_name")),
+                    printer_name=_klip_printer.name,
+                    printer_id=printer_id,
+                    started_at=_started_at,
+                    completed_at=_completed_at,
+                    filament_used_grams=data.get("filament_used_grams"),
+                    filament_type=data.get("filament_type"),
+                    cost=_k_cost,
+                    energy_kwh=_k_ekwh,
+                    energy_cost=_k_ecost,
+                    created_by_id=_user.get("user_id"),
+                    created_by_username=_user.get("username"),
+                )
+                await _klip_session.commit()
+                logger.info("[CALLBACK] Klipper print logged (live-only, no archive) for printer %s", printer_id)
+    except Exception:
+        logger.exception("[CALLBACK] Klipper print-complete logging failed for printer %s", printer_id)
+        _is_klipper_print = True  # still skip the Bambu pipeline; it can't apply
+    if _is_klipper_print:
+        return
 
     # MQTT relay - publish print complete
     try:
@@ -4396,6 +4636,7 @@ async def on_print_complete(printer_id: int, data: dict):
                                 printer.access_code,
                                 remote_path,
                                 printer_model=printer.model,
+                                ftp_port=ftp_port_for(printer),
                             )
                         except Exception as e:
                             delete_result = DeleteResult.FAILED
@@ -4474,6 +4715,11 @@ async def on_print_complete(printer_id: int, data: dict):
                 item.completed_at = datetime.now(timezone.utc)
                 if queue_status == "failed" and not item.error_message:
                     item.error_message = _format_hms_error_summary(data.get("hms_errors") or [])
+                if queue_status == "failed":
+                    # Farm queue: requeue a copy at the front while retries remain.
+                    from backend.app.services.farm_queue import requeue_failed
+
+                    await requeue_failed(db, item)
 
                 # Bump usage counters on the source library file so admins can
                 # sort by "last printed" and (eventually) auto-purge stale
@@ -4853,6 +5099,16 @@ async def on_print_complete(printer_id: int, data: dict):
                 if _run_cost is None and _run_status == "completed":
                     _run_cost = _est_cost
 
+                _run_ekwh = _run_ecost = None
+                try:
+                    from backend.app.services.print_log import compute_entry_cost as _entry_costs
+
+                    if archive.started_at and archive.completed_at:
+                        _bd = (archive.completed_at - archive.started_at).total_seconds()
+                        _tmpc, _run_ekwh, _run_ecost = await _entry_costs(db, None, None, _bd)
+                except Exception:
+                    pass
+
                 await write_log_entry(
                     db,
                     archive_id=archive.id,
@@ -4866,6 +5122,8 @@ async def on_print_complete(printer_id: int, data: dict):
                     filament_color=archive.filament_color,
                     filament_used_grams=_run_grams,
                     cost=_run_cost,
+                    energy_kwh=_run_ekwh,
+                    energy_cost=_run_ecost,
                     failure_reason=archive.failure_reason,
                     thumbnail_path=archive.thumbnail_path,
                     created_by_id=archive.created_by_id,
@@ -6245,6 +6503,20 @@ async def lifespan(app: FastAPI):
     # Rehydrate persisted awaiting-plate-clear gate (#961) so prompts survive restarts
     await printer_manager.load_awaiting_plate_clear_from_db()
 
+    # Failure detection: re-hold printers with unacknowledged failures, and start
+    # the stall check (it does nothing until failure_stall_minutes is set).
+    try:
+        from backend.app.services.audit import purge_loop as _audit_purge
+        from backend.app.services.failure_detection import load_holds, stall_loop
+
+        await load_holds()
+        from backend.app.core.tasks import spawn_background_task as _spawn
+
+        _spawn(stall_loop(), name="failure-stall-check")
+        _spawn(_audit_purge(), name="audit-log-purge")
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger(__name__).warning("[FAILURE] startup failed: %s", e)
+
     # Layer change callback for external camera timelapse
     async def on_layer_change(printer_id: int, layer_num: int):
         """Capture timelapse frame on layer change + first layer notification."""
@@ -6499,6 +6771,11 @@ async def lifespan(app: FastAPI):
     await local_backup_service.start_scheduler()
     await obico_detection_service.start()
 
+    # Chat agent (Slack / Discord). Starts nothing unless configured.
+    from backend.app.services.chat_agent.manager import chat_agent_manager
+
+    await chat_agent_manager.start()
+
     # Start the library trash sweeper (#1008)
     await library_trash_service.start_scheduler()
 
@@ -6533,6 +6810,13 @@ async def lifespan(app: FastAPI):
 
     start_loop_watchdog()
 
+    # Broker single-port engine shim (docs/broker-architecture.md): gives routed
+    # printers a loopback address the engine dials unchanged, tunnelling to the
+    # client's ONE gateway port. Per-tenant (one engine container per user).
+    from backend.app.services.broker_shim import start_broker_shim
+
+    start_broker_shim()
+
     # Initialize virtual printer manager and sync from DB
     from backend.app.services.virtual_printer import virtual_printer_manager
 
@@ -6555,6 +6839,12 @@ async def lifespan(app: FastAPI):
     library_trash_service.stop_scheduler()
     archive_purge_service.stop_scheduler()
     obico_detection_service.stop()
+    try:
+        from backend.app.services.chat_agent.manager import chat_agent_manager
+
+        await chat_agent_manager.stop()
+    except Exception as e:  # noqa: BLE001 - shutdown continues
+        logging.debug("chat agent stop failed: %s", e)
     stop_ams_history_recording()
     stop_printer_sensor_history_recording()
     stop_runtime_tracking()
@@ -6563,6 +6853,10 @@ async def lifespan(app: FastAPI):
     from backend.app.services.loop_watchdog import stop_loop_watchdog
 
     stop_loop_watchdog()
+
+    from backend.app.services.broker_shim import stop_broker_shim
+
+    await stop_broker_shim()
     # Tear down all camera fan-out broadcasters (#1089) so subscribers exit
     # cleanly rather than waiting on a queue that nothing will ever fill.
     try:
@@ -6604,10 +6898,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=app_settings.app_name,
-    description="Archive and manage Bambu Lab 3MF files",
+    description="OpenPrintHQ - self-hosted multi-vendor 3D print management",
     version=APP_VERSION,
     lifespan=lifespan,
 )
+
+# Stable operationIds, security schemes, no alias duplicates (core/openapi_spec.py).
+from backend.app.core.openapi_spec import install as _install_openapi  # noqa: E402
+
+_install_openapi(app)
 
 
 # =============================================================================
@@ -6677,6 +6976,10 @@ PUBLIC_API_PATTERNS = [
     # Camera (streams loaded via <img> tag)
     "/camera/stream",  # /printers/{id}/camera/stream
     "/camera/snapshot",  # /printers/{id}/camera/snapshot
+    # WebRTC signalling (#56): the browser posts the SDP offer with the same
+    # ``?token=`` stream token as the MJPEG <img>, so a Cam Wall kiosk can use
+    # it. The route still runs RequireCameraStreamTokenIfAuthEnabled.
+    "/camera/webrtc",  # /printers/{id}/camera/webrtc
     # Streaming-overlay status feed (#2613): OBS loads /overlay/{id} with no login
     # and this backs it, authenticated by an ``overlay``-scoped token in the query
     # string (same reasoning as the camera streams above — no header to carry a
@@ -6880,16 +7183,17 @@ async def auth_middleware(request, call_next):
             from backend.app.core.auth import is_auth_enabled
 
             auth_enabled = await is_auth_enabled(db)
-
-        if not auth_enabled:
-            # Auth disabled, allow all requests
-            return await call_next(request)
     except Exception:
         logging.getLogger(__name__).exception("auth_middleware: failing closed on auth-probe error from %s", path)
         return JSONResponse(
             status_code=503,
             content={"detail": "Authentication service temporarily unavailable"},
         )
+
+    if not auth_enabled:
+        # Auth disabled, allow all requests. Outside the probe's try: an error in the route itself is the
+        # route's (a 500 with its own traceback), not an "authentication unavailable" 503.
+        return await call_next(request)
 
     # Auth is enabled - require valid token
     auth_header = request.headers.get("Authorization")
@@ -7021,62 +7325,87 @@ async def trace_id_middleware(request, call_next):
 
 
 # API routes
-app.include_router(auth.router, prefix=app_settings.api_prefix)
-app.include_router(mfa.router, prefix=app_settings.api_prefix)
-app.include_router(bug_report.router, prefix=app_settings.api_prefix)
-app.include_router(users.router, prefix=app_settings.api_prefix)
-app.include_router(groups.router, prefix=app_settings.api_prefix)
-app.include_router(printers.router, prefix=app_settings.api_prefix)
-app.include_router(archives.router, prefix=app_settings.api_prefix)
-app.include_router(filaments.router, prefix=app_settings.api_prefix)
-app.include_router(inventory.router, prefix=app_settings.api_prefix)
-app.include_router(labels.router, prefix=app_settings.api_prefix)
-app.include_router(settings_routes.router, prefix=app_settings.api_prefix)
-app.include_router(cloud.router, prefix=app_settings.api_prefix)
-app.include_router(orca_cloud.router, prefix=app_settings.api_prefix)
-app.include_router(local_presets.router, prefix=app_settings.api_prefix)
-app.include_router(smart_plugs.router, prefix=app_settings.api_prefix)
-app.include_router(print_log.router, prefix=app_settings.api_prefix)
-app.include_router(print_queue.router, prefix=app_settings.api_prefix)
-app.include_router(kprofiles.router, prefix=app_settings.api_prefix)
-app.include_router(notifications.router, prefix=app_settings.api_prefix)
-app.include_router(notification_templates.router, prefix=app_settings.api_prefix)
-app.include_router(user_notifications.router, prefix=app_settings.api_prefix)
-app.include_router(spoolman.router, prefix=app_settings.api_prefix)
-app.include_router(spoolman_inventory.router, prefix=app_settings.api_prefix)
-app.include_router(updates.router, prefix=app_settings.api_prefix)
-app.include_router(sponsor_prompt.router, prefix=app_settings.api_prefix)
-app.include_router(maintenance.router, prefix=app_settings.api_prefix)
-app.include_router(camera.router, prefix=app_settings.api_prefix)
-app.include_router(camwall.router, prefix=app_settings.api_prefix)
-app.include_router(external_links.router, prefix=app_settings.api_prefix)
-app.include_router(projects.router, prefix=app_settings.api_prefix)
-app.include_router(library.router, prefix=app_settings.api_prefix)
-app.include_router(library_tags.router, prefix=app_settings.api_prefix)
-app.include_router(library_trash.router, prefix=app_settings.api_prefix)
-app.include_router(slice_jobs.router, prefix=app_settings.api_prefix)
-app.include_router(slicer_pipelines.router, prefix=app_settings.api_prefix)
-app.include_router(pipeline_runs.pipeline_run_create_router, prefix=app_settings.api_prefix)
-app.include_router(pipeline_runs.pipeline_run_router, prefix=app_settings.api_prefix)
-app.include_router(slicer_presets.router, prefix=app_settings.api_prefix)
-app.include_router(archive_purge.router, prefix=app_settings.api_prefix)
-app.include_router(makerworld.router, prefix=app_settings.api_prefix)
-app.include_router(api_keys.router, prefix=app_settings.api_prefix)
-app.include_router(webhook.router, prefix=app_settings.api_prefix)
-app.include_router(ams_history.router, prefix=app_settings.api_prefix)
-app.include_router(printer_sensor_history.router, prefix=app_settings.api_prefix)
-app.include_router(system.router, prefix=app_settings.api_prefix)
-app.include_router(support.router, prefix=app_settings.api_prefix)
+# Registered after the auth and trace middlewares, so it runs outermost and
+# also records refused writes (401/403). Plain ASGI: no extra task per request.
+app.add_middleware(AuditMiddleware)
+
+# Per-printer permission scoping (#57): every HTTP router resolves the caller's
+# printer scope and refuses out-of-scope printer_id path/query parameters. The
+# websocket router filters per connection instead (see core/websocket.py).
+_PRINTER_SCOPE_DEPS = [Depends(printer_scope_guard)]
+
+app.include_router(auth.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(audit_log.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(chat_agent.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(mfa.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(bug_report.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(users.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(groups.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(printers.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(printer_hardware.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(printer_groups.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(archives.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(filaments.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(inventory.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(labels.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(settings_routes.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(cloud.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(orca_cloud.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(local_presets.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(smart_plugs.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(print_log.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(print_queue.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(kprofiles.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(notifications.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(notification_templates.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(user_notifications.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(spoolman.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(spoolman_inventory.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(spoolman_migration.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(updates.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(sponsor_prompt.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(maintenance.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(camera.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(camera_webrtc.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(camwall.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(external_links.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(projects.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(library.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(library_tags.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(library_trash.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(slice_jobs.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(slicer_pipelines.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(
+    pipeline_runs.pipeline_run_create_router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS
+)
+app.include_router(pipeline_runs.pipeline_run_router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(slicer_presets.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(archive_purge.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(makerworld.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(api_keys.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(webhook.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(ams_history.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(printer_sensor_history.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(system.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(support.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
 app.include_router(websocket.router, prefix=app_settings.api_prefix)
-app.include_router(discovery.router, prefix=app_settings.api_prefix)
-app.include_router(pending_uploads.router, prefix=app_settings.api_prefix)
-app.include_router(firmware.router, prefix=app_settings.api_prefix)
-app.include_router(github_backup.router, prefix=app_settings.api_prefix)
-app.include_router(local_backup.router, prefix=app_settings.api_prefix)
-app.include_router(obico.router, prefix=app_settings.api_prefix)
-app.include_router(metrics.router, prefix=app_settings.api_prefix)
-app.include_router(virtual_printers.router, prefix=app_settings.api_prefix)
-app.include_router(spoolbuddy.router, prefix=app_settings.api_prefix)
+app.include_router(discovery.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(pending_uploads.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(firmware.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(github_backup.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(local_backup.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(obico.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(metrics.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(virtual_printers.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(spoolbuddy.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(inventory_reconciliation.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(ejection_profiles.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(failure_events.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(alarms.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(filament_matching.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(farm_stats.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(library_uploads.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
+app.include_router(push.router, prefix=app_settings.api_prefix, dependencies=_PRINTER_SCOPE_DEPS)
 
 
 # Serve static files (React build)
@@ -7110,7 +7439,7 @@ if app_settings.static_dir.exists() and any(app_settings.static_dir.iterdir()):
         )
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 async def serve_frontend():
     """Serve the React frontend."""
     index_file = app_settings.static_dir / "index.html"
@@ -7146,7 +7475,7 @@ async def health_check():
 # `curl -I` use HEAD; FastAPI's @app.get only registers GET, so HEAD answers
 # with 405 Method Not Allowed and shows up as a "broken manifest" red herring
 # in deployment debugging.
-@app.api_route("/manifest.json", methods=["GET", "HEAD"])
+@app.api_route("/manifest.json", methods=["GET", "HEAD"], include_in_schema=False)
 async def serve_manifest():
     """Serve PWA manifest."""
     manifest_file = app_settings.static_dir / "manifest.json"
@@ -7155,7 +7484,7 @@ async def serve_manifest():
     return {"error": "Manifest not found"}
 
 
-@app.api_route("/sw.js", methods=["GET", "HEAD"])
+@app.api_route("/sw.js", methods=["GET", "HEAD"], include_in_schema=False)
 async def serve_service_worker():
     """Serve service worker."""
     sw_file = app_settings.static_dir / "sw.js"
@@ -7168,7 +7497,7 @@ async def serve_service_worker():
     return {"error": "Service worker not found"}
 
 
-@app.api_route("/sw-register.js", methods=["GET", "HEAD"])
+@app.api_route("/sw-register.js", methods=["GET", "HEAD"], include_in_schema=False)
 async def serve_sw_register():
     """Serve the service-worker registration bootstrap script.
 
@@ -7212,7 +7541,7 @@ def _gcode_viewer_response(rel: str) -> FileResponse:
     raise _HTTPException(status_code=404)
 
 
-@app.get("/gcode-viewer/")
+@app.get("/gcode-viewer/", include_in_schema=False)
 async def serve_gcode_viewer_index() -> FileResponse:
     """Raw PrettyGCode viewer for the iframe. The bare ``/gcode-viewer``
     (no trailing slash) intentionally falls through to the SPA catch-all so a
@@ -7221,13 +7550,13 @@ async def serve_gcode_viewer_index() -> FileResponse:
     return _gcode_viewer_response("index.html")
 
 
-@app.get("/gcode-viewer/{file_path:path}")
+@app.get("/gcode-viewer/{file_path:path}", include_in_schema=False)
 async def serve_gcode_viewer_file(file_path: str) -> FileResponse:
     return _gcode_viewer_response(file_path)
 
 
 # Catch-all route for React Router (must be last)
-@app.get("/{full_path:path}")
+@app.get("/{full_path:path}", include_in_schema=False)
 async def serve_spa(full_path: str):
     """Serve React app for client-side routing."""
     # Don't intercept API routes - raise proper 404 so FastAPI can handle redirects

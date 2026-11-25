@@ -1,8 +1,39 @@
 import asyncio
 import json
+import logging
 from typing import Any
 
 from fastapi import WebSocket
+
+logger = logging.getLogger(__name__)
+
+
+def message_printer_id(message: dict[str, Any]) -> int | None:
+    """The printer a broadcast is about: top-level ``printer_id``, else ``data.printer_id``."""
+    pid = message.get("printer_id")
+    if pid is None:
+        data = message.get("data")
+        if isinstance(data, dict):
+            pid = data.get("printer_id")
+    try:
+        return int(pid) if pid is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def connection_may_receive(connection: WebSocket, message: dict[str, Any]) -> bool:
+    """Per-printer scoping (#57): a scoped socket only hears about its printers.
+
+    ``connection.state.printer_visible_ids`` is None for an unscoped socket and
+    a set of printer ids for a scoped one (stamped at connect, refreshed by
+    :meth:`ConnectionManager.refresh_printer_scopes`). Messages that name no
+    printer go to everyone, as before.
+    """
+    visible = getattr(connection.state, "printer_visible_ids", None)
+    if visible is None:
+        return True
+    pid = message_printer_id(message)
+    return pid is None or pid in visible
 
 
 class ConnectionManager:
@@ -33,6 +64,8 @@ class ConnectionManager:
         async with self._lock:
             disconnected = []
             for connection in self.active_connections:
+                if not connection_may_receive(connection, message):
+                    continue
                 try:
                     await connection.send_text(data)
                 except Exception:
@@ -70,6 +103,8 @@ class ConnectionManager:
                 conn_uid = getattr(connection.state, "bambuddy_principal_user_id", None)
                 if conn_uid != user_id:
                     continue
+                if not connection_may_receive(connection, message):
+                    continue
                 try:
                     await connection.send_text(data)
                 except Exception:
@@ -78,6 +113,34 @@ class ConnectionManager:
             for conn in disconnected:
                 if conn in self.active_connections:
                     self.active_connections.remove(conn)
+
+    async def refresh_printer_scopes(self) -> None:
+        """Recompute every socket's visible printers after a scope-relevant change.
+
+        Called when a group's scope or membership changes and when printers
+        are added, removed or moved to another location. Sockets without a
+        scope principal (auth disabled, ownerless key) are left alone.
+        """
+        from backend.app.core import database
+        from backend.app.core.printer_scope import scope_for_user_id, visible_printer_ids
+
+        async with self._lock:
+            connections = list(self.active_connections)
+        targets = [c for c in connections if getattr(c.state, "printer_scope_user_id", None) is not None]
+        if not targets:
+            return
+        try:
+            async with database.async_session() as db:
+                cache: dict[int, set[int] | None] = {}
+                for conn in targets:
+                    uid = conn.state.printer_scope_user_id
+                    if uid not in cache:
+                        cache[uid] = await visible_printer_ids(db, await scope_for_user_id(db, uid))
+                    conn.state.printer_visible_ids = cache[uid]
+        except Exception:  # SEC-AUTH-EXC: a failed refresh must not widen access; scoped sockets see nothing
+            logger.warning("Printer scope refresh failed; hiding all printers from scoped sockets", exc_info=True)
+            for conn in targets:
+                conn.state.printer_visible_ids = set()
 
     async def send_printer_status(self, printer_id: int, status: dict):
         """Send printer status update to all clients."""

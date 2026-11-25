@@ -46,6 +46,9 @@ class PrintQueueItemCreate(BaseModel):
     printer_id: int | None = None  # None = unassigned, user assigns later
     target_model: str | None = None  # Target printer model (mutually exclusive with printer_id)
     target_location: str | None = None  # Target location filter (only used with target_model)
+    # Target printer group. Mutually exclusive with printer_id and target_model.
+    # The scheduler runs the item on whichever group member frees up first.
+    target_group_id: int | None = None
     required_filament_types: list[str] | None = None  # Required filament types for model-based assignment
     filament_overrides: list[dict] | None = None  # Filament overrides for model-based assignment
     # Either archive_id OR library_file_id must be provided
@@ -55,6 +58,10 @@ class PrintQueueItemCreate(BaseModel):
     require_previous_success: bool = False
     auto_off_after: bool = False  # Power off printer after print completes
     manual_start: bool = False  # Requires manual trigger to start (staged)
+    max_retries: int = Field(default=0, ge=0, le=10)  # Requeue automatically after a failed print
+    priority: int = Field(default=50, ge=0, le=100)  # 25 low, 50 normal, 75 high, 100 urgent; higher goes first
+    # Filament matching level: exact | close | family | any; None = the farm default
+    match_level: Literal["exact", "close", "family", "any"] | None = None
     insert_at_top: bool = False  # Insert ahead of other pending items in the same queue scope
     insert_position: int | None = None  # 1-indexed insertion position for priority queueing
     # Persistent "Print Anyway" acknowledgement (#1698-followup). When set,
@@ -102,12 +109,19 @@ class PrintQueueItemUpdate(BaseModel):
     printer_id: int | None = None
     target_model: str | None = None  # Target printer model (mutually exclusive with printer_id)
     target_location: str | None = None  # Target location filter (only used with target_model)
+    # Swap the file a pending item prints (Artisan Hub's plate reslicer: the same job,
+    # resliced for the plate on the printer it is pinned to). Pending items only.
+    library_file_id: int | None = None
+    target_group_id: int | None = None  # Target printer group (mutually exclusive with the two above)
     filament_overrides: list[dict] | None = None  # Filament overrides for model-based assignment
     position: int | None = None
     scheduled_time: datetime | None = None
     require_previous_success: bool | None = None
     auto_off_after: bool | None = None
     manual_start: bool | None = None
+    max_retries: int | None = Field(default=None, ge=0, le=10)
+    priority: int | None = Field(default=None, ge=0, le=100)
+    match_level: Literal["exact", "close", "family", "any"] | None = None
     ams_mapping: list[int] | None = None
     plate_id: int | None = None
     # Print options
@@ -133,9 +147,13 @@ class PrintQueueItemResponse(BaseModel):
     printer_id: int | None  # None = unassigned
     target_model: str | None = None  # Target printer model for model-based assignment
     target_location: str | None = None  # Target location filter for model-based assignment
+    target_group_id: int | None = None  # Target printer group for group-based assignment
+    target_group_name: str | None = None  # Resolved group name, for display
     required_filament_types: list[str] | None = None  # Required filament types for model-based assignment
     filament_overrides: list[dict] | None = None  # Filament overrides for model-based assignment
     waiting_reason: str | None = None  # Why a model-based job hasn't started yet
+    cancel_reason: str | None = None  # Why it was cancelled before it started
+    cancelled_by: str | None = None
     archive_id: int | None  # None if library_file_id is set (archive created at print start)
     library_file_id: int | None  # For queue items from library files
     position: int
@@ -168,6 +186,15 @@ class PrintQueueItemResponse(BaseModel):
     completed_at: UTCDatetime
     error_message: str | None
     created_at: UTCDatetime
+    max_retries: int = 0
+    priority: int = 50
+    # Filament matching: the item's level (None = farm default), whether someone mapped its
+    # filaments, and why it can't start because of filament (None when it can).
+    match_level: str | None = None
+    filament_confirmed: bool = False
+    filament_unmatched: dict | None = None
+    retry_count: int = 0
+    retry_of_id: int | None = None
 
     # Nested info for UI (populated in route)
     archive_name: str | None = None

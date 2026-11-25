@@ -21,6 +21,19 @@ class PrintQueueItem(Base):
     # Target location filter for model-based assignment (only used with target_model)
     # When set, only printers in this location are considered
     target_location: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Target printer group (mutually exclusive with printer_id and target_model).
+    # When set, the scheduler assigns the item to whichever member of the group
+    # frees up first, using the same idle/connected/filament checks as
+    # model-based assignment. ON DELETE SET NULL so deleting a group leaves the
+    # item unassigned and visibly waiting rather than silently dropping it.
+    target_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("printer_groups.id", ondelete="SET NULL"), nullable=True
+    )
+    # Eager-loaded so the queue serializer can show the group name without a
+    # per-row lazy load (which would blow up under async as a MissingGreenlet).
+    target_group: Mapped["PrinterGroup | None"] = relationship(  # noqa: F821
+        "PrinterGroup", lazy="selectin"
+    )
     # Required filament types for model-based assignment (JSON array, e.g., '["PLA", "PETG"]')
     # Used by scheduler to validate printer has compatible filaments loaded
     required_filament_types: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -73,6 +86,20 @@ class PrintQueueItem(Base):
     # out with it. The counter bounds that loop; see DISPATCH_MAX_ATTEMPTS.
     dispatch_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
+    # Automatic retry after a failed print (farm queue). When the print fails and
+    # retry_count < max_retries, a fresh copy is queued at the front with
+    # retry_count + 1 and retry_of_id pointing at the first attempt; the failed row
+    # stays in history. 0 = no retries (the default, and the previous behaviour).
+    max_retries: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    retry_of_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Priority, 0-100 on Watchtower's scale (25 low, 50 normal, 75 high, 100 urgent).
+    # Higher dispatches first within the same printer or target (model / group);
+    # equal priority keeps queue-position order, so 50 everywhere behaves exactly
+    # as before. Copied onto automatic retries.
+    priority: Mapped[int] = mapped_column(Integer, default=50, server_default="50")
+
     # H2C dual-nozzle-rack slicer pick preservation (#1780). BambuStudio's
     # project_file MQTT command for rack-swap-capable models (O1C2 today)
     # carries per-filament physical nozzle position IDs in `nozzle_mapping`,
@@ -111,6 +138,16 @@ class PrintQueueItem(Base):
     preheat_chamber_target_override: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Status: pending, printing, completed, failed, skipped, cancelled
+    # Filament matching (services/filament_match.py, docs/filament-matching.md).
+    # match_level: exact | close | family | any; NULL = the farm default.
+    match_level: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Someone mapped this item's filaments to a printer's loaded slots: the
+    # scheduler prints it with that mapping and doesn't check colours again.
+    filament_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Why the next job can't start on its printer(s) because of filament: JSON
+    # {"since", "level", "printers": [{printer_id, name, slots: [...]}]}; NULL = matched.
+    filament_unmatched: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     status: Mapped[str] = mapped_column(String(20), default="pending")
 
     # Dispatch claim (#2615). Set atomically by the scheduler the moment it
@@ -151,6 +188,9 @@ class PrintQueueItem(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Why a job was cancelled before it started, and by whom (POST /queue/{id}/cancel).
+    cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancelled_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

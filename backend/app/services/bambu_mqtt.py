@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import ssl
 import threading
 import time
@@ -230,6 +231,17 @@ class MQTTLogEntry:
     topic: str
     direction: str  # "in" or "out"
     payload: dict
+
+
+def hms_level(code: int) -> int:
+    """Severity of an hms[] entry from its 32-bit ``code`` word.
+
+    The level is the high half (1 fatal, 2 serious, 3 common, 4 info). Bambu
+    Studio treats anything else as unknown; that is graded serious (2) here,
+    which is what the parser used before for a missing severity.
+    """
+    level = (int(code) >> 16) & 0xFFFF
+    return level if 1 <= level <= 4 else 2
 
 
 @dataclass
@@ -540,6 +552,14 @@ class BambuMQTTClient:
     _request_topic_cache: dict[str, bool] = {}
     # Counter for generating unique MQTT client IDs across instances.
     _client_instance_counter: int = 0
+    # This process's own tag for its MQTT client ids. The process id alone is
+    # not unique: in a container it is 1, so two Bambuddy-based farms watching
+    # one printer (a test or old install beside the live one) both called
+    # their first client "bambuddy_<serial>_1_1". A printer drops a session
+    # when another connects with its id, so the two took the printer from each
+    # other every few seconds and it showed offline. The tag makes each
+    # process's ids its own.
+    _client_tag: str = secrets.token_hex(4)
 
     # #2582: how long to wait for the AMS telemetry to echo back an assignment
     # before declaring it un-confirmed. The printer re-broadcasts tray state
@@ -553,6 +573,7 @@ class BambuMQTTClient:
         serial_number: str,
         access_code: str,
         model: str | None = None,
+        mqtt_port: int = 8883,
         on_state_change: Callable[[PrinterState], None] | None = None,
         on_print_start: Callable[[dict], None] | None = None,
         on_print_complete: Callable[[dict], None] | None = None,
@@ -568,6 +589,7 @@ class BambuMQTTClient:
         self.serial_number = serial_number
         self.access_code = access_code
         self.model = model
+        self.mqtt_port = mqtt_port or self.MQTT_PORT
         # Last value logged by _debug_on_change(), keyed by log site. See there.
         self._debug_last: dict[str, object] = {}
         self.on_state_change = on_state_change
@@ -622,6 +644,17 @@ class BambuMQTTClient:
         self._drying_targets: dict[int, dict[str, object]] = {}
 
         self.state = PrinterState()
+        # Agent-local model (OctoEverywhere-inspired, AGPL-3.0): when this session
+        # runs THROUGH the connector relay, the transport has higher latency/jitter
+        # than a LAN MQTT connection, so we use longer staleness thresholds and
+        # require sustained staleness (hysteresis) before flipping to offline — a
+        # single relay hiccup must not oscillate the printer's online state.
+        # Routed sessions target the control-plane relay host rather than a LAN IP.
+        _relay_host = os.environ.get("OPHQ_RELAY_HOST", "")
+        self._is_routed = str(ip_address).startswith("openprinthq-") or (
+            bool(_relay_host) and str(ip_address) == _relay_host
+        )
+        self._consecutive_stale = 0
         self._client: mqtt.Client | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._previous_gcode_state: str | None = None
@@ -755,13 +788,24 @@ class BambuMQTTClient:
 
     # Maximum time (seconds) without a message before considering connection stale
     STALE_TIMEOUT = 60.0
+    # When routed through a connector, allow more slack before considering the
+    # transport stale (relay latency + Bambu's own ~1Hz push cadence).
+    STALE_TIMEOUT_ROUTED = 150.0
+    # Number of consecutive stale evaluations required before flipping offline.
+    # LAN: flip promptly (1). Routed: require sustained staleness so a brief
+    # tunnel hiccup between pushes doesn't oscillate the card.
+    STALE_HYSTERESIS_ROUTED = 2
+
+    @property
+    def _stale_timeout(self) -> float:
+        return self.STALE_TIMEOUT_ROUTED if self._is_routed else self.STALE_TIMEOUT
 
     def is_stale(self) -> bool:
         """Check if the connection is stale (no messages for too long)."""
         if self._last_message_time == 0:
             return False  # Never received a message yet
         time_since_last = time.time() - self._last_message_time
-        return time_since_last > self.STALE_TIMEOUT
+        return time_since_last > self._stale_timeout
 
     def mark_power_off(self) -> bool:
         """Presume the printer lost power (smart plug switched off).
@@ -820,6 +864,17 @@ class BambuMQTTClient:
     def check_staleness(self) -> bool:
         """Check staleness and update connected state if stale. Returns True if connected."""
         if self.state.connected and self.is_stale():
+            # Hysteresis: for connector-routed printers, require sustained
+            # staleness before flipping offline so a single relay gap between
+            # Bambu pushes doesn't oscillate the card (OctoEverywhere-style
+            # stability; see agent-local model). LAN printers flip promptly.
+            self._consecutive_stale += 1
+            if self._is_routed and self._consecutive_stale < self.STALE_HYSTERESIS_ROUTED:
+                # Still within the grace window — keep the connection considered
+                # up, but do kick a reconnect attempt in the background.
+                self._maybe_background_reconnect()
+                return self.state.connected
+
             # Don't force-close again if we already did recently — give paho
             # time to reconnect and the printer time to send its first message.
             now = time.time()
@@ -854,7 +909,23 @@ class BambuMQTTClient:
             # gets the hard-reset path) but the dispatcher exists for safety.
             self._stale_reconnecting = True
             self._reset_client_for_reconnect()
+        elif not self.is_stale():
+            # Fresh again — clear the hysteresis counter.
+            self._consecutive_stale = 0
         return self.state.connected
+
+    def _maybe_background_reconnect(self) -> None:
+        """Kick a reconnect during the hysteresis grace window without flipping
+        the visible connected state yet. Rate-limited by STALE_RECONNECT_COOLDOWN."""
+        now = time.time()
+        if now - self._last_stale_reconnect < self.STALE_RECONNECT_COOLDOWN:
+            return
+        self._last_stale_reconnect = now
+        self._stale_reconnecting = True
+        try:
+            self._reset_client_for_reconnect()
+        except Exception:
+            pass
 
     def force_reconnect_stale_session(self, reason: str) -> None:
         # Heals the #887/#936/#1136 half-broken session: telemetry keeps
@@ -3322,7 +3393,8 @@ class BambuMQTTClient:
                 for hms in hms_list:
                     if isinstance(hms, dict):
                         # HMS format: {"attr": attribute_code, "code": error_code}
-                        # attr contains module/severity info, code contains error number
+                        # attr: module id, module number, part id, reserved (a byte each);
+                        # code: message level (high half), message code (low half).
                         # Both are needed to construct the wiki URL
                         attr = hms.get("attr", 0)
                         code = hms.get("code", 0)
@@ -3330,8 +3402,11 @@ class BambuMQTTClient:
                             attr = int(attr.replace("0x", ""), 16) if attr else 0
                         if isinstance(code, str):
                             code = int(code.replace("0x", ""), 16) if code else 0
-                        # Severity is in attr byte 1 (bits 8-15)
-                        severity = (attr >> 8) & 0xF
+                        # Severity is the message level in the high half of code
+                        # (Bambu Studio DevHMSItem::parse_hms_info: 1 fatal, 2 serious,
+                        # 3 common, 4 info). attr bits 8-15 are the part id: reading
+                        # them as the level graded H2C 0C00_0100_0002_0015 fatal.
+                        severity = hms_level(code)
                         # Module is in attr byte 3 (bits 24-31)
                         module = (attr >> 24) & 0xFF
                         # Skip non-error status codes — all real HMS errors
@@ -3361,7 +3436,7 @@ class BambuMQTTClient:
                                 code=f"0x{code:x}" if code else "0x0",
                                 attr=attr,
                                 module=module,
-                                severity=severity if severity > 0 else 2,
+                                severity=severity,
                                 actions=actions,
                                 job_id=self.state.subtask_id,
                                 full_code=full_code,
@@ -4138,7 +4213,10 @@ class BambuMQTTClient:
         """
         self._loop = loop
         BambuMQTTClient._client_instance_counter += 1
-        client_id = f"bambuddy_{self.serial_number}_{os.getpid()}_{BambuMQTTClient._client_instance_counter}"
+        client_id = (
+            f"bambuddy_{self.serial_number}_{BambuMQTTClient._client_tag}_{os.getpid()}"
+            f"_{BambuMQTTClient._client_instance_counter}"
+        )
         self._client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
             client_id=client_id,
@@ -4179,7 +4257,7 @@ class BambuMQTTClient:
         # trigger false disconnects.  Stale detection (60s no messages) handles
         # the P1S/P1P firmware bug where the broker stops publishing but the
         # TCP connection stays alive.
-        self._client.connect_async(self.ip_address, self.MQTT_PORT, keepalive=30)
+        self._client.connect_async(self.ip_address, self.mqtt_port, keepalive=30)
         self._client.loop_start()
 
     def start_print(

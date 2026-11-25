@@ -2,10 +2,11 @@ import asyncio
 import logging
 import re
 import zipfile
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import Response
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core import database
@@ -18,7 +19,9 @@ from backend.app.core.auth import (
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import PrinterScope, apply_printer_scope, get_printer_scope
 from backend.app.core.tasks import spawn_background_task
+from backend.app.core.websocket import ws_manager
 from backend.app.models.ams_label import AmsLabel
 from backend.app.models.printer import Printer
 from backend.app.models.slot_preset import SlotPresetMapping
@@ -33,6 +36,8 @@ from backend.app.schemas.printer import (
     HMSErrorResponse,
     NozzleInfoResponse,
     NozzleRackSlot,
+    OutOfServiceEntry,
+    OutOfServiceRequest,
     PrinterCreate,
     PrinterDiagnosticResult,
     PrinterResponse,
@@ -46,6 +51,7 @@ from backend.app.services.bambu_ftp import (
     delete_file_async,
     download_file_bytes_async,
     download_file_try_paths_async,
+    ftp_port_for,
     get_cached_3mf,
     get_storage_info_async,
     list_files_async,
@@ -62,11 +68,52 @@ from backend.app.services.printer_manager import (
     supports_drying,
     supports_drying_while_printing,
 )
+from backend.app.services.webrtc_camera import apply_go2rtc_fields
 from backend.app.utils.filament_ids import filament_id_to_setting_id
 from backend.app.utils.http import build_content_disposition
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/printers", tags=["printers"])
+
+
+def _ensure_client_supports(client, method: str, feature: str) -> None:
+    """Block Bambu-only control actions on non-Bambu clients.
+
+    Defense-in-depth: the frontend already hides these controls for Klipper
+    printers, but the endpoints must fail cleanly (400) rather than 500 with an
+    AttributeError if something calls them anyway. The Moonraker client simply
+    doesn't implement these Bambu-specific methods.
+    """
+    if not hasattr(client, method) or method in getattr(client, "UNSUPPORTED_METHODS", frozenset()):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "unsupported_for_printer_type",
+                "message": f"{feature} is not supported for this printer type.",
+            },
+        )
+
+
+def _set_heater(client, heater: str, target: int, nozzle: int = 0) -> bool:
+    """Set a nozzle or bed target on any transport.
+
+    Bambu (and Moonraker, which aliases them) implement ``set_nozzle_temperature``
+    / ``set_bed_temperature``; the other external clients (OctoPrint, Duet,
+    FlashForge, MKS, Snapmaker) implement ``set_nozzle_temp`` / ``set_bed_temp``
+    for a single extruder. A transport with neither, or one that lists them as
+    unsupported (PrusaLink), gets a 400 instead of a 500 or a silent no-op.
+    """
+    bambu_style = "set_nozzle_temperature" if heater == "nozzle" else "set_bed_temperature"
+    generic = "set_nozzle_temp" if heater == "nozzle" else "set_bed_temp"
+    unsupported = getattr(client, "UNSUPPORTED_METHODS", frozenset())
+    if hasattr(client, bambu_style) and bambu_style not in unsupported:
+        fn = getattr(client, bambu_style)
+        return fn(target, nozzle) if heater == "nozzle" else fn(target)
+    _ensure_client_supports(client, generic, "Set temperature")
+    if heater == "nozzle" and nozzle != 0:
+        raise HTTPException(400, "This printer type has a single nozzle (index 0)")
+    return getattr(client, generic)(target)
+
 
 # Seconds the /hms/execute-action route waits for a printer status push
 # confirming the command landed before reporting 502 to the UI. Module-level
@@ -107,6 +154,7 @@ def _serialize_printer(printer: Printer, *, include_secret: bool):
 async def list_printers(
     user: User | None = RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
     db: AsyncSession = Depends(get_db),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """List all configured printers.
 
@@ -114,10 +162,37 @@ async def list_printers(
     to see it (Admin / Operator JWT, or auth-disabled mode). Viewers and
     API keys never receive it.
     """
-    result = await db.execute(select(Printer).order_by(Printer.name))
+    result = await db.execute(apply_printer_scope(select(Printer), scope).order_by(Printer.name))
     printers = list(result.scalars().all())
     include_secret = await _caller_can_view_printer_secrets(user, db)
     return [_serialize_printer(p, include_secret=include_secret) for p in printers]
+
+
+@router.get("/klipper/profiles")
+async def list_klipper_profiles(
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+):
+    """List the supported Klipper/Voron printer profiles for the add dialog.
+
+    Data-driven from the profile registry so the UI stays in sync as profiles
+    are added. Each entry carries geometry + capability hints the frontend uses
+    to render the model dropdown and gate the levelling control.
+    """
+    from backend.app.services.klipper.profiles import list_profiles
+
+    return [
+        {
+            "key": p.key,
+            "label": p.label,
+            "bed": list(p.bed_size_mm),
+            "extruder_count": p.extruder_count,
+            "has_chamber": p.has_chamber,
+            "has_leveling": p.macros.level is not None,
+            "leveling_label": p.leveling_label,
+            "experimental": p.experimental,
+        }
+        for p in list_profiles()
+    ]
 
 
 @router.post("/", response_model=PrinterResponse)
@@ -134,39 +209,91 @@ async def create_printer(
     were turning into support tickets that all traced back to a mistyped
     access code.
     """
-    # Check if serial number already exists
-    result = await db.execute(select(Printer).where(Printer.serial_number == printer_data.serial_number))
-    if result.scalar_one_or_none():
-        raise HTTPException(400, "Printer with this serial number already exists")
+    if printer_data.connection_type != "bambu":
+        # External printer (Moonraker/OctoPrint/PrusaLink): no MQTT pre-flight.
+        # Synthesize a stable, unique serial now (these have no serial concept).
+        import uuid
 
-    test_result = await printer_manager.test_connection(
-        ip_address=printer_data.ip_address,
-        serial_number=printer_data.serial_number,
-        access_code=printer_data.access_code,
-    )
-    if not test_result.get("success"):
-        # The frontend renders the user-facing message via i18n on `code`;
-        # `message` is an English fallback for non-UI clients (curl / scripts).
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "printer_connection_failed",
-                "message": (
-                    "Could not connect to the printer. Verify IP address, serial number, "
-                    "and access code, and confirm LAN-only mode is enabled. "
-                    "The printer was not added."
-                ),
-            },
-        )
+        data = apply_go2rtc_fields(printer_data.model_dump(exclude={"defer_connection_test"}))
+        if not data.get("serial_number"):
+            data["serial_number"] = f"{printer_data.connection_type}:{uuid.uuid4().hex[:16]}"
+        # Store "" not NULL: legacy SQLite made access_code NOT NULL and can't
+        # drop that via ALTER. External clients ignore access_code anyway.
+        data["access_code"] = data.get("access_code") or ""
+        printer = Printer(**data)
+    else:
+        # Check if serial number already exists
+        result = await db.execute(select(Printer).where(Printer.serial_number == printer_data.serial_number))
+        if result.scalar_one_or_none():
+            raise HTTPException(400, "Printer with this serial number already exists")
 
-    printer = Printer(**printer_data.model_dump())
+        # Connector-routed (remote-LAN) Bambu printers can't be reached directly
+        # from a cloud-hosted engine at create time — they're only reachable once
+        # the control-plane stands up the relay AFTER creation. Skip the pre-flight
+        # in that case; the connection is validated once the route is active.
+        if not printer_data.defer_connection_test:
+            test_result = await printer_manager.test_connection(
+                ip_address=printer_data.ip_address,
+                serial_number=printer_data.serial_number,
+                access_code=printer_data.access_code,
+            )
+            if not test_result.get("success"):
+                # The frontend renders the user-facing message via i18n on `code`;
+                # `message` is an English fallback for non-UI clients (curl / scripts).
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "printer_connection_failed",
+                        "message": (
+                            "Could not connect to the printer. Verify IP address, serial number, "
+                            "and access code, and confirm LAN-only mode is enabled. "
+                            "The printer was not added."
+                        ),
+                    },
+                )
+
+        printer = Printer(**apply_go2rtc_fields(printer_data.model_dump(exclude={"defer_connection_test"})))
+
     db.add(printer)
     await db.commit()
     await db.refresh(printer)
+    # A new printer may fall inside a location scope (#57).
+    await ws_manager.refresh_printer_scopes()
 
     # Connect to the printer
     if printer.is_active:
         await printer_manager.connect_printer(printer)
+
+    # Best-effort camera auto-detect so a freshly-added external printer shows
+    # its stream without manual URL entry. Never fatal.
+    if printer.connection_type != "bambu" and not printer.external_camera_url:
+        try:
+            stream = snap = None
+            if printer.connection_type == "klipper":
+                from backend.app.services.klipper import moonraker_files
+
+                webcams = await moonraker_files.get_webcams(
+                    printer.ip_address, printer.moonraker_port or 7125, api_key=printer.moonraker_api_key
+                )
+                if webcams:
+                    cam = webcams[0]
+                    stream = moonraker_files.absolutise_webcam_url(printer.ip_address, cam.get("stream_url"))
+                    snap = moonraker_files.absolutise_webcam_url(printer.ip_address, cam.get("snapshot_url"))
+            elif printer.connection_type in ("octoprint", "prusalink"):
+                from backend.app.services.octoprint import octoprint_files
+
+                stream = await octoprint_files.get_webcam_snapshot_url(
+                    printer.ip_address, printer.moonraker_port or 80, api_key=printer.moonraker_api_key
+                )
+            if stream:
+                printer.external_camera_url = stream
+                printer.external_camera_snapshot_url = snap
+                printer.external_camera_type = "mjpeg"
+                printer.external_camera_enabled = True
+                await db.commit()
+                await db.refresh(printer)
+        except Exception:
+            logger.info("Webcam auto-detect skipped for printer %s", printer.id, exc_info=True)
 
     return printer
 
@@ -195,6 +322,7 @@ async def get_available_filaments(
     location: str | None = Query(None, description="Optional location filter"),
     _=RequirePermissionIfAuthEnabled(Permission.QUEUE_CREATE),
     db: AsyncSession = Depends(get_db),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Get deduplicated list of filaments loaded across all active printers of a given model.
 
@@ -210,6 +338,7 @@ async def get_available_filaments(
     )
     if location:
         query = query.where(Printer.location == location)
+    query = apply_printer_scope(query, scope)
 
     result = await db.execute(query)
     printers_list = list(result.scalars().all())
@@ -298,9 +427,10 @@ async def get_available_filaments(
 async def get_developer_mode_warnings(
     _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
     db: AsyncSession = Depends(get_db),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Check if any connected printer lacks developer LAN mode."""
-    result = await db.execute(select(Printer).where(Printer.is_active == True))  # noqa: E712
+    result = await db.execute(apply_printer_scope(select(Printer).where(Printer.is_active == True), scope))  # noqa: E712
     printers = result.scalars().all()
     statuses = printer_manager.get_all_statuses()
 
@@ -315,6 +445,184 @@ async def get_developer_mode_warnings(
                 }
             )
     return warnings
+
+
+@router.get("/catalog")
+async def printer_catalog(
+    search: str | None = Query(None, description="Match vendor or model"),
+    mechanism: str | None = Query(None, description="Filter by comm mechanism"),
+    limit: int = Query(1000, ge=1, le=2000),
+    db: AsyncSession = Depends(get_db),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+):
+    """OrcaSlicer-derived printer catalog (control-command framework).
+
+    Lets the add-printer flow offer EVERY printer model OrcaSlicer supports, each
+    with its communication mechanism + capability flags + count of supported
+    control commands. Read-only over the ctl_* reference tables. Declared before
+    ``/{printer_id}`` so it isn't shadowed. Returns an empty catalog (not 500) if
+    the framework tables aren't installed in this tenant DB.
+    """
+    try:
+        conds, params = [], {"lim": limit}
+        if search:
+            conds.append("(pt.vendor ILIKE :q OR pt.model ILIKE :q)")
+            params["q"] = f"%{search}%"
+        if mechanism:
+            conds.append("pt.mechanism_key = :mech")
+            params["mech"] = mechanism
+        where = (" WHERE " + " AND ".join(conds)) if conds else ""
+        rows = (
+            (
+                await db.execute(
+                    text(
+                        "SELECT pt.id, pt.vendor, pt.model, pt.dialect_key, pt.mechanism_key, "
+                        "pt.gcode_flavor, pt.nozzle_count, pt.has_chamber_heater, pt.has_aux_fan, "
+                        "pt.is_multi_nozzle, pt.popularity_rank, pt.difficulty, "
+                        "(SELECT count(*) FROM ctl_printer_command_support s "
+                        " WHERE s.printer_type_id=pt.id AND s.supported) AS supported_commands "
+                        f"FROM ctl_printer_type pt{where} "
+                        "ORDER BY pt.popularity_rank NULLS LAST, pt.vendor, pt.model LIMIT :lim"
+                    ),
+                    params,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return {"count": len(rows), "printers": [dict(r) for r in rows]}
+    except Exception as e:  # noqa: BLE001
+        return {"count": 0, "printers": [], "error": f"catalog unavailable: {e}"}
+
+
+@router.get("/catalog/mechanisms")
+async def printer_catalog_mechanisms(
+    db: AsyncSession = Depends(get_db),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+):
+    """Comm mechanisms + how many catalog models use each (for add-printer grouping)."""
+    try:
+        rows = (
+            (
+                await db.execute(
+                    text(
+                        "SELECT m.key, m.name, m.transport, m.gcode_passthrough, "
+                        "(SELECT count(*) FROM ctl_printer_type pt WHERE pt.mechanism_key=m.key) AS models "
+                        "FROM ctl_comm_mechanism m ORDER BY models DESC"
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return {"mechanisms": [dict(r) for r in rows]}
+    except Exception as e:  # noqa: BLE001
+        return {"mechanisms": [], "error": str(e)}
+
+
+@router.get("/catalog/{catalog_id}/commands")
+async def printer_catalog_commands(
+    catalog_id: int,
+    db: AsyncSession = Depends(get_db),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+):
+    """Supported/UNSUPPORTED control commands for a catalog model + the resolved
+    per-mechanism command template. Powers capability display and, later, control."""
+    try:
+        rows = (
+            (
+                await db.execute(
+                    text(
+                        "SELECT c.key AS command, c.category, c.display_name, s.status, s.supported, "
+                        "COALESCE(s.reason, t.template) AS resolves_to, t.send_method "
+                        "FROM ctl_printer_type pt CROSS JOIN ctl_command c "
+                        "LEFT JOIN ctl_printer_command_support s ON s.printer_type_id=pt.id AND s.command_key=c.key "
+                        "LEFT JOIN ctl_command_template t ON t.dialect_key=pt.dialect_key AND t.command_key=c.key "
+                        "WHERE pt.id = :pid ORDER BY c.category, c.key"
+                    ),
+                    {"pid": catalog_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        if not rows:
+            raise HTTPException(404, "catalog printer not found")
+        return {"catalog_id": catalog_id, "commands": [dict(r) for r in rows]}
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        return {"catalog_id": catalog_id, "commands": [], "error": str(e)}
+
+
+def set_out_of_service(printer: Printer, flag: bool, reason: str | None = None) -> None:
+    """Take a printer out of service, or put it back. The timestamp marks when it
+    went out and is kept while it stays out, so a new reason does not reset it."""
+    if flag:
+        if not printer.out_of_service or printer.out_of_service_since is None:
+            printer.out_of_service_since = datetime.now(timezone.utc)
+        printer.out_of_service = True
+        printer.out_of_service_reason = (reason or "").strip()[:200] or None
+    else:
+        printer.out_of_service = False
+        printer.out_of_service_reason = None
+        printer.out_of_service_since = None
+
+
+def _out_of_service_entry(printer: Printer) -> OutOfServiceEntry:
+    return OutOfServiceEntry(
+        printer_id=printer.id,
+        name=printer.name,
+        model=printer.model,
+        reason=printer.out_of_service_reason,
+        since=printer.out_of_service_since,
+    )
+
+
+@router.get("/out-of-service", response_model=list[OutOfServiceEntry])
+async def list_out_of_service(
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+    db: AsyncSession = Depends(get_db),
+    scope: PrinterScope | None = Depends(get_printer_scope),
+):
+    """Printers that are out of service: connected and visible, but given no new jobs."""
+    query = apply_printer_scope(select(Printer).where(Printer.out_of_service.is_(True)), scope)
+    rows = await db.execute(query.order_by(Printer.name))
+    return [_out_of_service_entry(p) for p in rows.scalars().all()]
+
+
+@router.put("/{printer_id}/out-of-service", response_model=OutOfServiceEntry)
+async def take_out_of_service(
+    printer_id: int,
+    body: OutOfServiceRequest,
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_UPDATE),
+    db: AsyncSession = Depends(get_db),
+):
+    """Take a printer out of service. A print already running is not touched; the
+    dispatcher just stops giving the printer new jobs."""
+    printer = (await db.execute(select(Printer).where(Printer.id == printer_id))).scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+    set_out_of_service(printer, True, body.reason)
+    await db.commit()
+    await db.refresh(printer)
+    return _out_of_service_entry(printer)
+
+
+@router.delete("/{printer_id}/out-of-service", response_model=OutOfServiceEntry)
+async def return_to_service(
+    printer_id: int,
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_UPDATE),
+    db: AsyncSession = Depends(get_db),
+):
+    """Put a printer back in service; pinned jobs waiting for it can start again."""
+    printer = (await db.execute(select(Printer).where(Printer.id == printer_id))).scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+    set_out_of_service(printer, False)
+    await db.commit()
+    await db.refresh(printer)
+    return _out_of_service_entry(printer)
 
 
 @router.get("/{printer_id}")
@@ -350,7 +658,18 @@ async def update_printer(
     if not printer:
         raise HTTPException(404, "Printer not found")
 
-    update_data = printer_data.model_dump(exclude_unset=True)
+    # go2rtc_url + go2rtc_stream expand into the camera columns (#56); the
+    # schema has already validated the pair.
+    update_data = apply_go2rtc_fields(printer_data.model_dump(exclude_unset=True))
+
+    # Out of service goes through the helper so the timestamp and reason stay consistent.
+    oos_reason = update_data.pop("out_of_service_reason", None)
+    if "out_of_service" in update_data:
+        flag = update_data.pop("out_of_service")
+        if flag is not None:
+            set_out_of_service(printer, bool(flag), oos_reason)
+    elif oos_reason is not None and printer.out_of_service:
+        set_out_of_service(printer, True, oos_reason)
 
     # Handle nested ROI object - flatten to individual columns
     if "plate_detection_roi" in update_data:
@@ -372,9 +691,14 @@ async def update_printer(
 
     await db.commit()
     await db.refresh(printer)
+    if "location" in update_data:
+        # Moving a printer can bring it into or out of a location scope (#57).
+        await ws_manager.refresh_printer_scopes()
 
     # Reconnect if connection settings changed
-    if any(k in update_data for k in ["ip_address", "access_code", "is_active"]):
+    if any(
+        k in update_data for k in ["ip_address", "access_code", "is_active", "moonraker_port", "endpoint_overrides"]
+    ):
         printer_manager.disconnect_printer(printer_id)
         if printer.is_active:
             await printer_manager.connect_printer(printer)
@@ -396,10 +720,11 @@ async def delete_printer(
         delete_archives: If True (default), delete all print archives for this printer.
                         If False, keep archives but remove their printer association.
     """
-    from sqlalchemy import delete as sql_delete
+    from sqlalchemy import delete as sql_delete, update
 
     from backend.app.models.archive import PrintArchive
     from backend.app.models.maintenance import MaintenanceHistory, PrinterMaintenance
+    from backend.app.models.print_queue import PrintQueueItem
     from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
 
     result = await db.execute(select(Printer).where(Printer.id == printer_id))
@@ -409,13 +734,25 @@ async def delete_printer(
 
     printer_manager.disconnect_printer(printer_id)
 
+    # Un-assign (do NOT delete) any queued jobs pinned to this printer. The FK is
+    # ON DELETE CASCADE, so without this the jobs would be silently destroyed when
+    # the printer row goes away. Setting printer_id=NULL returns them to the
+    # unassigned pool so the scheduler can place them elsewhere (or the user can
+    # reassign/delete). Print-log stays intact (no FK) and archives are preserved
+    # when delete_archives=False, so stats/history are unaffected.
+    unassigned = (
+        await db.execute(
+            update(PrintQueueItem)
+            .where(PrintQueueItem.printer_id == printer_id)
+            .values(printer_id=None, waiting_reason="Printer removed — reassign or delete")
+        )
+    ).rowcount
+
     if delete_archives:
         # Delete all archives for this printer
         await db.execute(sql_delete(PrintArchive).where(PrintArchive.printer_id == printer_id))
     else:
-        # Orphan the archives instead of deleting them
-        from sqlalchemy import update
-
+        # Orphan the archives instead of deleting them (keeps stats/history)
         await db.execute(update(PrintArchive).where(PrintArchive.printer_id == printer_id).values(printer_id=None))
 
     # Delete slot assignments for this printer (SQLite doesn't enforce FK cascades)
@@ -433,11 +770,13 @@ async def delete_printer(
             sql_delete(MaintenanceHistory).where(MaintenanceHistory.printer_maintenance_id.in_(maintenance_ids))
         )
         await db.execute(sql_delete(PrinterMaintenance).where(PrinterMaintenance.printer_id == printer_id))
+    # Free-form maintenance log entries hang off the printer directly.
+    await db.execute(sql_delete(MaintenanceHistory).where(MaintenanceHistory.printer_id == printer_id))
 
     await db.delete(printer)
     await db.commit()
 
-    return {"status": "deleted", "archives_deleted": delete_archives}
+    return {"status": "deleted", "archives_deleted": delete_archives, "queue_items_unassigned": unassigned}
 
 
 @router.get("/{printer_id}/status", response_model=PrinterStatus)
@@ -802,6 +1141,8 @@ async def get_printer_status(
         developer_mode=state.developer_mode if state else None,
         ams_filament_backup=state.ams_filament_backup if state else None,
         awaiting_plate_clear=printer_manager.is_awaiting_plate_clear(printer_id),
+        ejecting=_is_ejecting(printer_id),
+        failure_hold=_is_held(printer_id),
         supports_drying=supports_drying(printer.model, state.firmware_version),
         supports_drying_while_printing=supports_drying_while_printing(printer.model, state.firmware_version),
         drying_screen_only=drying_screen_only(printer.model),
@@ -1231,6 +1572,7 @@ async def _produce_cover_image(
                     remote_paths,
                     temp_path,
                     printer_model=printer.model,
+                    ftp_port=ftp_port_for(printer),
                 )
                 if downloaded:
                     break
@@ -1402,7 +1744,9 @@ async def list_printer_files(
     """List files on the printer at the specified path."""
     printer = await _load_printer_or_404(printer_id)
 
-    files = await list_files_async(printer.ip_address, printer.access_code, path, printer_model=printer.model)
+    files = await list_files_async(
+        printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
 
     # Add full path to each file
     for f in files:
@@ -1423,7 +1767,9 @@ async def download_printer_file(
     """Download a file from the printer."""
     printer = await _load_printer_or_404(printer_id)
 
-    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model)
+    data = await download_file_bytes_async(
+        printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
     if data is None:
         raise HTTPException(404, f"File not found: {path}")
 
@@ -1462,7 +1808,9 @@ async def get_printer_file_gcode(
 
     printer = await _load_printer_or_404(printer_id)
 
-    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model)
+    data = await download_file_bytes_async(
+        printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
     if data is None:
         raise HTTPException(404, f"File not found: {path}")
 
@@ -1509,7 +1857,9 @@ async def get_printer_file_plates(
             "is_multi_plate": False,
         }
 
-    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model)
+    data = await download_file_bytes_async(
+        printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
     if data is None:
         raise HTTPException(404, f"File not found: {path}")
 
@@ -1736,7 +2086,9 @@ async def get_printer_file_plate_thumbnail(
 
     printer = await _load_printer_or_404(printer_id)
 
-    data = await download_file_bytes_async(printer.ip_address, printer.access_code, path, printer_model=printer.model)
+    data = await download_file_bytes_async(
+        printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
     if data is None:
         raise HTTPException(404, f"File not found: {path}")
 
@@ -1773,7 +2125,11 @@ async def download_printer_files_as_zip(
         for path in paths:
             try:
                 data = await download_file_bytes_async(
-                    printer.ip_address, printer.access_code, path, printer_model=printer.model
+                    printer.ip_address,
+                    printer.access_code,
+                    path,
+                    printer_model=printer.model,
+                    ftp_port=ftp_port_for(printer),
                 )
                 if data:
                     filename = path.split("/")[-1]
@@ -1806,7 +2162,9 @@ async def delete_printer_file(
 
     from backend.app.services.bambu_ftp import DeleteResult
 
-    result = await delete_file_async(printer.ip_address, printer.access_code, path, printer_model=printer.model)
+    result = await delete_file_async(
+        printer.ip_address, printer.access_code, path, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
     if result == DeleteResult.NOT_FOUND:
         raise HTTPException(404, f"File not found on printer: {path}")
     if result == DeleteResult.FAILED:
@@ -1823,7 +2181,9 @@ async def get_printer_storage(
     """Get storage information from the printer."""
     printer = await _load_printer_or_404(printer_id)
 
-    storage_info = await get_storage_info_async(printer.ip_address, printer.access_code, printer_model=printer.model)
+    storage_info = await get_storage_info_async(
+        printer.ip_address, printer.access_code, printer_model=printer.model, ftp_port=ftp_port_for(printer)
+    )
 
     return storage_info or {"used_bytes": None, "free_bytes": None}
 
@@ -2082,6 +2442,7 @@ async def set_print_option(
     if sensitivity not in valid_sensitivities:
         raise HTTPException(400, f"Invalid sensitivity. Must be one of: {valid_sensitivities}")
 
+    _ensure_client_supports(client, "set_xcam_option", "Print options")
     success = client.set_xcam_option(
         module_name=module_name,
         enabled=enabled,
@@ -2118,6 +2479,7 @@ async def set_ams_backup(
     if not client or not client.state.connected:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "set_ams_filament_backup", "AMS filament backup")
     success = client.set_ams_filament_backup(enabled)
     if not success:
         raise HTTPException(500, "Failed to send command to printer")
@@ -2191,6 +2553,7 @@ async def start_calibration(
     if not any([bed_leveling, vibration, motor_noise, nozzle_offset, high_temp_heatbed]):
         raise HTTPException(400, "At least one calibration option must be selected")
 
+    _ensure_client_supports(client, "start_calibration", "Calibration")
     success = client.start_calibration(
         bed_leveling=bed_leveling,
         vibration=vibration,
@@ -2545,6 +2908,7 @@ async def configure_ams_slot(
     # RFID-tagged slots to preserve the slicer eye icon, but printers cache
     # stale tag_uid/tray_uuid after a BL spool is removed, causing the check
     # to false-positive on non-RFID slots and silently drop the command.
+    _ensure_client_supports(client, "ams_set_filament_setting", "AMS slot configuration")
     success = client.ams_set_filament_setting(
         ams_id=ams_id,
         tray_id=tray_id,
@@ -2775,6 +3139,7 @@ async def reset_ams_slot(
         raise HTTPException(status_code=400, detail="Printer not connected")
 
     # Reset the slot
+    _ensure_client_supports(client, "reset_ams_slot", "AMS slot reset")
     success = client.reset_ams_slot(ams_id=ams_id, tray_id=tray_id)
 
     if not success:
@@ -3033,6 +3398,10 @@ async def clear_plate(
         )
 
     printer_manager.set_awaiting_plate_clear(printer_id, False)
+    # A person looked at the bed: the automatic-eject run starts counting again.
+    if getattr(printer, "consecutive_ejects", 0):
+        printer.consecutive_ejects = 0
+        await db.commit()
 
     return {"success": True, "message": "Plate cleared, next print will start shortly"}
 
@@ -3100,6 +3469,7 @@ async def set_print_speed(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "set_print_speed", "Print speed")
     success = client.set_print_speed(mode)
     if not success:
         raise HTTPException(500, "Failed to set print speed")
@@ -3126,7 +3496,7 @@ async def set_nozzle_temperature(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
-    success = client.set_nozzle_temperature(target, nozzle)
+    success = _set_heater(client, "nozzle", target, nozzle)
     if not success:
         raise HTTPException(500, "Failed to set nozzle temperature")
 
@@ -3150,7 +3520,7 @@ async def set_bed_temperature(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
-    success = client.set_bed_temperature(target)
+    success = _set_heater(client, "bed", target)
     if not success:
         raise HTTPException(500, "Failed to set bed temperature")
 
@@ -3183,6 +3553,7 @@ async def set_chamber_temperature(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "set_chamber_temperature", "Chamber heating")
     success = client.set_chamber_temperature(target)
     if not success:
         raise HTTPException(500, "Failed to set chamber temperature")
@@ -3214,6 +3585,7 @@ async def set_fan_speed(
         raise HTTPException(400, "Printer not connected")
 
     pwm_speed = round(speed * 255 / 100)
+    _ensure_client_supports(client, "set_fan_speed", "Fan speed control")
     success = client.set_fan_speed(fan_id, pwm_speed)
     if not success:
         raise HTTPException(500, "Failed to set fan speed")
@@ -3239,6 +3611,7 @@ async def select_extruder(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "select_extruder", "Extruder selection")
     success = client.select_extruder(extruder)
     if not success:
         raise HTTPException(500, "Failed to select nozzle")
@@ -3266,11 +3639,71 @@ async def set_airduct_mode(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "set_airduct_mode", "Airduct mode")
     success = client.set_airduct_mode(mode)
     if not success:
         raise HTTPException(500, "Failed to set airduct mode")
 
     return {"success": True, "message": f"Airduct mode set to {mode}"}
+
+
+@router.post("/{printer_id}/timelapse")
+async def set_timelapse(
+    printer_id: int,
+    enabled: bool = Query(..., description="True to record a timelapse, False to stop"),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+    db: AsyncSession = Depends(get_db),
+):
+    """Turn the printer's built-in timelapse recording on or off.
+
+    This is the per-printer switch. It is distinct from the instance-wide
+    `default_timelapse` setting, which only decides what a *newly started* job
+    asks for; this drives the machine directly so it can be changed for the
+    printer that is in front of you.
+    """
+    result = await db.execute(select(Printer).where(Printer.id == printer_id))
+    printer = result.scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+
+    client = printer_manager.get_client(printer_id)
+    if not client:
+        raise HTTPException(400, "Printer not connected")
+
+    _ensure_client_supports(client, "set_timelapse", "Timelapse")
+    if not client.set_timelapse(enabled):
+        raise HTTPException(500, "Failed to set timelapse")
+
+    return {"success": True, "timelapse": enabled}
+
+
+@router.post("/{printer_id}/liveview")
+async def set_liveview(
+    printer_id: int,
+    enabled: bool = Query(..., description="True to enable the camera feed, False to disable"),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+    db: AsyncSession = Depends(get_db),
+):
+    """Enable or disable the printer's camera feed at the machine.
+
+    Disabling this stops the printer serving video at all, so every viewer loses
+    the stream, not just this browser. The UI treats it as a privacy switch
+    rather than a per-session play/pause.
+    """
+    result = await db.execute(select(Printer).where(Printer.id == printer_id))
+    printer = result.scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+
+    client = printer_manager.get_client(printer_id)
+    if not client:
+        raise HTTPException(400, "Printer not connected")
+
+    _ensure_client_supports(client, "set_liveview", "Camera live view")
+    if not client.set_liveview(enabled):
+        raise HTTPException(500, "Failed to set live view")
+
+    return {"success": True, "liveview": enabled}
 
 
 @router.post("/{printer_id}/chamber-light")
@@ -3295,6 +3728,133 @@ async def set_chamber_light(
         raise HTTPException(500, "Failed to control chamber light")
 
     return {"success": True, "message": f"Chamber light {'on' if on else 'off'}"}
+
+
+# ---------------------------------------------------------------------------
+# Klipper / Moonraker control actions. These exist only on the Moonraker client
+# (gated via hasattr); calling them on a Bambu printer returns a clean 400.
+# ---------------------------------------------------------------------------
+@router.post("/{printer_id}/klipper/level")
+async def klipper_level(
+    printer_id: int,
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+):
+    """Run the gantry/bed levelling macro (QUAD_GANTRY_LEVEL on Voron 2.4)."""
+    client = printer_manager.get_client(printer_id)
+    if not client or not client.state.connected:
+        raise HTTPException(400, "Printer not connected")
+    _ensure_client_supports(client, "level", "Gantry levelling")
+    if not client.level():
+        raise HTTPException(500, "Failed to start levelling (macro may be unavailable)")
+    return {"success": True}
+
+
+@router.post("/{printer_id}/klipper/emergency-stop")
+async def klipper_emergency_stop(
+    printer_id: int,
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+):
+    """Trigger Klipper's emergency stop (M112 / firmware halt)."""
+    client = printer_manager.get_client(printer_id)
+    if not client or not client.state.connected:
+        raise HTTPException(400, "Printer not connected")
+    _ensure_client_supports(client, "emergency_stop", "Emergency stop")
+    if not client.emergency_stop():
+        raise HTTPException(500, "Failed to send emergency stop")
+    return {"success": True}
+
+
+@router.post("/{printer_id}/klipper/set-temp")
+async def klipper_set_temp(
+    printer_id: int,
+    heater: str = Query(..., description="'nozzle' or 'bed'"),
+    temp: float = Query(..., ge=0, le=500, description="Target temperature in °C (0 = off)"),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+):
+    """Set nozzle or bed target temperature on a Klipper printer."""
+    if heater not in ("nozzle", "bed"):
+        raise HTTPException(400, "heater must be 'nozzle' or 'bed'")
+    client = printer_manager.get_client(printer_id)
+    if not client or not client.state.connected:
+        raise HTTPException(400, "Printer not connected")
+    _ensure_client_supports(client, "set_nozzle_temp", "Set temperature")
+    ok = client.set_nozzle_temp(temp) if heater == "nozzle" else client.set_bed_temp(temp)
+    if not ok:
+        raise HTTPException(500, "Failed to set temperature")
+    return {"success": True}
+
+
+@router.get("/{printer_id}/klipper/console")
+async def klipper_console(
+    printer_id: int,
+    count: int = Query(120, ge=1, le=1000, description="How many recent console lines to return"),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+    db: AsyncSession = Depends(get_db),
+):
+    """Realtime Klipper console: recent g-code responses + homed-axes state.
+
+    Read-only passthrough to Moonraker's HTTP API (``/server/gcode_store`` and
+    ``/printer/objects/query?toolhead=homed_axes``). The frontend polls this to
+    stream Klipper's own responses (commands, echoes, ``!!`` errors) — something
+    the fire-and-forget WebSocket send path can't return — and to show whether
+    the machine is homed. Klipper transport only.
+    """
+    result = await db.execute(select(Printer).where(Printer.id == printer_id))
+    printer = result.scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+    if (printer.connection_type or "").lower() != "klipper":
+        raise HTTPException(400, "Console is only available for Klipper/Moonraker printers")
+
+    from backend.app.services.klipper import moonraker_files
+
+    try:
+        data = await moonraker_files.get_console(
+            printer.ip_address,
+            printer.moonraker_port or 7125,
+            count=count,
+            api_key=printer.moonraker_api_key,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Could not reach Moonraker: {exc}") from exc
+    return data
+
+
+def _is_ejecting(printer_id: int) -> bool:
+    from backend.app.services.bed_ejection import is_ejecting
+
+    return is_ejecting(printer_id)
+
+
+def _is_held(printer_id: int) -> bool:
+    from backend.app.services.failure_detection import is_held
+
+    return is_held(printer_id)
+
+
+@router.post("/{printer_id}/gcode")
+async def send_printer_gcode(
+    printer_id: int,
+    command: str = Body(..., embed=True, max_length=2000),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+):
+    """Send a raw G-code command / macro to the printer.
+
+    Powers the in-app g-code console and the Klipper tuning panel. Works for
+    any transport whose client implements send_gcode (Bambu MQTT gcode_line,
+    Moonraker printer.gcode.script, Duet, etc.). Send-only: responses are not
+    streamed back here (Klipper responses surface via live status).
+    """
+    cmd = (command or "").strip()
+    if not cmd:
+        raise HTTPException(400, "Empty command")
+    client = printer_manager.get_client(printer_id)
+    if not client or not client.state.connected:
+        raise HTTPException(400, "Printer not connected")
+    _ensure_client_supports(client, "send_gcode", "G-code console")
+    if not client.send_gcode(cmd):
+        raise HTTPException(500, "Failed to send command")
+    return {"success": True, "command": cmd}
 
 
 @router.post("/{printer_id}/bed-jog")
@@ -3363,6 +3923,7 @@ async def bed_jog(
     # move at the travel limit.
     lines = ["G91", f"G1 Z{gcode_distance:.2f} F600", "G90"]
 
+    _ensure_client_supports(client, "send_gcode", "Jogging")
     if not client.send_gcode("\n".join(lines)):
         raise HTTPException(500, "Failed to send bed-jog command")
 
@@ -3399,6 +3960,7 @@ async def xy_jog(
     # Bare relative move — never touch M211 (#2579). The firmware keeps its soft
     # endstops on by default and clamps the move at the travel limit; a printer
     # left disabled by an older build is recovered with a power cycle.
+    _ensure_client_supports(client, "send_gcode", "Jogging")
     if not client.send_gcode("\n".join(["G91", f"G1 {' '.join(axes)} F6000", "G90"])):
         raise HTTPException(500, "Failed to send XY jog command")
 
@@ -3432,6 +3994,7 @@ async def extruder_jog(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "send_gcode", "Extruder jog")
     if not client.send_gcode("\n".join(["M83", f"G1 E{distance:.2f} F300", "M82"])):
         raise HTTPException(500, "Failed to send extruder jog command")
 
@@ -3476,6 +4039,7 @@ async def home_axes(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "send_gcode", "Homing")
     if not client.send_gcode("G28"):
         raise HTTPException(500, "Failed to send home command")
 
@@ -3498,6 +4062,7 @@ async def clear_hms_errors(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "clear_hms_errors", "Clearing printer alerts")
     success = client.clear_hms_errors()
     if not success:
         raise HTTPException(500, "Failed to clear HMS errors")
@@ -3569,6 +4134,7 @@ async def get_printable_objects(
                     remote_paths,
                     temp_path,
                     printer_model=printer.model,
+                    ftp_port=ftp_port_for(printer),
                 )
                 if downloaded and temp_path.exists():
                     with open(temp_path, "rb") as f:
@@ -3652,6 +4218,7 @@ async def skip_objects(
     if invalid_ids:
         raise HTTPException(400, f"Invalid object IDs: {invalid_ids}")
 
+    _ensure_client_supports(client, "skip_objects", "Skip objects")
     success = client.skip_objects(object_ids)
     if not success:
         raise HTTPException(500, "Failed to skip objects")
@@ -3956,6 +4523,7 @@ async def ams_load(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "ams_load_filament", "AMS filament loading")
     success = client.ams_load_filament(tray_id)
     if not success:
         raise HTTPException(500, "Failed to send load command")
@@ -3985,6 +4553,7 @@ async def ams_unload(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    _ensure_client_supports(client, "ams_unload_filament", "AMS filament unloading")
     success = client.ams_unload_filament()
     if not success:
         raise HTTPException(500, "Failed to send unload command")

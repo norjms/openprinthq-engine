@@ -24,7 +24,7 @@ Bambuddy project.
 
 | Branch | What it holds |
 |---|---|
-| `main` | The fork point: Bambuddy 1.2.5 plus the attribution notice |
+| `main` | Matches `feature/klipper-extended`, brought up to it by pull request once its checks are green |
 | `feature/klipper-extended` | Active development. Pull requests target this branch, and the engine image is built from it. |
 
 ## What this fork adds to Bambuddy

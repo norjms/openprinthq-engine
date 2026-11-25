@@ -226,6 +226,9 @@ class SpoolAssignmentCreate(BaseModel):
     printer_id: int
     ams_id: int
     tray_id: int
+    # Device extruder the slot should feed (0 = main/right on Bambu dual-nozzle).
+    # Optional: inferred when the slot can only feed one extruder.
+    extruder_index: int | None = Field(default=None, ge=0, le=15)
 
 
 class SpoolAssignmentResponse(BaseModel):
@@ -237,6 +240,7 @@ class SpoolAssignmentResponse(BaseModel):
     tray_id: int
     fingerprint_color: str | None = None
     fingerprint_type: str | None = None
+    extruder_index: int | None = None
     created_at: datetime
     spool: SpoolResponse | None = None
     configured: bool = False

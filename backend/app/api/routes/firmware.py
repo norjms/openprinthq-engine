@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import PrinterScope, apply_printer_scope, get_printer_scope
 from backend.app.models.printer import Printer
 from backend.app.models.user import User
 from backend.app.services.firmware_check import get_firmware_service
@@ -70,10 +71,82 @@ class LatestFirmwareInfo(BaseModel):
     release_notes: str | None = None
 
 
+async def _moonraker_firmware(printer) -> dict:
+    """Query a Klipper printer's Moonraker update manager (/machine/update/status)
+    and summarise which components (klipper, moonraker, web UI, system packages)
+    have updates available. Bambu firmware comes from the wiki service; this is
+    the equivalent for Moonraker-transport printers so firmware coverage isn't
+    Bambu-only."""
+    import httpx
+
+    empty = {
+        "latest_version": None,
+        "update_available": False,
+        "download_url": None,
+        "release_notes": None,
+        "available_versions": [],
+    }
+    url = f"http://{printer.ip_address}:{printer.moonraker_port or 7125}/machine/update/status"
+    headers = {}
+    if getattr(printer, "moonraker_api_key", None):
+        headers["X-Api-Key"] = printer.moonraker_api_key
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            resp = await client.get(url, params={"refresh": "false"}, headers=headers)
+            resp.raise_for_status()
+            result = (resp.json() or {}).get("result", {}) or {}
+    except Exception as e:
+        logger.info("Moonraker firmware check failed for printer %s: %s", printer.id, e)
+        return empty
+
+    comps = result.get("version_info") or {k: v for k, v in result.items() if isinstance(v, dict)}
+    outdated: list[str] = []
+    for name, info in comps.items():
+        if not isinstance(info, dict):
+            continue
+        if name == "system":
+            pkgs = info.get("package_count") or 0
+            if pkgs > 0:
+                outdated.append(f"system ({pkgs} pkg)")
+            continue
+        v, rv = info.get("version"), info.get("remote_version")
+        if v and rv and str(v) != str(rv):
+            outdated.append(f"{name} → {rv}")
+    if not outdated:
+        return empty
+    return {
+        "latest_version": ", ".join(outdated),
+        "update_available": True,
+        "download_url": None,
+        "release_notes": "Update via Mainsail/Fluidd → Update Manager.",
+        "available_versions": [],
+    }
+
+
+async def _firmware_info_for(printer, current_version, firmware_service) -> dict:
+    """Transport-aware firmware-update lookup. Bambu → wiki service; Klipper →
+    Moonraker update manager; other transports report current version only."""
+    ct = (getattr(printer, "connection_type", None) or "bambu").lower()
+    if ct in ("klipper", "moonraker"):
+        return await _moonraker_firmware(printer)
+    if ct == "bambu":
+        return await firmware_service.check_for_update(printer.model or "Unknown", current_version or "")
+    # PrusaLink / OctoPrint / Duet / etc.: no update feed wired yet — show the
+    # running version but don't claim an update is (un)available.
+    return {
+        "latest_version": None,
+        "update_available": False,
+        "download_url": None,
+        "release_notes": None,
+        "available_versions": [],
+    }
+
+
 @router.get("/updates", response_model=FirmwareUpdatesResponse)
 async def check_firmware_updates(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.FIRMWARE_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """
     Check for firmware updates for all connected printers.
@@ -87,7 +160,7 @@ async def check_firmware_updates(
     firmware_service = get_firmware_service()
 
     # Get all printers from database
-    result = await db.execute(select(Printer).where(Printer.is_active.is_(True)))
+    result = await db.execute(apply_printer_scope(select(Printer).where(Printer.is_active.is_(True)), scope))
     printers = result.scalars().all()
 
     updates = []
@@ -100,9 +173,9 @@ async def check_firmware_updates(
         if mqtt_client and mqtt_client.state:
             current_version = mqtt_client.state.firmware_version
 
-        # Check for update
+        # Check for update (transport-aware: Bambu wiki / Moonraker / none)
         model = printer.model or "Unknown"
-        update_info = await firmware_service.check_for_update(model, current_version or "")
+        update_info = await _firmware_info_for(printer, current_version, firmware_service)
 
         if update_info["update_available"]:
             updates_available += 1
@@ -148,9 +221,9 @@ async def check_printer_firmware(
     if mqtt_client and mqtt_client.state:
         current_version = mqtt_client.state.firmware_version
 
-    # Check for update
+    # Check for update (transport-aware: Bambu wiki / Moonraker / none)
     model = printer.model or "Unknown"
-    update_info = await firmware_service.check_for_update(model, current_version or "")
+    update_info = await _firmware_info_for(printer, current_version, firmware_service)
 
     return FirmwareUpdateInfo(
         printer_id=printer.id,

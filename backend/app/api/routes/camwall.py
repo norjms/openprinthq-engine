@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.auth import RequireCamWallTokenIfAuthEnabled
 from backend.app.core.database import get_db
+from backend.app.core.printer_scope import PrinterScope, apply_printer_scope, get_printer_scope
 from backend.app.models.printer import Printer
 from backend.app.services.printer_manager import printer_manager
 
@@ -36,6 +37,7 @@ router = APIRouter(prefix="/camwall", tags=["camwall"])
 async def list_camwall_printers(
     _: None = RequireCamWallTokenIfAuthEnabled,
     db: AsyncSession = Depends(get_db),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ) -> list[dict]:
     """Every printer plus the handful of status fields a Cam Wall tile draws.
 
@@ -46,7 +48,8 @@ async def list_camwall_printers(
     Ordered by name so tile positions stay put across polls — a wall that
     reshuffles itself is unusable to watch.
     """
-    result = await db.execute(select(Printer).order_by(Printer.name))
+    # The wall shows only the token owner's printers (#57).
+    result = await db.execute(apply_printer_scope(select(Printer), scope).order_by(Printer.name))
     printers = list(result.scalars().all())
 
     payload: list[dict] = []
@@ -56,6 +59,10 @@ async def list_camwall_printers(
             "id": printer.id,
             "name": printer.name,
             "camera_rotation": printer.camera_rotation or 0,
+            # Whether the tile should try WebRTC first (#56). A flag, not the
+            # URL: the WHEP endpoint is usually an internal address, and the
+            # kiosk negotiates through /printers/{id}/camera/webrtc anyway.
+            "webrtc": bool(printer.camera_webrtc_url),
             # Mirrors get_printer_status(): no state object at all means the
             # printer was never connected this run; a state object still has
             # to be asked whether its link is currently up.

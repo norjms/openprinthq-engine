@@ -14,13 +14,26 @@ from backend.app.core.auth import (
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import (
+    PrinterScope,
+    column_in_scope,
+    get_printer_scope,
+    printer_resource_guard,
+    visible_printer_ids,
+)
 from backend.app.models.print_log import PrintLogEntry
 from backend.app.models.user import User
 from backend.app.schemas.print_log import PrintLogEntrySchema, PrintLogEntryUpdate, PrintLogResponse
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/print-log", tags=["print-log"])
+# Per-printer scoping (#57): entries from printers outside the caller's scope
+# are hidden from the list and answer 404 on /print-log/{entry_id}/...
+router = APIRouter(
+    prefix="/print-log",
+    tags=["print-log"],
+    dependencies=[Depends(printer_resource_guard(PrintLogEntry, "entry_id", not_found="Entry not found"))],
+)
 
 
 @router.get("/", response_model=PrintLogResponse)
@@ -40,6 +53,7 @@ async def get_print_log(
             Permission.ARCHIVES_READ_OWN,
         )
     ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Get the print log."""
     user, can_read_all = auth_result
@@ -49,6 +63,10 @@ async def get_print_log(
         query = query.where(PrintLogEntry.created_by_id == user.id)
         count_query = count_query.where(PrintLogEntry.created_by_id == user.id)
 
+    in_scope = column_in_scope(PrintLogEntry.printer_id, await visible_printer_ids(db, scope), include_null=True)
+    if in_scope is not None:
+        query = query.where(in_scope)
+        count_query = count_query.where(in_scope)
     if printer_id is not None:
         query = query.where(PrintLogEntry.printer_id == printer_id)
         count_query = count_query.where(PrintLogEntry.printer_id == printer_id)
@@ -145,12 +163,18 @@ async def get_print_log_thumbnail(
 async def clear_print_log(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.ARCHIVES_DELETE_ALL),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Clear the print log.
 
-    Only deletes log entries. Archives and queue items are never touched.
+    Only deletes log entries. Archives and queue items are never touched. A
+    caller limited to some printers (#57) clears only those printers' entries.
     """
-    result = await db.execute(delete(PrintLogEntry))
+    stmt = delete(PrintLogEntry)
+    in_scope = column_in_scope(PrintLogEntry.printer_id, await visible_printer_ids(db, scope), include_null=True)
+    if in_scope is not None:
+        stmt = stmt.where(in_scope)
+    result = await db.execute(stmt)
     deleted = result.rowcount
     await db.commit()
 

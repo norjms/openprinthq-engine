@@ -42,6 +42,10 @@ class SmartPlugManager:
             return homeassistant_service
         if plug.plug_type == "rest":
             return rest_smart_plug_service
+        if plug.plug_type == "kasa":
+            from backend.app.services.kasa_plug import kasa_service
+
+            return kasa_service
         return tasmota_service
 
     async def _configure_ha_service(self, db: AsyncSession | None = None):

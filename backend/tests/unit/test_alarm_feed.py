@@ -1,0 +1,371 @@
+"""Unified alarm feed: what counts as an alarm per transport, the diff against open rows, routes."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from backend.app.models.printer_alarm import PrinterAlarm
+from backend.app.services import alarm_feed as af
+from backend.app.services.octoprint.octoprint_client import PrusaLinkClient
+
+
+def hms(short: str, severity: int):
+    module, code = short.split("_")
+    return SimpleNamespace(attr=int(module, 16) << 16, code=f"0x{code}", severity=severity, message="")
+
+
+def st(**kw):
+    base = {"connected": True, "state": "IDLE", "hms_errors": [], "raw_data": {}}
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+class Bambu:
+    """Stands in for BambuMQTTClient (source_of goes by class name)."""
+
+
+Bambu.__name__ = "BambuMQTTClient"
+
+
+class TestActiveAlarms:
+    def test_bambu_hms_by_severity_skipping_info_and_cancel(self):
+        alarms = af.active_alarms(
+            st(hms_errors=[hms("0700_8010", 2), hms("0300_8003", 1), hms("0C00_0001", 4), hms("0500_400E", 2)]),
+            "bambu",
+        )
+        got = {(a.code, a.severity) for a in alarms}
+        assert got == {("0700_8010", "serious"), ("0300_8003", "fatal")}
+        ams = next(a for a in alarms if a.code == "0700_8010")
+        assert "AMS assist motor" in ams.message
+
+    def test_bambu_text_from_the_full_code(self):
+        # The H2D's dirty nozzle camera lens: only Bambu Studio's catalog has its text.
+        err = SimpleNamespace(attr=0x0C000100, code="0x20017", severity=2, message="", full_code="0C00010000020017")
+        [a] = af.active_alarms(st(hms_errors=[err]), "bambu")
+        assert (a.code, a.full_code) == ("0C00_0017", "0C00010000020017")
+        assert a.message.startswith("Nozzle camera lens is dirty")
+
+    def test_bambu_duplicate_code_keeps_the_worst(self):
+        alarms = af.active_alarms(st(hms_errors=[hms("0700_8010", 3), hms("0700_8010", 1)]), "bambu")
+        assert [(a.code, a.severity) for a in alarms] == [("0700_8010", "fatal")]
+
+    def test_bambu_failed_print_state_alone_is_not_an_alarm(self):
+        assert af.active_alarms(st(state="FAILED"), "bambu") == []
+
+    def test_klipper(self):
+        assert af.active_alarms(st(state="FAILED", raw_data={"klipper_message": ""}), "klipper") == []  # cancelled
+        [a] = af.active_alarms(st(state="FAILED", raw_data={"klipper_message": "MCU 'mcu' shutdown"}), "klipper")
+        assert (a.code, a.severity, a.message) == ("print_error", "serious", "MCU 'mcu' shutdown")
+        [a] = af.active_alarms(st(state="unknown", raw_data={"klippy_alarm": "shutdown"}), "klipper")
+        assert (a.code, a.severity) == ("klippy_shutdown", "fatal")
+
+    def test_prusalink(self):
+        [a] = af.active_alarms(st(state="PAUSE", raw_data={"printer_state_text": "ATTENTION"}), "prusalink")
+        assert (a.code, a.severity) == ("attention", "warning")
+        [a] = af.active_alarms(st(state="FAILED", raw_data={"printer_state_text": "ERROR"}), "prusalink")
+        assert a.code == "printer_error"
+        assert af.active_alarms(st(state="RUNNING", raw_data={"printer_state_text": "PRINTING"}), "prusalink") == []
+
+    @pytest.mark.parametrize("source", ["octoprint", "duet", "flashforge", "mks", "snapmaker"])
+    def test_error_state_on_other_transports(self, source):
+        [a] = af.active_alarms(st(state="FAILED"), source)
+        assert (a.source, a.code) == (source, "printer_error")
+        assert af.active_alarms(st(state="RUNNING"), source) == []
+
+    def test_unknown_and_obico(self):
+        assert af.active_alarms(st(state="FAILED"), None) == []
+        assert af.active_alarms(st(state="FAILED"), "obico") == []
+
+    def test_source_of(self):
+        assert af.source_of(Bambu()) == "bambu"
+        assert af.source_of(PrusaLinkClient("192.0.2.5")) == "prusalink"
+        assert af.source_of(None) is None
+        assert af.source_of(object()) is None
+
+
+@pytest.fixture
+def wired(test_engine, monkeypatch):
+    maker = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(af.database, "async_session", maker)
+    notified = []
+
+    async def fake_notify(printer_id, source, new):
+        notified.append((printer_id, source, [a.code for a in new]))
+
+    monkeypatch.setattr(af, "_notify", fake_notify)
+    af.reset()
+    clock = [1000.0]
+    monkeypatch.setattr(af, "_clock", lambda: clock[0])
+    yield SimpleNamespace(maker=maker, notified=notified, clock=clock, monkeypatch=monkeypatch)
+    af.reset()
+
+
+async def _rows(maker):
+    async with maker() as db:
+        return (await db.execute(select(PrinterAlarm).order_by(PrinterAlarm.id))).scalars().all()
+
+
+class TestObserve:
+    async def test_new_alarm_is_recorded_once_and_cleared_after_grace(self, wired):
+        bambu = Bambu()
+        on = st(hms_errors=[hms("0700_8010", 2)])
+        new = await af.observe(1, on, bambu)
+        assert [a.code for a in new] == ["0700_8010"]
+        assert await af.observe(1, on, bambu) == []  # still active: no new row
+        rows = await _rows(wired.maker)
+        assert len(rows) == 1 and rows[0].cleared_at is None and rows[0].severity == "serious"
+
+        off = st()
+        await af.observe(1, off, bambu)
+        wired.clock[0] += af.CLEAR_GRACE_S - 1
+        await af.observe(1, off, bambu)
+        assert (await _rows(wired.maker))[0].cleared_at is None  # still within the grace
+        wired.clock[0] += 2
+        await af.observe(1, off, bambu)
+        assert (await _rows(wired.maker))[0].cleared_at is not None
+
+    async def test_flapping_code_stays_one_row(self, wired):
+        bambu = Bambu()
+        on, off = st(hms_errors=[hms("0700_8010", 3)]), st()
+        for _ in range(5):
+            await af.observe(2, on, bambu)
+            wired.clock[0] += 5
+            await af.observe(2, off, bambu)
+            wired.clock[0] += 5
+        assert len(await _rows(wired.maker)) == 1
+
+    async def test_disconnect_does_not_clear(self, wired):
+        bambu = Bambu()
+        await af.observe(3, st(hms_errors=[hms("0700_8010", 2)]), bambu)
+        wired.clock[0] += 600
+        await af.observe(3, st(connected=False), bambu)
+        assert (await _rows(wired.maker))[0].cleared_at is None
+
+    async def test_open_rows_reload_after_restart(self, wired):
+        bambu = Bambu()
+        on = st(hms_errors=[hms("0700_8010", 2)])
+        await af.observe(4, on, bambu)
+        af.reset()  # engine restart: cache gone, rows stay
+        assert await af.observe(4, on, bambu) == []
+        assert len(await _rows(wired.maker)) == 1
+
+    async def test_notifies_external_transports_only_through_notify(self, wired):
+        client = PrusaLinkClient("192.0.2.5")
+        await af.observe(5, st(state="PAUSE", raw_data={"printer_state_text": "ATTENTION"}), client)
+        assert wired.notified == [(5, "prusalink", ["attention"])]
+
+    async def test_concurrent_reports_record_an_alarm_once(self, wired):
+        # A Bambu printer sends several reports at once; each used to see the alarm as new.
+        import asyncio
+
+        load = af._load
+
+        async def slow_load(printer_id):  # the database answers after the other reports have arrived
+            await asyncio.sleep(0.01)
+            return await load(printer_id)
+
+        wired.monkeypatch.setattr(af, "_load", slow_load)
+        bambu = Bambu()
+        on = st(hms_errors=[hms("0700_8011", 3)])
+        await asyncio.gather(*(af.observe(7, on, bambu) for _ in range(3)))
+        assert len(await _rows(wired.maker)) == 1
+        await af.observe(7, st(), bambu)
+        wired.clock[0] += af.CLEAR_GRACE_S + 1
+        await af.observe(7, st(), bambu)
+        assert all(r.cleared_at is not None for r in await _rows(wired.maker))
+
+    async def test_extra_open_copies_are_cleared_on_load(self, wired):
+        # Rows left by the old race: three open copies of one alarm, one of them cleared since.
+        from datetime import datetime
+
+        t = datetime(2026, 11, 15, 19, 48, 4)
+        async with wired.maker() as db:
+            for i in range(3):
+                db.add(
+                    PrinterAlarm(
+                        printer_id=8,
+                        source="bambu",
+                        code="0700_8011",
+                        severity="warning",
+                        message="x",
+                        first_seen=t.replace(microsecond=i),
+                        last_seen=t,
+                    )
+                )
+            await db.commit()
+        bambu = Bambu()
+        await af.observe(8, st(), bambu)  # the printer no longer reports it
+        rows = await _rows(wired.maker)
+        assert [r.cleared_at is None for r in rows] == [True, False, False]  # the oldest stays open
+        wired.clock[0] += af.CLEAR_GRACE_S + 1
+        await af.observe(8, st(), bambu)
+        assert all(r.cleared_at is not None for r in await _rows(wired.maker))
+
+    async def test_acknowledge(self, wired):
+        bambu = Bambu()
+        await af.observe(6, st(hms_errors=[hms("0700_8010", 2), hms("0300_8003", 1)]), bambu)
+        rows = await _rows(wired.maker)
+        assert await af.acknowledge([rows[0].id], None, "op") == 1
+        assert await af.acknowledge(None, 6, "op") == 1
+        assert all(r.acknowledged_by == "op" for r in await _rows(wired.maker))
+
+    async def test_dismiss_leaves_the_row_open_until_the_printer_clears_it(self, wired):
+        bambu = Bambu()
+        on = st(hms_errors=[hms("0700_8010", 2)])
+        await af.observe(20, on, bambu)
+        [row] = await _rows(wired.maker)
+        assert await af.dismiss([row.id], "op") == 1
+        assert await af.dismiss([row.id], "op") == 0  # already dismissed
+        [row] = await _rows(wired.maker)
+        assert row.dismissed_by == "op" and row.acknowledged_by == "op" and row.cleared_at is None
+        assert await af.observe(20, on, bambu) == []  # still the same alarm
+        await af.observe(20, st(), bambu)
+        wired.clock[0] += af.CLEAR_GRACE_S + 1
+        await af.observe(20, st(), bambu)
+        assert (await _rows(wired.maker))[0].cleared_at is not None
+        # Back soon after clearing (a code that comes and goes): the same alarm, still dismissed.
+        assert await af.observe(20, on, bambu) == []
+        [row] = await _rows(wired.maker)
+        assert row.cleared_at is None and row.dismissed_by == "op"
+        # Back long after clearing: a new alarm.
+        wired.monkeypatch.setattr(af, "REOPEN_WITHIN_S", 0.0)
+        await af.observe(20, st(), bambu)
+        wired.clock[0] += af.CLEAR_GRACE_S + 1
+        await af.observe(20, st(), bambu)
+        assert [a.code for a in await af.observe(20, on, bambu)] == ["0700_8010"]
+        rows = await _rows(wired.maker)
+        assert len(rows) == 2 and rows[1].dismissed_at is None
+
+    async def test_suppress_and_unsuppress(self, wired):
+        bambu = Bambu()
+        on = st(hms_errors=[hms("0700_8010", 2), hms("0300_8003", 1)])
+        await af.observe(21, on, bambu)
+        sup = await af.suppress(21, "bambu", "0700_8010", "AMS", "op")
+        assert (sup.printer_id, sup.code, sup.created_by) == (21, "0700_8010", "op")
+        again = await af.suppress(21, "bambu", "0700_8010", "AMS", "op")
+        assert again.id == sup.id  # idempotent
+        assert await af.suppressed(21) == frozenset({("bambu", "0700_8010")})
+        assert await af.suppressed(22) == frozenset()  # one printer only
+        rows = {r.code: r for r in await _rows(wired.maker)}
+        assert rows["0700_8010"].dismissed_at is not None and rows["0300_8003"].dismissed_at is None
+        # The suppressed code's row clears; nothing new is recorded for it.
+        await af.observe(21, on, bambu)
+        wired.clock[0] += af.CLEAR_GRACE_S + 1
+        assert await af.observe(21, on, bambu) == []
+        rows = {r.code: r for r in await _rows(wired.maker)}
+        assert rows["0700_8010"].cleared_at is not None and rows["0300_8003"].cleared_at is None
+        assert (await af.unsuppress(sup.id)).id == sup.id
+        assert await af.unsuppress(sup.id) is None
+        # Reported again: its alarm reopens, unseen and not dismissed.
+        await af.observe(21, on, bambu)
+        rows = {r.code: r for r in await _rows(wired.maker)}
+        r = rows["0700_8010"]
+        assert r.cleared_at is None and r.dismissed_at is None and r.acknowledged_at is None
+
+    async def test_a_code_that_comes_and_goes_keeps_one_acknowledged_alarm(self, wired):
+        bambu = Bambu()
+        on = st(hms_errors=[hms("0700_8010", 2)])
+        assert len(await af.observe(24, on, bambu)) == 1
+        [row] = await _rows(wired.maker)
+        await af.acknowledge([row.id], None, "op")
+        for _ in range(3):  # reported for a while, gone for a minute, back again
+            await af.observe(24, st(), bambu)
+            wired.clock[0] += 60
+            await af.observe(24, st(), bambu)
+            assert await af.observe(24, on, bambu) == []
+        [row] = await _rows(wired.maker)
+        assert row.cleared_at is None and row.acknowledged_by == "op"
+
+    async def test_text_is_rewritten_when_the_catalog_learns_it(self, wired):
+        from datetime import datetime
+
+        async with wired.maker() as db:
+            db.add(
+                PrinterAlarm(
+                    printer_id=23,
+                    source="bambu",
+                    code="0C00_0017",
+                    severity="serious",
+                    message="HMS 0C00_0017",
+                    first_seen=datetime(2026, 11, 16, 14, 58),
+                    last_seen=datetime(2026, 11, 16, 14, 58),
+                )
+            )
+            await db.commit()
+        err = SimpleNamespace(attr=0x0C000100, code="0x20017", severity=2, message="", full_code="0C00010000020017")
+        assert await af.observe(23, st(hms_errors=[err]), Bambu()) == []
+        [row] = await _rows(wired.maker)
+        assert row.message.startswith("Nozzle camera lens is dirty") and row.full_code == "0C00010000020017"
+
+
+class TestNotifyRules:
+    async def test_bambu_never_notifies_from_the_feed(self, monkeypatch):
+        called = []
+        monkeypatch.setattr(af.database, "async_session", lambda: called.append(1))
+        await af._notify(1, "bambu", [af.Alarm("bambu", "0700_8010", "fatal", "x")])
+        assert called == []
+
+    async def test_warning_without_attention_is_quiet(self, monkeypatch):
+        called = []
+        monkeypatch.setattr(af.database, "async_session", lambda: called.append(1))
+        await af._notify(1, "octoprint", [af.Alarm("octoprint", "something", "warning", "x")])
+        assert called == []
+
+
+class TestRoutes:
+    async def test_list_summary_and_ack(self, async_client, wired):
+        bambu = Bambu()
+        await af.observe(11, st(hms_errors=[hms("0700_8010", 3), hms("0300_8003", 1)]), bambu)
+        r = await async_client.get("/api/v1/alarms")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert [a["severity"] for a in body] == ["fatal", "warning"]  # worst first
+        assert all(a["active"] for a in body)
+        r = await async_client.get("/api/v1/alarms?severity=warning")
+        assert [a["code"] for a in r.json()] == ["0700_8010"]
+        s = (await async_client.get("/api/v1/alarms/summary")).json()
+        assert s["active"] == 2 and s["unacknowledged"] == 2 and s["printers"] == [11]
+        assert s["by_severity"]["fatal"] == 1
+        aid = body[0]["id"]
+        r = await async_client.post(f"/api/v1/alarms/{aid}/ack", json={"by": "me"})
+        assert r.json() == {"acknowledged": 1}
+        r = await async_client.post("/api/v1/printers/11/alarms/ack")
+        assert r.json() == {"acknowledged": 1}
+        assert (await async_client.get("/api/v1/alarms/summary")).json()["unacknowledged"] == 0
+        assert (await async_client.get(f"/api/v1/alarms/{aid}")).json()["acknowledged_by"] == "me"
+        assert (await async_client.post("/api/v1/alarms/999999/ack")).status_code == 404
+        assert (await async_client.get("/api/v1/alarms?state=cleared")).json() == []
+
+    async def test_dismiss_suppress_and_undo(self, async_client, wired):
+        bambu = Bambu()
+        err = SimpleNamespace(attr=0x0C000100, code="0x20017", severity=2, message="", full_code="0C00010000020017")
+        await af.observe(12, st(hms_errors=[hms("0700_8010", 3), err]), bambu)
+        body = (await async_client.get("/api/v1/alarms")).json()
+        cam = next(a for a in body if a["code"] == "0C00_0017")
+        assert cam["hms_code"] == "HMS_0C00-0100-0002-0017" and cam["full_code"] == "0C00010000020017"
+        ams = next(a for a in body if a["code"] == "0700_8010")
+
+        r = await async_client.post(f"/api/v1/alarms/{ams['id']}/dismiss", json={"by": "me"})
+        assert r.json() == {"dismissed": 1}
+        assert [a["code"] for a in (await async_client.get("/api/v1/alarms")).json()] == ["0C00_0017"]
+        both = (await async_client.get("/api/v1/alarms?include_dismissed=true")).json()
+        assert {a["code"] for a in both} == {"0C00_0017", "0700_8010"}
+        assert (await async_client.get("/api/v1/alarms/summary")).json()["active"] == 1
+
+        r = await async_client.post(f"/api/v1/alarms/{cam['id']}/suppress", json={"by": "me"})
+        assert r.status_code == 200, r.text
+        sup = r.json()
+        assert (sup["printer_id"], sup["code"], sup["created_by"]) == (12, "0C00_0017", "me")
+        assert sup["message"].startswith("Nozzle camera lens is dirty")
+        assert (await async_client.get("/api/v1/alarms")).json() == []
+        listed = (await async_client.get("/api/v1/alarm-suppressions?printer_id=12")).json()
+        assert [x["id"] for x in listed] == [sup["id"]]
+        assert (await async_client.delete(f"/api/v1/alarm-suppressions/{sup['id']}")).json() == {"removed": 1}
+        assert (await async_client.delete(f"/api/v1/alarm-suppressions/{sup['id']}")).status_code == 404
+        assert (await async_client.get("/api/v1/alarm-suppressions")).json() == []
+        assert (await async_client.post("/api/v1/alarms/999999/dismiss")).status_code == 404
+        assert (await async_client.post("/api/v1/alarms/999999/suppress")).status_code == 404

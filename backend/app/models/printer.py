@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, String, func
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -11,12 +11,38 @@ class Printer(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
+    # Bambu printers: the real device serial. Klipper printers: a synthetic
+    # stable id derived at creation (e.g. "klipper:<uuid>").
     serial_number: Mapped[str] = mapped_column(String(50), unique=True)
     ip_address: Mapped[str] = mapped_column(String(253))
-    access_code: Mapped[str] = mapped_column(String(20))
+    # Bambu LAN access code. Nullable because Klipper/Moonraker printers on an
+    # open LAN need no credential (stored as "" for Klipper on legacy DBs).
+    access_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # For Bambu rows: the Bambu model string (X1C, P1S, ...). For Klipper rows:
+    # the KlipperProfile key (e.g. "voron_2.4_350").
     model: Mapped[str | None] = mapped_column(String(50))
+    # "bambu" (default) or "klipper". Drives which client/protocol is used and
+    # which feature families apply (see services/printer_capabilities.py).
+    connection_type: Mapped[str] = mapped_column(String(20), default="bambu", server_default="bambu")
+    # Klipper/Moonraker connection details (NULL for Bambu rows).
+    moonraker_port: Mapped[int] = mapped_column(default=7125, server_default="7125")
+    # Optional Moonraker API key; stored as-is like access_code. Never returned
+    # in API responses — see schemas/printer.py PrinterResponse.
+    moonraker_api_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     location: Mapped[str | None] = mapped_column(String(100))  # Group/location name
+    # The build plate the operator says is on the printer ("Textured PEI Plate", ...).
+    # The farm dispatcher only sends a file sliced for another plate type elsewhere
+    # when this is set; NULL means "unknown, don't check".
+    installed_plate: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    # Out of service: the printer stays connected and visible, but the farm dispatcher
+    # gives it no new work. Jobs pinned to it wait; model and group jobs go to other
+    # printers. Different from is_active, which disconnects the printer altogether.
+    out_of_service: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    out_of_service_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    out_of_service_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     nozzle_count: Mapped[int] = mapped_column(default=1)  # 1 or 2, auto-detected from MQTT
+    # Filament Track Switch: "auto" follows MQTT fila_switch, "installed"/"absent" force it.
+    track_switch_mode: Mapped[str] = mapped_column(String(20), default="auto", server_default="auto")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_archive: Mapped[bool] = mapped_column(Boolean, default=True)
     print_hours_offset: Mapped[float] = mapped_column(Float, default=0.0)  # Baseline hours to add
@@ -35,7 +61,14 @@ class Printer(Base):
     # skipping a warm-up frame. Bypasses MJPEG warm-up issues on sources that
     # expose a dedicated frame endpoint (e.g. go2rtc's /api/frame.jpeg). #1177.
     external_camera_snapshot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Optional WebRTC (WHEP) endpoint for browser playback (#56). Independent of
+    # the external camera toggle: browsers try it first and fall back to the
+    # engine's MJPEG stream. Server-side captures never use it.
+    camera_webrtc_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     camera_rotation: Mapped[int] = mapped_column(default=0)  # 0, 90, 180, 270 degrees
+    # Per-role endpoint overrides {role: 'host:port'} used when the printer is
+    # reached via a local connector relay (vendor-agnostic multi-port routing).
+    endpoint_overrides: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Plate detection - check if build plate is empty before starting print
     plate_detection_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # ROI for plate detection (percentages: 0.0-1.0)
@@ -46,6 +79,24 @@ class Printer(Base):
     # Queue: True after a print finishes/fails, until user acknowledges the plate is cleared.
     # Persisted so the gate survives crashes and power cycles (issue #961).
     awaiting_plate_clear: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Device identity: the printer host's primary NIC MAC, recorded while the
+    # printer is reachable. For Klipper/Moonraker (whose serial_number is a random
+    # synthetic id) this is the only stable hardware key, used to re-identify a
+    # printer that changed IP (offline-relocate / relink flow). Normalized lower-case.
+    mac_address: Mapped[str | None] = mapped_column(String(17), nullable=True)
+    # Per-printer settings (DB is the source of truth; previously client-only).
+    # chamber_heater: printer has a controllable chamber heater → show the control.
+    chamber_heater: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # show_filament_panel: show the multi-material (AMS/CFS/MMU) panel for this printer.
+    show_filament_panel: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    # show_bed_ejection: opt-in — show the bed-ejection & continuous-printing panel.
+    show_bed_ejection: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Server-side bed ejection (services/bed_ejection.py): run this profile after a
+    # successful print and clear the plate gate when it worked. consecutive_ejects
+    # counts automatic ejects since a person last cleared the plate.
+    auto_eject: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    ejection_profile_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    consecutive_ejects: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

@@ -29,8 +29,13 @@ class FailureAnalysisService:
         printer_id: int | None = None,
         project_id: int | None = None,
         created_by_id: int | None = None,
+        visible_printer_ids: set[int] | None = None,
     ) -> dict:
-        """Analyze failure patterns across logged print events."""
+        """Analyze failure patterns across logged print events.
+
+        ``visible_printer_ids`` limits the analysis to those printers (a scoped
+        caller, see core/printer_scope.py); None means every printer.
+        """
         # Build base query — separate date vs non-date filters for trend reuse
         base_filter = []
         non_date_filter = []
@@ -50,6 +55,10 @@ class FailureAnalysisService:
             base_filter.append(PrintLogEntry.created_at >= cutoff_date)
         if printer_id:
             non_date_filter.append(PrintLogEntry.printer_id == printer_id)
+        if visible_printer_ids is not None:
+            from backend.app.core.printer_scope import column_in_scope
+
+            non_date_filter.append(column_in_scope(PrintLogEntry.printer_id, visible_printer_ids, include_null=True))
         # project_id is an archive-level concept; PrintLogEntry has no project
         # link, so we resolve it by archive_id where present.
         if project_id:

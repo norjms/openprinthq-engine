@@ -28,6 +28,20 @@ async def execute_action(printer_id: int, action: str, task_name: str, score: fl
 
     await _notify(printer_id, printer_name, task_name, score, action)
 
+    # One failure timeline for every detector (services/failure_detection.py).
+    try:
+        from backend.app.services.failure_detection import record_event
+
+        await record_event(
+            printer_id,
+            "obico",
+            f"Obico detected a failure in {task_name}" if task_name else "Obico detected a failure",
+            score=score,
+            action_taken=action,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Obico: could not record the failure event for printer %s: %s", printer_id, e)
+
 
 async def _get_printer_name(printer_id: int) -> str:
     async with async_session() as db:

@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 import re
 import traceback
@@ -9,6 +10,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.printer import Printer
 from backend.app.services.bambu_mqtt import BambuMQTTClient, MQTTLogEntry, PrinterState, get_stage_name
+from backend.app.services.printer_capabilities import (
+    TRANSPORT_ANYCUBIC,
+    TRANSPORT_DUET,
+    TRANSPORT_ELEGOO,
+    TRANSPORT_ELEGOO_CC2,
+    TRANSPORT_FLASHFORGE,
+    TRANSPORT_MKS,
+    TRANSPORT_MOONRAKER,
+    TRANSPORT_OBICO,
+    TRANSPORT_OCTOPRINT,
+    TRANSPORT_SNAPMAKER,
+    transport_of,
+)
+from backend.app.services.printer_client import PrinterClient
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +97,14 @@ def supports_chamber_temp(model: str | None) -> bool:
         return False
     # Normalize model name (uppercase, strip whitespace)
     model_upper = model.strip().upper()
-    return model_upper in CHAMBER_TEMP_SUPPORTED_MODELS
+    if model_upper in CHAMBER_TEMP_SUPPORTED_MODELS:
+        return True
+    # Klipper printers store a profile key in `model`; chamber support comes
+    # from that profile (e.g. the Voron 2.4 has a heated chamber).
+    from backend.app.services.klipper.profiles import KLIPPER_PROFILES
+
+    profile = KLIPPER_PROFILES.get(model)
+    return profile.has_chamber if profile else False
 
 
 # Models with an ACTIVE chamber heater (M141 has an effect).
@@ -311,11 +333,27 @@ class PrinterInfo:
         self.serial_number = serial_number
 
 
+def _endpoint_port(printer, role: str, default: int) -> int:
+    """Port for a printer's endpoint role, honouring endpoint_overrides
+    ({role: 'host:port'}) set when the printer is reached via a connector relay."""
+    ov = getattr(printer, "endpoint_overrides", None) or {}
+    val = ov.get(role) if isinstance(ov, dict) else None
+    if isinstance(val, str) and ":" in val:
+        try:
+            return int(val.rsplit(":", 1)[1])
+        except ValueError:
+            return default
+    return default
+
+
 class PrinterManager:
     """Manager for multiple printer connections."""
 
     def __init__(self):
-        self._clients: dict[int, BambuMQTTClient] = {}
+        # May hold a BambuMQTTClient or a Klipper MoonrakerClient; both satisfy
+        # the PrinterClient protocol. Bambu-only methods (AMS/drying/k-profiles)
+        # are only ever called after a capability/connection_type check.
+        self._clients: dict[int, PrinterClient] = {}
         self._models: dict[int, str | None] = {}  # Cache printer models for feature detection
         self._printer_info: dict[int, PrinterInfo] = {}  # Cache printer name/serial for callbacks
         self._on_print_start: Callable[[int, dict], None] | None = None
@@ -590,24 +628,207 @@ class PrinterManager:
             if self._on_assignment_verified:
                 self._schedule_async(self._on_assignment_verified(printer_id, ams_id, tray_id, verified, detail))
 
-        client = BambuMQTTClient(
-            ip_address=printer.ip_address,
-            serial_number=printer.serial_number,
-            access_code=printer.access_code,
-            model=printer.model,
-            on_state_change=on_state_change,
-            on_print_start=on_print_start,
-            on_print_complete=on_print_complete,
-            on_ams_change=on_ams_change,
-            on_layer_change=on_layer_change,
-            on_bed_temp_update=on_bed_temp_update,
-            on_drying_complete=on_drying_complete,
-            on_print_running_observed=on_print_running_observed,
-            on_finish_photo_moment=on_finish_photo_moment,
-            on_assignment_verified=on_assignment_verified,
-        )
+        transport = transport_of(printer)
+        if transport == TRANSPORT_MOONRAKER:
+            # Klipper / Moonraker printer. Only the transport-agnostic callbacks
+            # apply — no AMS/drying/finish-photo. Imported lazily so the
+            # websocket/httpx deps aren't pulled in for Bambu-only deployments.
+            from backend.app.services.klipper.moonraker_client import MoonrakerClient
 
-        client.connect()
+            client = MoonrakerClient(
+                ip_address=printer.ip_address,
+                port=printer.moonraker_port or 7125,
+                api_key=printer.moonraker_api_key,
+                model=printer.model,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_OCTOPRINT:
+            # OctoPrint / PrusaLink (REST). moonraker_port/moonraker_api_key are
+            # reused as the generic external host port + API key.
+            from backend.app.services.octoprint.octoprint_client import OctoPrintClient, PrusaLinkClient
+
+            cls = PrusaLinkClient if printer.connection_type == "prusalink" else OctoPrintClient
+            client = cls(
+                ip_address=printer.ip_address,
+                port=printer.moonraker_port or 80,
+                api_key=printer.moonraker_api_key,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_DUET:
+            # Duet / RepRapFirmware (DWC). moonraker_port/moonraker_api_key are
+            # reused as the DWC port + password.
+            from backend.app.services.duet.duet_client import DuetClient
+
+            client = DuetClient(
+                ip_address=printer.ip_address,
+                port=printer.moonraker_port or 80,
+                api_key=printer.moonraker_api_key,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_FLASHFORGE:
+            # FlashForge legacy TCP protocol. moonraker_port is reused as the
+            # printer's TCP command port (default 8899); no auth on this
+            # transport, so moonraker_api_key is unused.
+            from backend.app.services.flashforge.flashforge_client import FlashForgeClient
+
+            client = FlashForgeClient(
+                ip_address=printer.ip_address,
+                port=printer.moonraker_port or 8899,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_MKS:
+            # MKS WiFi module. moonraker_port is reused as the TCP console
+            # port (default 8080); no auth on this transport, so
+            # moonraker_api_key is unused.
+            from backend.app.services.mks.mks_client import MKSClient
+
+            client = MKSClient(
+                ip_address=printer.ip_address,
+                port=printer.moonraker_port or 8080,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_SNAPMAKER:
+            # Snapmaker 2.0/Artisan/J1 LAN HTTP. moonraker_port is reused as
+            # the API port (default 8080); moonraker_api_key as an optional
+            # pre-authorized token.
+            from backend.app.services.snapmaker.snapmaker_client import SnapmakerClient
+
+            client = SnapmakerClient(
+                ip_address=printer.ip_address,
+                port=printer.moonraker_port or 8080,
+                token=printer.moonraker_api_key,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport in (TRANSPORT_ELEGOO, TRANSPORT_ELEGOO_CC2):
+            # Elegoo SDCP v3 (Centauri Carbon, :3030) or Centauri Carbon 2
+            # (MQTT :1883, access_code as the password). moonraker_port is the
+            # port when set to anything but the Moonraker default. Untested on
+            # hardware (docs/elegoo-printers.md).
+            if transport == TRANSPORT_ELEGOO:
+                from backend.app.services.elegoo.sdcp_client import SDCP_PORT, ElegooSDCPClient
+
+                port = printer.moonraker_port if printer.moonraker_port not in (None, 7125) else SDCP_PORT
+                client = ElegooSDCPClient(
+                    ip_address=printer.ip_address,
+                    port=port,
+                    serial_number=printer.serial_number,
+                    on_state_change=on_state_change,
+                    on_print_start=on_print_start,
+                    on_print_complete=on_print_complete,
+                    on_print_running_observed=on_print_running_observed,
+                    on_layer_change=on_layer_change,
+                    on_bed_temp_update=on_bed_temp_update,
+                )
+            else:
+                from backend.app.services.elegoo.cc2_client import CC2_MQTT_PORT, ElegooCC2Client
+
+                port = printer.moonraker_port if printer.moonraker_port not in (None, 7125) else CC2_MQTT_PORT
+                client = ElegooCC2Client(
+                    ip_address=printer.ip_address,
+                    port=port,
+                    serial_number=printer.serial_number,
+                    access_code=printer.access_code or None,
+                    on_state_change=on_state_change,
+                    on_print_start=on_print_start,
+                    on_print_complete=on_print_complete,
+                    on_print_running_observed=on_print_running_observed,
+                    on_layer_change=on_layer_change,
+                    on_bed_temp_update=on_bed_temp_update,
+                )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_ANYCUBIC:
+            # Anycubic Kobra in LAN mode: the client runs the LAN handshake for
+            # its broker credentials, so nothing but the IP is stored. Untested
+            # on hardware (docs/anycubic-printers.md).
+            from backend.app.services.anycubic.anycubic_client import AnycubicClient
+
+            client = AnycubicClient(
+                ip_address=printer.ip_address,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        elif transport == TRANSPORT_OBICO:
+            # Obico (upload-only relay). ip_address holds the Obico server
+            # URL, moonraker_api_key the Obico API key; no live status (see
+            # services/obico/__init__.py) — connect() just starts a
+            # reachability ping.
+            from backend.app.services.obico.obico_client import ObicoClient
+
+            client = ObicoClient(
+                ip_address=printer.ip_address,
+                api_key=printer.moonraker_api_key,
+                serial_number=printer.serial_number,
+                on_state_change=on_state_change,
+            )
+            client.connect(loop=self._loop or asyncio.get_event_loop())
+        else:
+            client = BambuMQTTClient(
+                ip_address=printer.ip_address,
+                serial_number=printer.serial_number,
+                access_code=printer.access_code,
+                model=printer.model,
+                mqtt_port=_endpoint_port(printer, "mqtt", 8883),
+                on_state_change=on_state_change,
+                on_print_start=on_print_start,
+                on_print_complete=on_print_complete,
+                on_ams_change=on_ams_change,
+                on_layer_change=on_layer_change,
+                on_bed_temp_update=on_bed_temp_update,
+                on_drying_complete=on_drying_complete,
+                on_print_running_observed=on_print_running_observed,
+                on_finish_photo_moment=on_finish_photo_moment,
+                on_assignment_verified=on_assignment_verified,
+            )
+            client.connect()
+
         self._clients[printer_id] = client
         self._models[printer_id] = printer.model  # Cache model for feature detection
         self._printer_info[printer_id] = PrinterInfo(printer.name, printer.serial_number)
@@ -670,7 +891,9 @@ class PrinterManager:
         ``BambuMQTTClient``).
         """
         client = self._clients.get(printer_id)
-        return client._drying_targets if client else None
+        # Drying is Bambu-only; Klipper (Moonraker) clients have no
+        # _drying_targets. getattr keeps this call safe for both client types.
+        return getattr(client, "_drying_targets", None) if client else None
 
     def get_all_statuses(self) -> dict[int, PrinterState]:
         """Get status of all connected printers (checks for stale connections)."""
@@ -689,7 +912,7 @@ class PrinterManager:
             return client.check_staleness()
         return False
 
-    def get_client(self, printer_id: int) -> BambuMQTTClient | None:
+    def get_client(self, printer_id: int) -> PrinterClient | None:
         """Get the MQTT client for a printer."""
         return self._clients.get(printer_id)
 
@@ -748,19 +971,29 @@ class PrinterManager:
             caller.name,
         )
         if printer_id in self._clients:
-            return self._clients[printer_id].start_print(
-                filename,
-                plate_id,
-                ams_mapping=ams_mapping,
-                timelapse=timelapse,
-                bed_levelling=bed_levelling,
-                flow_cali=flow_cali,
-                vibration_cali=vibration_cali,
-                layer_inspect=layer_inspect,
-                use_ams=use_ams,
-                nozzle_offset_cali=nozzle_offset_cali,
-                nozzle_mapping=nozzle_mapping,
-            )
+            client = self._clients[printer_id]
+            kwargs = {
+                "ams_mapping": ams_mapping,
+                "timelapse": timelapse,
+                "bed_levelling": bed_levelling,
+                "flow_cali": flow_cali,
+                "vibration_cali": vibration_cali,
+                "layer_inspect": layer_inspect,
+                "use_ams": use_ams,
+                "nozzle_offset_cali": nozzle_offset_cali,
+                "nozzle_mapping": nozzle_mapping,
+            }
+            # Non-Bambu clients implement the PrinterClient signature, which has
+            # no nozzle_offset_cali / nozzle_mapping. Passing them raised
+            # TypeError, so a queued job never started on a Klipper printer.
+            # Pass only what the client's start_print accepts.
+            try:
+                params = inspect.signature(client.start_print).parameters
+                if not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+                    kwargs = {k: v for k, v in kwargs.items() if k in params}
+            except (TypeError, ValueError):
+                pass
+            return client.start_print(filename, plate_id, **kwargs)
         return False
 
     def stop_print(self, printer_id: int) -> bool:

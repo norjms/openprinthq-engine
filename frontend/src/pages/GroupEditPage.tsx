@@ -2,9 +2,9 @@ import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, Save, Loader2, Search, Check, Minus, Shield, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Search, Check, Minus, Shield, AlertTriangle, Printer as PrinterIcon } from 'lucide-react';
 import { api } from '../api/client';
-import type { Permission, PermissionCategory } from '../api/client';
+import type { GroupCreate, GroupUpdate, Permission, PermissionCategory } from '../api/client';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { useToast } from '../contexts/ToastContext';
@@ -22,6 +22,10 @@ export function GroupEditPage() {
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [search, setSearch] = useState('');
   const [initialized, setInitialized] = useState(false);
+  // Printer scope (#57): off = the group sees every printer.
+  const [scopeEnabled, setScopeEnabled] = useState(false);
+  const [scopePrinterIds, setScopePrinterIds] = useState<number[]>([]);
+  const [scopeLocations, setScopeLocations] = useState<string[]>([]);
 
   const { data: groupData, isLoading: groupLoading } = useQuery({
     queryKey: ['group', id],
@@ -34,17 +38,41 @@ export function GroupEditPage() {
     queryFn: () => api.getPermissions(),
   });
 
+  const { data: printers } = useQuery({
+    queryKey: ['printers'],
+    queryFn: () => api.getPrinters(),
+  });
+
+  // Locations offered in the picker: every location a printer has, plus any
+  // the group already holds (a location can outlive its last printer).
+  const locationOptions = useMemo(() => {
+    const byKey = new Map<string, string>();
+    for (const p of printers ?? []) {
+      const loc = (p.location ?? '').trim();
+      if (loc && !byKey.has(loc.toLowerCase())) byKey.set(loc.toLowerCase(), loc);
+    }
+    for (const loc of scopeLocations) {
+      if (!byKey.has(loc.toLowerCase())) byKey.set(loc.toLowerCase(), loc);
+    }
+    return [...byKey.values()].sort((a, b) => a.localeCompare(b));
+  }, [printers, scopeLocations]);
+
+  const isAdministratorsGroup = isEditing && groupData?.is_system && groupData?.name === 'Administrators';
+
   // Initialize form from fetched group data (once)
   if (isEditing && groupData && !initialized) {
     setName(groupData.name);
     setDescription(groupData.description || '');
     setPermissions(groupData.permissions);
+    const scoped = groupData.scope_printer_ids != null || groupData.scope_locations != null;
+    setScopeEnabled(scoped);
+    setScopePrinterIds(groupData.scope_printer_ids ?? []);
+    setScopeLocations(groupData.scope_locations ?? []);
     setInitialized(true);
   }
 
   const createMutation = useMutation({
-    mutationFn: (data: { name: string; description?: string; permissions: Permission[] }) =>
-      api.createGroup(data),
+    mutationFn: (data: GroupCreate) => api.createGroup(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['groups'] });
       queryClient.invalidateQueries({ queryKey: ['group'] });
@@ -57,8 +85,7 @@ export function GroupEditPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: { name?: string; description?: string; permissions: Permission[] }) =>
-      api.updateGroup(Number(id), data),
+    mutationFn: (data: GroupUpdate) => api.updateGroup(Number(id), data),
     onSuccess: (updatedGroup) => {
       queryClient.invalidateQueries({ queryKey: ['groups'] });
       // Prime the single-group detail cache with the PATCH response body so
@@ -87,19 +114,41 @@ export function GroupEditPage() {
       showToast(t('groups.toast.enterGroupName'), 'error');
       return;
     }
+    const scope = isAdministratorsGroup
+      ? {}
+      : {
+          scope_printer_ids: scopeEnabled ? scopePrinterIds : null,
+          scope_locations: scopeEnabled ? scopeLocations : null,
+        };
     if (isEditing) {
       updateMutation.mutate({
         name: name !== groupData?.name ? name : undefined,
         description,
         permissions,
+        ...scope,
       });
     } else {
       createMutation.mutate({
         name,
         description: description || undefined,
         permissions,
+        ...scope,
       });
     }
+  };
+
+  const toggleScopePrinter = (printerId: number) => {
+    setScopePrinterIds((prev) =>
+      prev.includes(printerId) ? prev.filter((p) => p !== printerId) : [...prev, printerId]
+    );
+  };
+
+  const toggleScopeLocation = (location: string) => {
+    setScopeLocations((prev) =>
+      prev.some((l) => l.toLowerCase() === location.toLowerCase())
+        ? prev.filter((l) => l.toLowerCase() !== location.toLowerCase())
+        : [...prev, location]
+    );
   };
 
   const togglePermission = (perm: Permission) => {
@@ -206,6 +255,106 @@ export function GroupEditPage() {
           />
         </div>
       </div>
+
+      {/* Printer access (per-printer scoping) */}
+      <Card>
+        <div className="p-4 space-y-4" data-testid="group-printer-scope">
+          <div className="flex items-center gap-2">
+            <PrinterIcon className="w-4 h-4 text-bambu-gray" />
+            <h2 className="text-white font-medium text-sm">{t('groups.scope.title')}</h2>
+          </div>
+          {isAdministratorsGroup ? (
+            <p className="text-sm text-bambu-gray">{t('groups.scope.adminLocked')}</p>
+          ) : (
+            <>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <label className="flex items-center gap-2 text-sm text-bambu-gray cursor-pointer">
+                  <input
+                    type="radio"
+                    name="printer-scope"
+                    checked={!scopeEnabled}
+                    onChange={() => setScopeEnabled(false)}
+                    className="text-bambu-green focus:ring-bambu-green"
+                  />
+                  {t('groups.scope.all')}
+                </label>
+                <label className="flex items-center gap-2 text-sm text-bambu-gray cursor-pointer">
+                  <input
+                    type="radio"
+                    name="printer-scope"
+                    checked={scopeEnabled}
+                    onChange={() => setScopeEnabled(true)}
+                    className="text-bambu-green focus:ring-bambu-green"
+                  />
+                  {t('groups.scope.limited')}
+                </label>
+              </div>
+              <p className="text-xs text-bambu-gray/80">{t('groups.scope.hint')}</p>
+              {scopeEnabled && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <div className="text-xs font-medium text-white mb-2">{t('groups.scope.printers')}</div>
+                    {(printers ?? []).length === 0 ? (
+                      <p className="text-xs text-bambu-gray">{t('groups.scope.noPrinters')}</p>
+                    ) : (
+                      <div className="space-y-1 max-h-64 overflow-y-auto">
+                        {[...(printers ?? [])]
+                          .sort((a, b) => a.name.localeCompare(b.name))
+                          .map((p) => (
+                            <label
+                              key={p.id}
+                              className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-bambu-dark-secondary cursor-pointer"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={scopePrinterIds.includes(p.id)}
+                                onChange={() => toggleScopePrinter(p.id)}
+                                className="w-4 h-4 shrink-0 rounded border-bambu-gray text-bambu-green focus:ring-bambu-green focus:ring-offset-0 bg-bambu-dark-secondary"
+                              />
+                              <span className="text-sm text-bambu-gray">
+                                {p.name}
+                                {p.location ? <span className="text-xs text-bambu-gray/60"> ({p.location})</span> : null}
+                              </span>
+                            </label>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-xs font-medium text-white mb-2">{t('groups.scope.locations')}</div>
+                    {locationOptions.length === 0 ? (
+                      <p className="text-xs text-bambu-gray">{t('groups.scope.noLocations')}</p>
+                    ) : (
+                      <div className="space-y-1 max-h-64 overflow-y-auto">
+                        {locationOptions.map((loc) => (
+                          <label
+                            key={loc}
+                            className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-bambu-dark-secondary cursor-pointer"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={scopeLocations.some((l) => l.toLowerCase() === loc.toLowerCase())}
+                              onChange={() => toggleScopeLocation(loc)}
+                              className="w-4 h-4 shrink-0 rounded border-bambu-gray text-bambu-green focus:ring-bambu-green focus:ring-offset-0 bg-bambu-dark-secondary"
+                            />
+                            <span className="text-sm text-bambu-gray">{loc}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {scopePrinterIds.length === 0 && scopeLocations.length === 0 && (
+                    <div className="md:col-span-2 flex items-center gap-2 text-xs text-yellow-700 dark:text-yellow-400">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      {t('groups.scope.emptyWarning')}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </Card>
 
       {/* Toolbar */}
       <div className="flex items-center justify-between flex-wrap gap-3">

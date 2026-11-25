@@ -12,6 +12,14 @@ from backend.app.api.routes.settings import get_setting
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import (
+    PrinterScope,
+    column_in_scope,
+    get_printer_scope,
+    is_printer_visible,
+    printer_resource_guard,
+    visible_printer_ids,
+)
 from backend.app.core.tasks import spawn_background_task
 from backend.app.models.printer import Printer
 from backend.app.models.smart_plug import SmartPlug
@@ -33,6 +41,7 @@ from backend.app.schemas.smart_plug import (
 )
 from backend.app.services.discovery import tasmota_scanner
 from backend.app.services.homeassistant import homeassistant_service
+from backend.app.services.kasa_plug import kasa_service
 from backend.app.services.mqtt_relay import mqtt_relay
 from backend.app.services.mqtt_smart_plug import subscribe_plug_to_mqtt
 from backend.app.services.notification_service import notification_service
@@ -44,16 +53,28 @@ from backend.app.utils.local_time import to_naive_utc, utcnow_naive
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/smart-plugs", tags=["smart-plugs"])
+# Per-printer scoping (#57): a plug tied to a printer outside the caller's
+# scope answers 404 on /smart-plugs/{plug_id}/...; plugs tied to no printer
+# stay visible.
+router = APIRouter(
+    prefix="/smart-plugs",
+    tags=["smart-plugs"],
+    dependencies=[Depends(printer_resource_guard(SmartPlug, "plug_id", not_found="Smart plug not found"))],
+)
 
 
 @router.get("/", response_model=list[SmartPlugResponse])
 async def list_smart_plugs(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.SMART_PLUGS_READ),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """List all smart plugs."""
-    result = await db.execute(select(SmartPlug).order_by(SmartPlug.name))
+    query = select(SmartPlug).order_by(SmartPlug.name)
+    in_scope = column_in_scope(SmartPlug.printer_id, await visible_printer_ids(db, scope), include_null=True)
+    if in_scope is not None:
+        query = query.where(in_scope)
+    result = await db.execute(query)
     return list(result.scalars().all())
 
 
@@ -62,26 +83,27 @@ async def create_smart_plug(
     data: SmartPlugCreate,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.SMART_PLUGS_CREATE),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Create a new smart plug."""
-    # Validate printer_id if provided
+    # Validate printer_id if provided (and in the caller's printer scope, #57)
     if data.printer_id:
         result = await db.execute(select(Printer).where(Printer.id == data.printer_id))
-        if not result.scalar_one_or_none():
+        if not result.scalar_one_or_none() or not await is_printer_visible(db, scope, data.printer_id):
             raise HTTPException(400, "Printer not found")
 
         # Check if printer already has a plug assigned
         # Tasmota plugs: only one per printer (physical power device)
         # HA entities: allow multiple per printer (for different automations)
-        if data.plug_type == "tasmota":
+        if data.plug_type in ("tasmota", "kasa"):
             result = await db.execute(
                 select(SmartPlug).where(
                     SmartPlug.printer_id == data.printer_id,
-                    SmartPlug.plug_type == "tasmota",
+                    SmartPlug.plug_type.in_(("tasmota", "kasa")),
                 )
             )
             if result.scalar_one_or_none():
-                raise HTTPException(400, "This printer already has a Tasmota plug assigned")
+                raise HTTPException(400, "This printer already has a power plug (Tasmota or Kasa) assigned")
 
     # For MQTT plugs, ensure MQTT broker is configured and service is connected
     if data.plug_type == "mqtt":
@@ -412,6 +434,7 @@ async def update_smart_plug(
     data: SmartPlugUpdate,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.SMART_PLUGS_UPDATE),
+    scope: PrinterScope | None = Depends(get_printer_scope),
 ):
     """Update a smart plug."""
     result = await db.execute(select(SmartPlug).where(SmartPlug.id == plug_id))
@@ -425,25 +448,25 @@ async def update_smart_plug(
     if "printer_id" in update_data and update_data["printer_id"]:
         new_printer_id = update_data["printer_id"]
 
-        # Check printer exists
+        # Check printer exists (and is in the caller's printer scope, #57)
         result = await db.execute(select(Printer).where(Printer.id == new_printer_id))
-        if not result.scalar_one_or_none():
+        if not result.scalar_one_or_none() or not await is_printer_visible(db, scope, new_printer_id):
             raise HTTPException(400, "Printer not found")
 
         # Check if that printer already has a different Tasmota plug assigned
         # Tasmota plugs: only one per printer (physical power device)
         # HA entities: allow multiple per printer (for different automations)
         new_plug_type = update_data.get("plug_type", plug.plug_type)
-        if new_plug_type == "tasmota":
+        if new_plug_type in ("tasmota", "kasa"):
             result = await db.execute(
                 select(SmartPlug).where(
                     SmartPlug.printer_id == new_printer_id,
                     SmartPlug.id != plug_id,
-                    SmartPlug.plug_type == "tasmota",
+                    SmartPlug.plug_type.in_(("tasmota", "kasa")),
                 )
             )
             if result.scalar_one_or_none():
-                raise HTTPException(400, "This printer already has a Tasmota plug assigned")
+                raise HTTPException(400, "This printer already has a power plug (Tasmota or Kasa) assigned")
 
     # Track old MQTT settings for comparison
     old_plug_type = plug.plug_type
@@ -538,6 +561,8 @@ async def _get_service_for_plug(plug: SmartPlug, db: AsyncSession):
         return homeassistant_service
     if plug.plug_type == "rest":
         return rest_smart_plug_service
+    if plug.plug_type == "kasa":
+        return kasa_service
     return tasmota_service
 
 
@@ -791,6 +816,24 @@ async def check_power_alerts(plug: SmartPlug, current_power: float | None, db: A
                 "error_detail": message,
             },
         )
+
+
+@router.post("/test-kasa")
+async def test_kasa_connection(
+    data: SmartPlugTestConnection,
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.SMART_PLUGS_CONTROL),
+):
+    """Test connection to a TP-Link Kasa plug (username/password: the TP-Link account, needed on newer firmware)."""
+    result = await kasa_service.test_connection(data.ip_address, data.username, data.password)
+    if not result["success"]:
+        raise HTTPException(503, result.get("error", "Failed to connect to the Kasa plug"))
+    return {
+        "success": True,
+        "state": result["state"],
+        "device_name": result.get("device_name"),
+        "model": result.get("model"),
+        "has_energy": result.get("has_energy", False),
+    }
 
 
 @router.post("/test-connection")

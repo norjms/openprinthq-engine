@@ -190,6 +190,16 @@ class BambuFTPClient:
     # Maps IP -> "prot_p" or "prot_c"
     _mode_cache: dict[str, str] = {}
 
+    @property
+    def ftp_port(self) -> int:
+        """The connector relay's port when one was passed, else FTP_PORT.
+
+        Read at connect time rather than fixed in __init__, so a FTP_PORT set on
+        the instance after construction (the test suite's mock server does this)
+        still applies.
+        """
+        return self._ftp_port_override or self.FTP_PORT
+
     def __init__(
         self,
         ip_address: str,
@@ -197,12 +207,19 @@ class BambuFTPClient:
         timeout: float | None = None,
         printer_model: str | None = None,
         force_prot_c: bool = False,
+        ftp_port: int | None = None,
     ):
         self.ip_address = ip_address
         self.access_code = access_code
         self.timeout = timeout if timeout is not None else self.DEFAULT_TIMEOUT
         self.printer_model = printer_model
         self.force_prot_c = force_prot_c
+        # FTP port. Defaults to 990 (native Bambu FTPS). When the printer is
+        # reached through a connector relay, the caller passes the relay's local
+        # port (from endpoint_overrides['ftp']); the host is self.ip_address,
+        # which is already the relay host in that case. None/0 -> native 990, so
+        # a non-routed printer is byte-identical to before.
+        self._ftp_port_override = ftp_port or None
         self._ftp: ImplicitFTP_TLS | None = None
 
     def _is_a1_model(self) -> bool:
@@ -241,7 +258,7 @@ class BambuFTPClient:
 
             profile = get_ftp_profile(self.printer_model)
             logger.debug(
-                f"FTP connecting to {self.ip_address}:{self.FTP_PORT} "
+                f"FTP connecting to {self.ip_address}:{self.ftp_port} "
                 f"(timeout={self.timeout}s, model={self.printer_model}, prot_c={use_prot_c}, "
                 f"cap_tls_v1_2={profile.cap_tls_v1_2})"
             )
@@ -249,7 +266,7 @@ class BambuFTPClient:
                 skip_session_reuse=use_prot_c,
                 cap_tls_v1_2=profile.cap_tls_v1_2,
             )
-            self._ftp.connect(self.ip_address, self.FTP_PORT, timeout=self.timeout)
+            self._ftp.connect(self.ip_address, self.ftp_port, timeout=self.timeout)
             logger.debug("FTP connected, logging in as bblp")
             self._ftp.login("bblp", self.access_code)
             if use_prot_c:
@@ -882,6 +899,27 @@ def clear_3mf_cache(printer_id: int | None = None, delete_files: bool = True) ->
         _threemf_path_cache.pop(key, None)
 
 
+def ftp_port_for(printer, default: int = 990) -> int:
+    """Resolve the FTP port for a printer, honouring ``endpoint_overrides``
+    ({'ftp': 'host:port'}) that the control-plane sets when a Bambu is reached
+    through a connector relay. Returns 990 (native Bambu FTPS) when the printer
+    is not routed, so unrouted printers are always byte-identical to before.
+
+    Accepts either an ORM printer object or a plain dict.
+    """
+    ov = getattr(printer, "endpoint_overrides", None)
+    if ov is None and isinstance(printer, dict):
+        ov = printer.get("endpoint_overrides")
+    if isinstance(ov, dict):
+        val = ov.get("ftp")
+        if isinstance(val, str) and ":" in val:
+            try:
+                return int(val.rsplit(":", 1)[1])
+            except ValueError:
+                return default
+    return default
+
+
 async def download_file_async(
     ip_address: str,
     access_code: str,
@@ -890,6 +928,7 @@ async def download_file_async(
     timeout: float = 60.0,
     socket_timeout: float | None = None,
     printer_model: str | None = None,
+    ftp_port: int | None = None,  # None -> BambuFTPClient.FTP_PORT (990)
 ) -> bool:
     """Async wrapper for downloading a file with timeout.
 
@@ -927,6 +966,7 @@ async def download_file_async(
                 timeout=socket_timeout,
                 printer_model=printer_model,
                 force_prot_c=force_prot_c,
+                ftp_port=ftp_port,
             )
             if client.connect():
                 try:
@@ -1009,6 +1049,7 @@ async def download_file_try_paths_async(
     local_path: Path,
     socket_timeout: float | None = None,
     printer_model: str | None = None,
+    ftp_port: int | None = None,  # None -> BambuFTPClient.FTP_PORT (990)
     timeout: float = 90.0,
 ) -> bool:
     """Try downloading a file from multiple paths using a single connection.
@@ -1028,7 +1069,9 @@ async def download_file_try_paths_async(
     loop = asyncio.get_event_loop()
 
     def _download():
-        client = BambuFTPClient(ip_address, access_code, timeout=socket_timeout, printer_model=printer_model)
+        client = BambuFTPClient(
+            ip_address, access_code, timeout=socket_timeout, printer_model=printer_model, ftp_port=ftp_port
+        )
         if not client.connect():
             return False
 
@@ -1095,6 +1138,7 @@ async def upload_file_async(
     progress_callback: Callable[[int, int], None] | None = None,
     socket_timeout: float | None = None,
     printer_model: str | None = None,
+    ftp_port: int | None = None,  # None -> BambuFTPClient.FTP_PORT (990)
 ) -> bool:
     """Async wrapper for uploading a file with timeout and progress callback.
 
@@ -1133,7 +1177,12 @@ async def upload_file_async(
             f"mode={mode_str}, socket_timeout={socket_timeout}s, deadline={deadline:.0f}s)..."
         )
         client = BambuFTPClient(
-            ip_address, access_code, timeout=socket_timeout, printer_model=printer_model, force_prot_c=force_prot_c
+            ip_address,
+            access_code,
+            timeout=socket_timeout,
+            printer_model=printer_model,
+            force_prot_c=force_prot_c,
+            ftp_port=ftp_port,
         )
         if client.connect():
             logger.info("FTP connected to %s", ip_address)
@@ -1231,6 +1280,7 @@ async def list_files_async(
     timeout: float = 30.0,
     socket_timeout: float | None = None,
     printer_model: str | None = None,
+    ftp_port: int | None = None,  # None -> BambuFTPClient.FTP_PORT (990)
 ) -> list[dict]:
     """Async wrapper for listing files with timeout.
 
@@ -1241,7 +1291,9 @@ async def list_files_async(
     loop = asyncio.get_event_loop()
 
     def _list():
-        client = BambuFTPClient(ip_address, access_code, timeout=socket_timeout, printer_model=printer_model)
+        client = BambuFTPClient(
+            ip_address, access_code, timeout=socket_timeout, printer_model=printer_model, ftp_port=ftp_port
+        )
         if client.connect():
             try:
                 return client.list_files(path)
@@ -1262,6 +1314,7 @@ async def delete_file_async(
     remote_path: str,
     socket_timeout: float | None = None,
     printer_model: str | None = None,
+    ftp_port: int | None = None,  # None -> BambuFTPClient.FTP_PORT (990)
     timeout: float = 60.0,
 ) -> DeleteResult:
     """Async wrapper for deleting a file.
@@ -1279,7 +1332,9 @@ async def delete_file_async(
     loop = asyncio.get_event_loop()
 
     def _delete() -> DeleteResult:
-        client = BambuFTPClient(ip_address, access_code, timeout=socket_timeout, printer_model=printer_model)
+        client = BambuFTPClient(
+            ip_address, access_code, timeout=socket_timeout, printer_model=printer_model, ftp_port=ftp_port
+        )
         if client.connect():
             try:
                 return client.delete_file(remote_path)
@@ -1300,6 +1355,7 @@ async def download_file_bytes_async(
     remote_path: str,
     socket_timeout: float | None = None,
     printer_model: str | None = None,
+    ftp_port: int | None = None,  # None -> BambuFTPClient.FTP_PORT (990)
     timeout: float = 300.0,
 ) -> bytes | None:
     """Async wrapper for downloading file as bytes.
@@ -1317,7 +1373,9 @@ async def download_file_bytes_async(
     loop = asyncio.get_event_loop()
 
     def _download():
-        client = BambuFTPClient(ip_address, access_code, timeout=socket_timeout, printer_model=printer_model)
+        client = BambuFTPClient(
+            ip_address, access_code, timeout=socket_timeout, printer_model=printer_model, ftp_port=ftp_port
+        )
         if client.connect():
             try:
                 return client.download_file(remote_path)
@@ -1337,6 +1395,7 @@ async def get_storage_info_async(
     access_code: str,
     socket_timeout: float | None = None,
     printer_model: str | None = None,
+    ftp_port: int | None = None,  # None -> BambuFTPClient.FTP_PORT (990)
     timeout: float = 60.0,
 ) -> dict | None:
     """Async wrapper for getting storage info.
@@ -1350,7 +1409,9 @@ async def get_storage_info_async(
     loop = asyncio.get_event_loop()
 
     def _get_storage():
-        client = BambuFTPClient(ip_address, access_code, timeout=socket_timeout, printer_model=printer_model)
+        client = BambuFTPClient(
+            ip_address, access_code, timeout=socket_timeout, printer_model=printer_model, ftp_port=ftp_port
+        )
         if client.connect():
             try:
                 return client.get_storage_info()

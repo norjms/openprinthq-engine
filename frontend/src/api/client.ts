@@ -315,6 +315,7 @@ export interface CamWallPrinter {
   id: number;
   name: string;
   camera_rotation: number;
+  webrtc?: boolean;  // has a WebRTC (WHEP) camera; the URL itself is not served (#56)
   connected: boolean;
   state: string | null;
   progress: number | null;
@@ -348,14 +349,31 @@ export interface OverlayStatus {
 export interface Printer {
   id: number;
   name: string;
+  connection_type: 'bambu' | 'klipper' | 'octoprint' | 'prusalink' | 'duet' | 'flashforge' | 'mks' | 'obico' | 'elegoo' | 'elegoo_cc2' | 'anycubic';  // protocol/transport; defaults to bambu
+  // For Klipper this is a synthetic serial; access_code is unused (open LAN).
+  // Kept non-null in the type because all consumers are Bambu/AMS paths that
+  // never execute for Klipper printers.
   serial_number: string;
   ip_address: string;
   // Optional because the backend only returns access_code when the caller has
   // PRINTERS_UPDATE — Admin / Operator JWTs or auth-disabled mode. Viewers and
   // API keys receive a Printer without this field.
   access_code?: string;
+  moonraker_port?: number;  // Klipper only
+  has_moonraker_api_key?: boolean;  // whether a key is stored (never the key itself)
   model: string | null;
   location: string | null;  // Group/location name
+  installed_plate?: string | null;  // build plate fitted (farm dispatch)
+  out_of_service?: boolean;  // connected and monitored, but given no new jobs
+  out_of_service_reason?: string | null;
+  out_of_service_since?: string | null;
+  // What the printer's connection can do (pause_resume_stop, print, home,
+  // temperature, gcode). Missing keys mean supported. PrusaLink has no home,
+  // temperature or gcode.
+  controls?: Partial<Record<'pause_resume_stop' | 'print' | 'home' | 'temperature' | 'gcode', boolean>>;
+  auto_eject?: boolean;  // run the ejection profile after a successful print
+  ejection_profile_id?: number | null;
+  consecutive_ejects?: number;
   nozzle_count: number;  // 1 or 2, auto-detected from MQTT
   is_active: boolean;
   auto_archive: boolean;
@@ -363,6 +381,7 @@ export interface Printer {
   external_camera_type: string | null;  // "mjpeg", "rtsp", "snapshot"
   external_camera_enabled: boolean;
   external_camera_snapshot_url: string | null;  // optional single-frame override (#1177)
+  camera_webrtc_url?: string | null;  // WHEP endpoint for browser playback (#56)
   camera_rotation: number;  // 0, 90, 180, 270 degrees
   plate_detection_enabled: boolean;  // Check plate before print
   plate_detection_roi?: PlateDetectionROI;  // ROI for plate detection
@@ -574,6 +593,8 @@ export interface PrinterStatus {
   // Queue: printer is awaiting user ack that the build plate was cleared after a
   // finished/failed print. Persisted across restarts (#961).
   awaiting_plate_clear: boolean;
+  ejecting?: boolean;  // a bed eject is running
+  failure_hold?: boolean;  // held after a detected failure until acknowledged
   // AMS drying support
   supports_drying: boolean;
   // The AMS can dry, but only from the printer's own screen (P1 series, #2533).
@@ -582,13 +603,139 @@ export interface PrinterStatus {
   supports_chamber_heater?: boolean;
 }
 
+export interface KlipperProfileInfo {
+  key: string;
+  label: string;
+  bed: [number, number];
+  extruder_count: number;
+  has_chamber: boolean;
+  has_leveling: boolean;
+  leveling_label: string | null;
+  experimental: boolean;
+}
+
+// Chat agent (Slack / Discord). Token values are write-only: the API only says whether each is set.
+export interface ChatAgentPlatformStatus {
+  running: boolean;
+  error: string | null;
+}
+
+export interface ChatAgentConfig {
+  enabled: boolean;
+  slack_enabled: boolean;
+  discord_enabled: boolean;
+  allow_dms: boolean;
+  llm_enabled: boolean;
+  slack_allowed_channels: string[];
+  slack_allowed_workspaces: string[];
+  discord_allowed_channels: string[];
+  discord_allowed_guilds: string[];
+  llm_base_url: string;
+  llm_model: string;
+  confirm_timeout_seconds: number;
+  slack_bot_token_set: boolean;
+  slack_bot_token_from_env: boolean;
+  slack_app_token_set: boolean;
+  slack_app_token_from_env: boolean;
+  discord_bot_token_set: boolean;
+  discord_bot_token_from_env: boolean;
+  llm_api_key_set: boolean;
+  llm_api_key_from_env: boolean;
+  status: Record<string, ChatAgentPlatformStatus>;
+}
+
+export type ChatAgentConfigUpdate = Partial<
+  Omit<ChatAgentConfig, 'status' | `${string}_set` | `${string}_from_env`>
+> & {
+  slack_bot_token?: string;
+  slack_app_token?: string;
+  discord_bot_token?: string;
+  llm_api_key?: string;
+};
+
+export interface ChatLink {
+  id: number;
+  platform: string;
+  external_user_id: string;
+  external_team_id: string | null;
+  display_name: string | null;
+  user_id: number;
+  username: string | null;
+  created_at: string | null;
+  last_used_at: string | null;
+}
+
+export interface ChatLinkCode {
+  code: string;
+  user_id: number;
+  username: string;
+  expires_at: string;
+}
+
+export interface PrinterAlarm {
+  id: number;
+  printer_id: number;
+  printer_name: string | null;
+  source: string;
+  code: string;
+  severity: 'fatal' | 'serious' | 'warning';
+  message: string;
+  first_seen: string | null;
+  last_seen: string | null;
+  cleared_at: string | null;
+  active: boolean;
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
+}
+
+export interface AlarmSummary {
+  active: number;
+  unacknowledged: number;
+  by_severity: Record<string, number>;
+  printers: number[];
+}
+
+export interface EjectionProfileInput {
+  name: string;
+  gcode: string;
+  max_bed_temp_c: number | null;
+  timeout_s: number;
+  settle_s: number;
+  max_consecutive: number;
+  allowed_plates: string[] | null;
+  verify_with_camera: boolean;
+}
+
+export interface EjectionProfile extends EjectionProfileInput {
+  id: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface EjectStatus {
+  printer_id: number;
+  auto_eject: boolean;
+  ejection_profile_id: number | null;
+  consecutive_ejects: number;
+  ejecting: boolean;
+  last: { ok: boolean; reason: string; started_at: string; finished_at: string | null } | null;
+}
+
 export interface PrinterCreate {
   name: string;
-  serial_number: string;
+  connection_type?: 'bambu' | 'klipper' | 'octoprint' | 'prusalink' | 'duet' | 'flashforge' | 'mks' | 'obico' | 'elegoo' | 'elegoo_cc2' | 'anycubic';  // defaults to 'bambu' on the backend
+  serial_number?: string;  // required for Bambu; omitted for Klipper
   ip_address: string;
-  access_code: string;
-  model?: string;
+  access_code?: string;  // required for Bambu; omitted for Klipper (open LAN)
+  model?: string;  // Bambu model, or KlipperProfile key for Klipper
+  moonraker_port?: number;  // Klipper only (default 7125)
+  moonraker_api_key?: string;  // Klipper only, optional
   location?: string;
+  installed_plate?: string | null;  // build plate fitted; null = unknown (farm dispatch skips the check)
+  out_of_service?: boolean;  // stop giving the printer new jobs (stays connected, unlike is_active)
+  out_of_service_reason?: string | null;
+  auto_eject?: boolean;
+  ejection_profile_id?: number | null;
   auto_archive?: boolean;
   // Maintenance Mode flag (#1476). Backend already gates MQTT, queue dispatch,
   // scheduler, metrics and the print picker on this; toggling via PATCH
@@ -598,6 +745,11 @@ export interface PrinterCreate {
   external_camera_type?: string | null;
   external_camera_enabled?: boolean;
   external_camera_snapshot_url?: string | null;
+  camera_webrtc_url?: string | null;  // #56
+  // Write-only go2rtc convenience (#56): expanded server-side into the
+  // MJPEG, snapshot and WHEP URLs.
+  go2rtc_url?: string | null;
+  go2rtc_stream?: string | null;
   camera_rotation?: number;
   plate_detection_enabled?: boolean;
   plate_detection_roi?: PlateDetectionROI;
@@ -1884,7 +2036,7 @@ export interface CloudDevice {
 export interface SmartPlug {
   id: number;
   name: string;
-  plug_type: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest';
+  plug_type: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest' | 'kasa';
   ip_address: string | null;  // Required for Tasmota
   ha_entity_id: string | null;  // Required for Home Assistant (e.g., "switch.printer_plug", "script.turn_on_printer")
   // Home Assistant energy sensor entities (optional)
@@ -1965,7 +2117,7 @@ export interface SmartPlug {
 
 export interface SmartPlugCreate {
   name: string;
-  plug_type?: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest';
+  plug_type?: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest' | 'kasa';
   ip_address?: string | null;  // Required for Tasmota
   ha_entity_id?: string | null;  // Required for Home Assistant
   // Home Assistant energy sensor entities (optional)
@@ -2036,7 +2188,7 @@ export interface SmartPlugCreate {
 
 export interface SmartPlugUpdate {
   name?: string;
-  plug_type?: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest';
+  plug_type?: 'tasmota' | 'homeassistant' | 'mqtt' | 'rest' | 'kasa';
   ip_address?: string | null;
   ha_entity_id?: string | null;
   // Home Assistant energy sensor entities (optional)
@@ -2180,6 +2332,10 @@ export interface PrintQueueItem {
   position: number;
   scheduled_time: string | null;
   require_previous_success: boolean;
+  max_retries?: number;  // farm queue: requeue after a failed print
+  priority?: number;  // 25 low, 50 normal, 75 high, 100 urgent; higher dispatches first
+  retry_count?: number;
+  retry_of_id?: number | null;
   auto_off_after: boolean;
   manual_start: boolean;  // Requires manual trigger to start (staged)
   // Set by the dispatch scheduler when the assigned spool can't satisfy
@@ -2262,6 +2418,8 @@ export interface PrintQueueItemCreate {
   library_file_id?: number | null;
   scheduled_time?: string | null;
   require_previous_success?: boolean;
+  max_retries?: number;
+  priority?: number;
   auto_off_after?: boolean;
   manual_start?: boolean;  // Requires manual trigger to start (staged)
   insert_at_top?: boolean;  // Insert ahead of other pending items in the same queue scope
@@ -2311,6 +2469,8 @@ export interface PrintQueueItemUpdate {
   position?: number;
   scheduled_time?: string | null;
   require_previous_success?: boolean;
+  max_retries?: number;
+  priority?: number;
   auto_off_after?: boolean;
   manual_start?: boolean;
   ams_mapping?: number[];
@@ -2334,6 +2494,8 @@ export interface PrintQueueBulkUpdate {
   printer_id?: number | null;
   scheduled_time?: string | null;
   require_previous_success?: boolean;
+  max_retries?: number;
+  priority?: number;
   auto_off_after?: boolean;
   manual_start?: boolean;
   // Print options
@@ -2450,7 +2612,7 @@ export interface Filament {
 }
 
 // Notification Provider types
-export type ProviderType = 'callmebot' | 'ntfy' | 'pushover' | 'telegram' | 'email' | 'discord' | 'webhook' | 'homeassistant';
+export type ProviderType = 'callmebot' | 'ntfy' | 'pushover' | 'telegram' | 'email' | 'discord' | 'webhook' | 'homeassistant' | 'webpush';
 
 export interface NotificationProvider {
   id: number;
@@ -3204,9 +3366,34 @@ export interface PrinterMaintenanceOverview {
   warning_count: number;
 }
 
+export interface MaintenanceLogEntry {
+  id: number;
+  printer_id: number;
+  scheduled: boolean;  // true when a schedule was marked done
+  printer_maintenance_id: number | null;
+  maintenance_type_name: string | null;
+  title: string;
+  category: string;
+  notes: string | null;
+  performed_by: string | null;
+  performed_at: string;
+  hours_at_maintenance: number;
+}
+
+export const MAINTENANCE_LOG_CATEGORIES = [
+  'inspection',
+  'cleaning',
+  'lubrication',
+  'calibration',
+  'consumable',
+  'repair',
+  'upgrade',
+  'other',
+] as const;
+
 export interface MaintenanceHistory {
   id: number;
-  printer_maintenance_id: number;
+  printer_maintenance_id: number | null;
   performed_at: string;
   hours_at_maintenance: number;
   notes: string | null;
@@ -3301,6 +3488,9 @@ export interface Group {
   permissions: Permission[];
   is_system: boolean;
   user_count: number;
+  // Printer scope (#57). Both null = the group sees every printer.
+  scope_printer_ids?: number[] | null;
+  scope_locations?: string[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -3313,12 +3503,17 @@ export interface GroupCreate {
   name: string;
   description?: string;
   permissions: Permission[];
+  scope_printer_ids?: number[] | null;
+  scope_locations?: string[] | null;
 }
 
 export interface GroupUpdate {
   name?: string;
   description?: string;
   permissions?: Permission[];
+  // Sent (even as null) replaces the stored scope; omitted keeps it.
+  scope_printer_ids?: number[] | null;
+  scope_locations?: string[] | null;
 }
 
 export interface PermissionInfo {
@@ -3819,6 +4014,26 @@ export const api = {
     }),
 
   // Printers
+  getEjectionProfiles: () => request<EjectionProfile[]>('/ejection-profiles'),
+  createEjectionProfile: (data: EjectionProfileInput) =>
+    request<EjectionProfile>('/ejection-profiles', { method: 'POST', body: JSON.stringify(data) }),
+  updateEjectionProfile: (id: number, data: Partial<EjectionProfileInput>) =>
+    request<EjectionProfile>(`/ejection-profiles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteEjectionProfile: (id: number) => request<{ success: boolean }>(`/ejection-profiles/${id}`, { method: 'DELETE' }),
+  getEjectStatus: (printerId: number) => request<EjectStatus>(`/printers/${printerId}/eject`),
+  // Alarm feed (docs/alarm-feed.md)
+  getAlarms: (opts: { state?: 'active' | 'cleared' | 'all'; printerId?: number | null } = {}) => {
+    const qs = new URLSearchParams({ state: opts.state ?? 'active' });
+    if (opts.printerId != null) qs.set('printer_id', String(opts.printerId));
+    return request<PrinterAlarm[]>(`/alarms?${qs}`);
+  },
+  getAlarmSummary: () => request<AlarmSummary>('/alarms/summary'),
+  ackAlarm: (id: number) => request<{ acknowledged: number }>(`/alarms/${id}/ack`, { method: 'POST', body: '{}' }),
+  ackPrinterAlarms: (printerId: number) =>
+    request<{ acknowledged: number }>(`/printers/${printerId}/alarms/ack`, { method: 'POST', body: '{}' }),
+  ackPrinterFailures: (printerId: number) =>
+    request<{ acknowledged: number; held: boolean }>(`/printers/${printerId}/failure-events/ack`, { method: 'POST', body: '{}' }),
+  ejectNow: (printerId: number) => request<EjectStatus>(`/printers/${printerId}/eject`, { method: 'POST' }),
   getPrinters: () => request<Printer[]>('/printers/'),
   getPrinter: (id: number) => request<Printer>(`/printers/${id}`),
   createPrinter: (data: PrinterCreate) =>
@@ -3941,6 +4156,21 @@ export const api = {
   homeAxes: (printerId: number, axes: 'z' | 'xy' | 'all' = 'z') =>
     request<{ success: boolean; message: string }>(
       `/printers/${printerId}/home-axes?axes=${axes}`,
+      { method: 'POST' }
+    ),
+
+  // Supported Klipper/Voron profiles for the add-printer dialog.
+  getKlipperProfiles: () =>
+    request<KlipperProfileInfo[]>(`/printers/klipper/profiles`),
+
+  // Klipper / Moonraker control actions (no-op on Bambu printers — server 400s).
+  klipperLevel: (printerId: number) =>
+    request<{ success: boolean }>(`/printers/${printerId}/klipper/level`, { method: 'POST' }),
+  klipperEmergencyStop: (printerId: number) =>
+    request<{ success: boolean }>(`/printers/${printerId}/klipper/emergency-stop`, { method: 'POST' }),
+  klipperSetTemp: (printerId: number, heater: 'nozzle' | 'bed', temp: number) =>
+    request<{ success: boolean }>(
+      `/printers/${printerId}/klipper/set-temp?heater=${heater}&temp=${temp}`,
       { method: 'POST' }
     ),
 
@@ -4988,6 +5218,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ ip_address, username, password }),
     }),
+  // TP-Link Kasa: username/password are the TP-Link account, needed on newer (KLAP) firmware.
+  testKasaConnection: (ip_address: string, username?: string | null, password?: string | null) =>
+    request<SmartPlugTestResult>('/smart-plugs/test-kasa', {
+      method: 'POST',
+      body: JSON.stringify({ ip_address, username, password }),
+    }),
 
   // Tasmota Discovery (auto-detects network)
   startTasmotaScan: () =>
@@ -5230,6 +5466,9 @@ export const api = {
     request<{ message: string }>(`/notifications/${id}`, { method: 'DELETE' }),
   testNotificationProvider: (id: number) =>
     request<NotificationTestResponse>(`/notifications/${id}/test`, { method: 'POST' }),
+  getPushPublicKey: () => request<{ public_key: string }>('/push/vapid-public-key'),
+  subscribePush: (data: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    request<{ success: boolean }>('/push/subscribe', { method: 'POST', body: JSON.stringify(data) }),
   testNotificationConfig: (data: NotificationTestRequest) =>
     request<NotificationTestResponse>('/notifications/test-config', {
       method: 'POST',
@@ -5733,6 +5972,15 @@ export const api = {
     }),
   getMaintenanceHistory: (itemId: number) =>
     request<MaintenanceHistory[]>(`/maintenance/items/${itemId}/history`),
+  getMaintenanceLog: (printerId: number, limit = 20) =>
+    request<MaintenanceLogEntry[]>(`/maintenance/printers/${printerId}/log?limit=${limit}`),
+  addMaintenanceLog: (printerId: number, data: { title: string; category: string; notes?: string | null }) =>
+    request<MaintenanceLogEntry>(`/maintenance/printers/${printerId}/log`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteMaintenanceLog: (entryId: number) =>
+    request<{ status: string }>(`/maintenance/log/${entryId}`, { method: 'DELETE' }),
   getMaintenanceSummary: () => request<MaintenanceSummary>('/maintenance/summary'),
   setPrinterHours: (printerId: number, totalHours: number) =>
     request<{ printer_id: number; total_hours: number; archive_hours: number; offset_hours: number }>(
@@ -6461,6 +6709,18 @@ export const api = {
 
   deleteLocalBackup: (filename: string) =>
     request<{ success: boolean; message: string }>(`/local-backup/backups/${encodeURIComponent(filename)}`, { method: 'DELETE' }),
+
+  // Chat agent
+  getChatAgentConfig: () => request<ChatAgentConfig>('/chat-agent/config'),
+  updateChatAgentConfig: (data: ChatAgentConfigUpdate) =>
+    request<ChatAgentConfig>('/chat-agent/config', { method: 'PUT', body: JSON.stringify(data) }),
+  getChatLinks: (all = false) => request<ChatLink[]>(`/chat-agent/links${all ? '?all=true' : ''}`),
+  deleteChatLink: (id: number) => request<{ success: boolean }>(`/chat-agent/links/${id}`, { method: 'DELETE' }),
+  createChatLinkCode: (userId?: number) =>
+    request<ChatLinkCode>('/chat-agent/link-codes', {
+      method: 'POST',
+      body: JSON.stringify(userId != null ? { user_id: userId } : {}),
+    }),
 
   // Obico AI failure detection
   getObicoStatus: () =>

@@ -1,0 +1,543 @@
+"""Moonraker websocket client — the Klipper equivalent of ``BambuMQTTClient``.
+
+Connects to a Klipper printer's Moonraker API over a JSON-RPC websocket,
+subscribes to the printer objects we care about, and maps incoming status into
+the shared ``PrinterState``. It satisfies the ``PrinterClient`` protocol so
+``PrinterManager`` can hold it interchangeably with the Bambu client.
+
+Design notes:
+- Control methods (start/stop/pause/resume/light/gcode) are *synchronous*
+  wrappers — like the Bambu client — that schedule a fire-and-forget JSON-RPC
+  on the client's event loop and return immediately. Confirmation arrives via
+  the next ``notify_status_update``.
+- A single background task owns the websocket: connect → subscribe → read
+  loop, with reconnect + backoff. Connection loss flips ``state.connected``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from collections.abc import Callable
+
+import httpx
+
+from backend.app.services.bambu_mqtt import PrinterState
+from backend.app.services.klipper.material_units import UNIT_QIDI_BOX, MaterialObjectTracker
+from backend.app.services.klipper.profiles import KlipperProfile, get_profile
+from backend.app.services.klipper.status_map import (
+    ACTIVE_KLIPPER_STATES,
+    KLIPPER_COMPLETION_STATUS,
+    apply_status_objects,
+)
+from backend.app.services.material_slots import apply_units_to_state
+
+logger = logging.getLogger(__name__)
+
+# Objects to subscribe to. ``None`` = all fields of that object.
+_SUBSCRIBE_OBJECTS = {
+    "print_stats": None,
+    "virtual_sdcard": None,
+    "display_status": None,
+    "extruder": None,
+    "heater_bed": None,
+    "fan": None,
+    "toolhead": ["homed_axes", "print_time"],
+}
+
+# QIDI Box filament tables live in this file in the Moonraker config root.
+_QIDI_FILAS_FILE = "officiall_filas_list.cfg"
+_QIDI_FILAS_MAX_BYTES = 512 * 1024
+
+# Reconnect cadence after a dropped websocket. The short head keeps a printer
+# that is rebooting or briefly off-wifi feeling instantaneous; the long tail
+# exists for the machine that is switched off on purpose. Without the tail the
+# client retries every 15s forever, which on a relayed deployment means a
+# permanent trickle of doomed connection attempts through the connector tunnel
+# and a WARNING in the log every 25s for as long as the printer stays off.
+_RECONNECT_BACKOFF_SECONDS = (1, 2, 5, 10, 15, 30, 60, 120, 300)
+
+# Connection failures logged at WARNING before repeats are demoted to DEBUG. The
+# transition itself gets one INFO line so the log explains its own silence.
+_LOUD_RECONNECT_FAILURES = 4
+
+
+class MoonrakerClient:
+    def __init__(
+        self,
+        ip_address: str,
+        port: int = 7125,
+        api_key: str | None = None,
+        model: str | None = None,
+        serial_number: str | None = None,
+        on_state_change: Callable[[PrinterState], None] | None = None,
+        on_print_start: Callable[[dict], None] | None = None,
+        on_print_complete: Callable[[dict], None] | None = None,
+        on_print_running_observed: Callable[[dict], None] | None = None,
+        on_layer_change: Callable[[int], None] | None = None,
+        on_bed_temp_update: Callable[[float], None] | None = None,
+    ):
+        self.ip_address = ip_address
+        self.port = port
+        self.api_key = api_key or None
+        self.serial_number = serial_number
+        self.profile: KlipperProfile = get_profile(model)
+
+        self.state = PrinterState()
+
+        self._on_state_change = on_state_change
+        # Agent-local model (OctoEverywhere-inspired, AGPL-3.0): a connector-routed
+        # Moonraker session runs through the relay tunnel, so a brief tunnel gap can
+        # drop the websocket even though the printer is fine. Defer the offline flip
+        # by a grace window for routed printers so a fast reconnect doesn't oscillate
+        # the card. Routed sessions target the control-plane relay host, not a LAN IP.
+        import os as _os
+
+        _relay_host = _os.environ.get("OPHQ_RELAY_HOST", "")
+        self._is_routed = str(self.ip_address).startswith("openprinthq-") or (
+            bool(_relay_host) and str(self.ip_address) == _relay_host
+        )
+        # Seconds to keep 'connected' true after a ws drop while reconnecting.
+        self._offline_grace_s = 12.0 if self._is_routed else 0.0
+        self._disconnected_at = 0.0
+        self._on_print_start = on_print_start
+        self._on_print_complete = on_print_complete
+        self._on_print_running_observed = on_print_running_observed
+        self._on_layer_change = on_layer_change
+        self._on_bed_temp_update = on_bed_temp_update
+
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._task: asyncio.Task | None = None
+        self._ws = None  # active websocket connection
+        self._stop = False
+        self._rpc_id = 0
+
+        # Moonraker object name for the chamber temperature. The profile gives a
+        # default, but the real name varies by Klipper config (temperature_sensor
+        # chamber / temperature_fan chamber / heater_generic chamber), so we
+        # auto-discover it from /printer/objects/list on connect.
+        self._chamber_object: str | None = self.profile.chamber_object
+
+        # Multi-material units inside Klipper (Creality CFS ``box`` object,
+        # QIDI Box save_variables). Detected from the object list on connect;
+        # see klipper/material_units.py. Untested on hardware.
+        self._materials = MaterialObjectTracker()
+
+        # transition / change tracking
+        self._prev_raw_state: str | None = None
+        self._prev_layer: int = 0
+        self._prev_bed_temp: float | None = None
+
+    # -- urls ---------------------------------------------------------------
+    @property
+    def _ws_url(self) -> str:
+        return f"ws://{self.ip_address}:{self.port}/websocket"
+
+    @property
+    def _http_base(self) -> str:
+        return f"http://{self.ip_address}:{self.port}"
+
+    # -- lifecycle ----------------------------------------------------------
+    def connect(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        """Start the background connection task (non-blocking)."""
+        self._loop = loop or asyncio.get_event_loop()
+        self._stop = False
+        self._task = self._loop.create_task(self._run_loop())
+
+    def disconnect(self, timeout: float = 0) -> None:
+        self._stop = True
+        if self._task and not self._task.done():
+            self._task.cancel()
+        self._task = None
+        self._ws = None
+        self.state.connected = False
+
+    def check_staleness(self) -> bool:
+        """Moonraker pushes only on change; liveness is the ws connection itself.
+        For routed printers we keep ``connected`` true through a short grace window
+        after a ws drop (see __init__); if the grace expires without a reconnect,
+        flip offline here."""
+        if self._offline_grace_s > 0.0 and self.state.connected and self._disconnected_at > 0.0:
+            import time as _t
+
+            if (_t.time() - self._disconnected_at) > self._offline_grace_s and self._ws is None:
+                self.state.connected = False
+                self.state.state = "unknown"
+                self._emit_state_change()
+        return self.state.connected
+
+    # -- the connection task ------------------------------------------------
+    async def _run_loop(self) -> None:
+        from websockets.asyncio.client import connect as ws_connect
+
+        attempt = 0
+        while not self._stop:
+            try:
+                headers = {"X-Api-Key": self.api_key} if self.api_key else None
+                url = self._ws_url
+                token = await self._maybe_oneshot_token()
+                if token:
+                    url = f"{url}?token={token}"
+
+                async with ws_connect(url, additional_headers=headers, max_size=8 * 1024 * 1024) as ws:
+                    self._ws = ws
+                    if attempt > _LOUD_RECONNECT_FAILURES:
+                        logger.info(
+                            "[%s] Moonraker recovered after %d failed attempts",
+                            self.serial_number,
+                            attempt,
+                        )
+                    attempt = 0
+                    logger.info("[%s] Moonraker connected at %s", self.serial_number, self._ws_url)
+                    await self._resolve_chamber_object()
+                    await self._subscribe(ws)
+                    await self._query_printer_info(ws)
+                    self.state.connected = True
+                    self._disconnected_at = 0.0
+                    self._emit_state_change()
+                    async for raw in ws:
+                        if self._stop:
+                            break
+                        self._handle_message(raw)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:  # noqa: BLE001 — log and reconnect
+                # Volume scales with how long this has been failing: loud while
+                # it might still be news, one line to announce the backoff, then
+                # quiet. A powered-off printer should not be the noisiest thing
+                # in the log.
+                if attempt < _LOUD_RECONNECT_FAILURES:
+                    logger.warning("[%s] Moonraker connection error: %s", self.serial_number, exc)
+                elif attempt == _LOUD_RECONNECT_FAILURES:
+                    logger.info(
+                        "[%s] Moonraker still unreachable after %d attempts (%s) — backing off to one "
+                        "retry every %ds; further failures logged at debug level",
+                        self.serial_number,
+                        attempt + 1,
+                        exc,
+                        _RECONNECT_BACKOFF_SECONDS[-1],
+                    )
+                else:
+                    logger.debug("[%s] Moonraker connection error: %s", self.serial_number, exc)
+            finally:
+                self._ws = None
+                if self.state.connected:
+                    # Hysteresis for routed printers: keep 'connected' true through a
+                    # short grace window so a quick relay reconnect doesn't flip the
+                    # card offline. If we reconnect within the window (loop top sets
+                    # connected=True again), the user never sees a blip.
+                    import time as _t
+
+                    if self._offline_grace_s > 0.0:
+                        self._disconnected_at = _t.time()
+                    else:
+                        self.state.connected = False
+                        self.state.state = "unknown"
+                        self._emit_state_change()
+
+            if self._stop:
+                break
+            delay = _RECONNECT_BACKOFF_SECONDS[min(attempt, len(_RECONNECT_BACKOFF_SECONDS) - 1)]
+            attempt += 1
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                break
+
+    async def _maybe_oneshot_token(self) -> str | None:
+        """Fetch a websocket oneshot token when an API key is configured.
+
+        Open-LAN Moonraker (the default) needs no key; this is a no-op then.
+        """
+        if not self.api_key:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    f"{self._http_base}/access/oneshot_token",
+                    headers={"X-Api-Key": self.api_key},
+                )
+                resp.raise_for_status()
+                return resp.json().get("result")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[%s] Moonraker oneshot token failed: %s", self.serial_number, exc)
+            return None
+
+    def _subscribe_objects(self) -> dict:
+        """Objects to subscribe to, including the resolved chamber object."""
+        objects = dict(_SUBSCRIBE_OBJECTS)
+        if self._chamber_object:
+            objects[self._chamber_object] = None
+        objects.update(self._materials.subscribe_objects())
+        return objects
+
+    async def _resolve_chamber_object(self) -> None:
+        """Discover the chamber temperature object for this printer.
+
+        Chamber sensors are named inconsistently across Klipper configs
+        (``temperature_sensor chamber``, ``temperature_fan chamber``,
+        ``heater_generic chamber``, …). Query the object list and pick the best
+        match so chamber temp works regardless of config. Falls back to the
+        profile default on any error.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                headers = {"X-Api-Key": self.api_key} if self.api_key else None
+                resp = await client.get(f"{self._http_base}/printer/objects/list", headers=headers)
+                resp.raise_for_status()
+                names = resp.json().get("result", {}).get("objects", [])
+        except Exception as exc:  # noqa: BLE001
+            logger.info("[%s] chamber object discovery skipped: %s", self.serial_number, exc)
+            return
+
+        self._materials.detect(names)
+        if self._materials.kind:
+            logger.info("[%s] multi-material unit detected: %s", self.serial_number, self._materials.kind)
+        if self._materials.kind == UNIT_QIDI_BOX:
+            await self._load_qidi_tables()
+
+        # Prefer a real heater (has a target), then a temperature_fan, then a
+        # plain sensor. Only consider objects whose name mentions "chamber".
+        candidates = [n for n in names if "chamber" in n.lower()]
+        for prefix in ("heater_generic", "temperature_fan", "temperature_sensor"):
+            match = next((n for n in candidates if n.lower().startswith(prefix)), None)
+            if match:
+                self._chamber_object = match
+                logger.info("[%s] chamber object resolved to %r", self.serial_number, match)
+                return
+        # No chamber object on this printer — clear so we don't subscribe to a
+        # non-existent object (the profile default may not exist here).
+        self._chamber_object = None
+
+    async def _load_qidi_tables(self) -> None:
+        """Fetch the QIDI Box filament/colour/vendor tables from the config root."""
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                headers = {"X-Api-Key": self.api_key} if self.api_key else None
+                resp = await client.get(f"{self._http_base}/server/files/config/{_QIDI_FILAS_FILE}", headers=headers)
+                resp.raise_for_status()
+                text = resp.content[:_QIDI_FILAS_MAX_BYTES].decode("utf-8", errors="replace")
+        except Exception as exc:  # noqa: BLE001
+            logger.info("[%s] QIDI filament table not loaded: %s", self.serial_number, exc)
+            return
+        self._materials.qidi_tables.load(text)
+
+    async def _subscribe(self, ws) -> None:
+        req_id = self._next_id()
+        await ws.send(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "printer.objects.subscribe",
+                    "params": {"objects": self._subscribe_objects()},
+                    "id": req_id,
+                }
+            )
+        )
+        # The subscribe response carries the initial full status snapshot; the
+        # generic read loop will apply it when it arrives (result.status).
+
+    async def _query_printer_info(self, ws) -> None:
+        """Request ``printer.info`` so we can surface the Klipper version.
+
+        The response (handled in _handle_message) carries ``software_version``,
+        which we map onto ``state.firmware_version`` for the card's version badge.
+        """
+        await ws.send(json.dumps({"jsonrpc": "2.0", "method": "printer.info", "id": self._next_id()}))
+
+    # -- message handling ---------------------------------------------------
+    def _handle_message(self, raw: str | bytes) -> None:
+        try:
+            msg = json.loads(raw)
+        except (ValueError, TypeError):
+            return
+
+        method = msg.get("method")
+        if method == "notify_status_update":
+            params = msg.get("params") or []
+            if params and isinstance(params[0], dict):
+                self._apply_and_signal(params[0])
+        elif method in ("notify_klippy_disconnected", "notify_klippy_shutdown"):
+            self.state.state = "unknown"
+            # The alarm feed reports it until Klipper sends status again.
+            self.state.raw_data["klippy_alarm"] = "shutdown" if method.endswith("shutdown") else "disconnected"
+            self._emit_state_change()
+        elif "result" in msg and isinstance(msg["result"], dict):
+            result = msg["result"]
+            status = result.get("status")
+            if isinstance(status, dict):
+                # subscribe / objects.query response: {"status": {...}, "eventtime": ...}
+                self._apply_and_signal(status)
+            elif "software_version" in result:
+                # printer.info response — surface the Klipper version on the card.
+                self.state.firmware_version = result.get("software_version")
+                self._emit_state_change()
+
+    def _apply_and_signal(self, objects: dict) -> None:
+        self.state.raw_data.pop("klippy_alarm", None)
+        raw_state = apply_status_objects(self.state, objects, self._chamber_object)
+        if self._materials.update(objects):
+            apply_units_to_state(self.state, self._materials.units())
+        self._detect_transitions(raw_state)
+        self._signal_layer_and_bed()
+        self._emit_state_change()
+
+    def _detect_transitions(self, raw_state: str | None) -> None:
+        if raw_state is None or raw_state == self._prev_raw_state:
+            return
+        prev = self._prev_raw_state
+        self._prev_raw_state = raw_state
+
+        data = {
+            "filename": self.state.gcode_file,
+            "subtask_name": self.state.subtask_name,
+            "gcode_file": self.state.gcode_file,
+        }
+
+        if raw_state == "printing" and (prev is None or prev not in ACTIVE_KLIPPER_STATES):
+            if self._on_print_start:
+                self._on_print_start(dict(data))
+            if self._on_print_running_observed:
+                self._on_print_running_observed(dict(data))
+        elif raw_state in KLIPPER_COMPLETION_STATUS and prev in ACTIVE_KLIPPER_STATES:
+            done = dict(data)
+            done["status"] = KLIPPER_COMPLETION_STATUS[raw_state]
+            done["last_layer_num"] = self.state.layer_num
+            done["last_progress"] = self.state.progress
+            done["print_duration"] = self.state.raw_data.get("print_duration")
+            done["filament_used_mm"] = self.state.raw_data.get("filament_used_mm")
+            done["klipper_message"] = self.state.raw_data.get("klipper_message") or None
+            if self._on_print_complete:
+                self._on_print_complete(done)
+
+    def _signal_layer_and_bed(self) -> None:
+        if self.state.layer_num != self._prev_layer:
+            self._prev_layer = self.state.layer_num
+            if self._on_layer_change and self.state.layer_num > 0:
+                self._on_layer_change(self.state.layer_num)
+
+        bed = self.state.temperatures.get("bed")
+        if bed is not None and bed != self._prev_bed_temp:
+            self._prev_bed_temp = bed
+            if self._on_bed_temp_update:
+                self._on_bed_temp_update(float(bed))
+
+    def _emit_state_change(self) -> None:
+        if self._on_state_change:
+            self._on_state_change(self.state)
+
+    # -- outbound JSON-RPC --------------------------------------------------
+    def _next_id(self) -> int:
+        self._rpc_id += 1
+        return self._rpc_id
+
+    def _send_rpc(self, method: str, params: dict | None = None) -> bool:
+        """Schedule a fire-and-forget JSON-RPC on the connection loop.
+
+        Returns True if it was scheduled (not whether the printer accepted it),
+        matching the Bambu client's publish-and-return semantics.
+        """
+        if not self._loop:
+            logger.warning("[%s] Moonraker RPC %s dropped: no loop", self.serial_number, method)
+            return False
+
+        async def _do() -> None:
+            ws = self._ws
+            if ws is None:
+                logger.warning("[%s] Moonraker RPC %s dropped: not connected", self.serial_number, method)
+                return
+            payload = {"jsonrpc": "2.0", "method": method, "id": self._next_id()}
+            if params:
+                payload["params"] = params
+            try:
+                await ws.send(json.dumps(payload))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[%s] Moonraker RPC %s failed: %s", self.serial_number, method, exc)
+
+        try:
+            asyncio.run_coroutine_threadsafe(_do(), self._loop)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[%s] Moonraker RPC %s schedule failed: %s", self.serial_number, method, exc)
+            return False
+
+    # -- PrinterClient control surface --------------------------------------
+    def request_status_update(self) -> bool:
+        return self._send_rpc("printer.objects.query", {"objects": self._subscribe_objects()})
+
+    def start_print(
+        self,
+        filename: str,
+        plate_id: int = 1,
+        ams_mapping: list[int] | None = None,
+        bed_levelling: bool = True,
+        flow_cali: bool = False,
+        vibration_cali: bool = True,
+        layer_inspect: bool = False,
+        timelapse: bool = False,
+        use_ams: bool = True,
+    ) -> bool:
+        # Bambu-specific args are ignored on Klipper; the file must already be
+        # uploaded to Moonraker's gcode store (see moonraker_files.upload_gcode).
+        # With a CFS / QIDI Box and a slot remap (#52) the remap and the start
+        # go in ONE gcode script so the table is written before the file runs.
+        remap = self._materials.remap_gcode(ams_mapping) if ams_mapping else ""
+        if remap:
+            self.state.ams_mapping = list(ams_mapping or [])
+            safe_name = filename.replace('"', "")
+            return self.send_gcode(f'{remap}\nSDCARD_PRINT_FILE FILENAME="{safe_name}"')
+        return self._send_rpc("printer.print.start", {"filename": filename})
+
+    @property
+    def material_unit_kind(self) -> str | None:
+        """``cfs`` / ``qidi_box`` when a multi-material unit was detected."""
+        return self._materials.kind
+
+    def stop_print(self) -> bool:
+        return self._send_rpc("printer.print.cancel")
+
+    def pause_print(self) -> bool:
+        return self._send_rpc("printer.print.pause")
+
+    def resume_print(self) -> bool:
+        return self._send_rpc("printer.print.resume")
+
+    def send_gcode(self, gcode: str) -> bool:
+        return self._send_rpc("printer.gcode.script", {"script": gcode})
+
+    def set_chamber_light(self, on: bool) -> bool:
+        macro = self.profile.macros.light_on if on else self.profile.macros.light_off
+        if not macro:
+            return False
+        return self.send_gcode(macro)
+
+    # -- Voron / Klipper convenience controls -------------------------------
+    def home(self) -> bool:
+        return self.send_gcode(self.profile.macros.home)
+
+    def level(self) -> bool:
+        if not self.profile.macros.level:
+            return False
+        return self.send_gcode(self.profile.macros.level)
+
+    def emergency_stop(self) -> bool:
+        return self._send_rpc("printer.emergency_stop")
+
+    def set_nozzle_temp(self, temp: float) -> bool:
+        return self.send_gcode(f"M104 S{int(temp)}")
+
+    def set_bed_temp(self, temp: float) -> bool:
+        return self.send_gcode(f"M140 S{int(temp)}")
+
+    # Names the generic temperature routes call (parity with the Bambu client,
+    # which exposes set_nozzle_temperature/set_bed_temperature). Without these,
+    # POST /temperature/{nozzle,bed} raised AttributeError on Klipper printers —
+    # the Set/Off temp buttons on a Moonraker printer did nothing (surfaced as a
+    # misleading "auth unavailable" 503 from the fail-closed auth middleware).
+    # Klipper here is single-extruder, so the nozzle index is ignored.
+    def set_nozzle_temperature(self, target: int, nozzle: int = 0) -> bool:
+        return self.set_nozzle_temp(float(target))
+
+    def set_bed_temperature(self, target: int) -> bool:
+        return self.set_bed_temp(float(target))
